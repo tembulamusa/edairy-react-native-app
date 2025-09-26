@@ -1,11 +1,26 @@
-const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+const { getDefaultConfig, mergeConfig } = require("@react-native/metro-config");
 
-/**
- * Metro configuration
- * https://reactnative.dev/docs/metro
- *
- * @type {import('@react-native/metro-config').MetroConfig}
- */
-const config = {};
+const defaultConfig = getDefaultConfig(__dirname);
 
-module.exports = mergeConfig(getDefaultConfig(__dirname), config);
+const config = {
+    resolver: {
+        sourceExts: [...defaultConfig.resolver.sourceExts, "css"],
+        assetExts: [
+            ...defaultConfig.resolver.assetExts.filter((ext) => ext !== "css"),
+            "ttf",
+        ],
+        resolverMainFields: ["react-native", "browser", "main"],
+    },
+    transformer: {
+        babelTransformerPath: require.resolve("react-native-css-transformer"),
+        getTransformOptions: async () => ({
+            transform: {
+                experimentalImportSupport: false,
+                inlineRequires: true,
+            },
+        }),
+    },
+    cacheStores: [],
+};
+
+module.exports = mergeConfig(defaultConfig, config);
