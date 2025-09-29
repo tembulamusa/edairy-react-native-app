@@ -14,7 +14,7 @@ class BluetoothScaleService {
     this.weightReadInterval = null;
     this.dataReadInterval = null; // For continuous data reading
     this.connectionStatusInterval = null; // For periodic connection status checks
-    
+
     // Throttling for weight updates
     this.lastWeightUpdate = 0;
     this.weightUpdateInterval = 100; // Update UI every 100ms for responsive updates
@@ -22,22 +22,22 @@ class BluetoothScaleService {
     this.burstModeActive = false;
     this.burstModeStartTime = 0;
     this.burstModeInterval = 50; // 50ms during burst mode
-    
+
     // Weight streaming control
     this.isWeightStreamingPaused = false;
     this.pausedForWeightLock = false;
-    
+
     // Connection persistence settings - will be loaded from global context
     this.persistentConnection = false; // Enable persistent connection
     this.autoReconnect = true; // Enable auto-reconnect when connection is lost
-    
+
     // Event listener subscriptions for cleanup
     this.dataReceivedSubscription = null;
     this.disconnectedSubscription = null;
-    
+
     // Manual disconnect tracking
     this.isManualDisconnect = false;
-    
+
     // Manually approved scale devices (for devices not automatically detected)
     this.approvedScaleDevices = new Set(); // Store device addresses manually approved as scales
     this.latestAutoConnectWeight = null; // Store latest weight from auto-connect for potential use
@@ -46,26 +46,26 @@ class BluetoothScaleService {
     this.maxReconnectAttempts = 5;
     this.reconnectDelay = 3000; // 3 seconds between reconnect attempts
     this.lastConnectedDeviceId = null; // Store last connected device for reconnection
-    
+
     // Connection state tracking to prevent race conditions
     this.isConnecting = false; // Track if connection is in progress
     this.connectingToDeviceId = null; // Track which device we're connecting to
     this.connectionPromises = new Map(); // Store pending connection promises to avoid duplicates
-    
+
     // Auto-connect state management
     this.isAutoConnecting = false; // Track if auto-connect is in progress
     this.suppressStatusCallbacks = false; // Suppress intermediate status callbacks during auto-connect
-    
+
     // Virtual Bluetooth Scale for debugging (only in dev mode)
     this.isVirtualScaleMode = false;
     this.virtualScaleInterval = null;
     this.virtualWeight = 0.0;
     this.virtualWeightDirection = 1; // 1 for increasing, -1 for decreasing
     this.virtualScaleConnected = false;
-    
+
     // Initialize Bluetooth Classic
     this.initializeBluetooth();
-    
+
     // Global context update functions (will be set by components using the service)
     this.globalContextUpdaters = null;
   }
@@ -82,15 +82,15 @@ class BluetoothScaleService {
     if (this.statusCallback && !this.suppressStatusCallbacks) {
       this.statusCallback(status, message);
     }
-    
+
     // Update global context if available
     if (this.globalContextUpdaters) {
       const { updateScaleConnectionStatus, setScaleDevice } = this.globalContextUpdaters;
-      
+
       if (updateScaleConnectionStatus) {
         updateScaleConnectionStatus(status, message);
       }
-      
+
       // Update device info when connected
       if (status === 'connected' && this.connectedDevice) {
         if (setScaleDevice) {
@@ -106,10 +106,10 @@ class BluetoothScaleService {
   async initializeBluetooth() {
     try {
       console.log('Initializing Bluetooth Classic...');
-      
+
       // Load approved scale devices from storage
       await this.loadApprovedDevices();
-      
+
       // Check if BluetoothClassic module is available
       if (!BluetoothClassic) {
         console.error('BluetoothClassic module is not available');
@@ -118,16 +118,16 @@ class BluetoothScaleService {
         }
         return;
       }
-      
+
       // Request permissions on Android
       if (Platform.OS === 'android') {
         await this.requestBluetoothPermissions();
       }
-      
+
       // Check if Bluetooth is enabled
       const isEnabled = await BluetoothClassic.isBluetoothEnabled();
       console.log('Bluetooth enabled:', isEnabled);
-      
+
       if (!isEnabled) {
         console.log('Bluetooth is not enabled, requesting to enable...');
         try {
@@ -146,11 +146,11 @@ class BluetoothScaleService {
 
       // Set up global event listeners for data and connection events
       this.setupGlobalEventListeners();
-      
+
       // Attempt auto-connect to bonded scale devices after a short delay
       // DISABLED: Auto-connect is messing with the flow
       // this.scheduleAutoConnect();
-      
+
     } catch (error) {
       console.error('Error initializing Bluetooth:', error);
       if (this.statusCallback) {
@@ -163,16 +163,16 @@ class BluetoothScaleService {
   setupGlobalEventListeners() {
     try {
       console.log('Setting up global event listeners...');
-      
+
       // Don't setup listeners if they already exist
       if (this.dataReceivedSubscription || this.disconnectedSubscription) {
         console.log('Event listeners already exist, skipping setup');
         return;
       }
-      
+
       // Check if BluetoothClassic has event methods
       console.log('BluetoothClassic available methods:', Object.getOwnPropertyNames(BluetoothClassic));
-      
+
       // Try different event listener patterns for react-native-bluetooth-classic
       if (BluetoothClassic.onDataReceived) {
         BluetoothClassic.onDataReceived((device, data) => {
@@ -226,9 +226,9 @@ class BluetoothScaleService {
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
         ]);
-        
+
         console.log('Bluetooth permissions granted:', granted);
-        return Object.values(granted).every(permission => 
+        return Object.values(granted).every(permission =>
           permission === PermissionsAndroid.RESULTS.GRANTED
         );
       } catch (error) {
@@ -269,7 +269,7 @@ class BluetoothScaleService {
   async startScanning(includeNearby = true) {
     try {
       console.log('Starting Bluetooth Classic scan...');
-      
+
       // Check if BluetoothClassic module is available
       if (!BluetoothClassic) {
         console.error('BluetoothClassic module is not available');
@@ -278,10 +278,10 @@ class BluetoothScaleService {
         }
         return [];
       }
-      
+
       this.isScanning = true;
       this.devices = [];
-      
+
       if (this.statusCallback) {
         this.statusCallback('scanning', includeNearby ? 'Scanning for nearby devices...' : 'Scanning for bonded devices...');
       }
@@ -289,7 +289,7 @@ class BluetoothScaleService {
       // Get bonded (paired) devices first - these are reliable and fast
       const bondedDevices = await BluetoothClassic.getBondedDevices();
       console.log('Bonded devices:', bondedDevices);
-      
+
       // Add bonded devices to our list
       bondedDevices.forEach(device => {
         this.devices.push({
@@ -306,16 +306,16 @@ class BluetoothScaleService {
       if (includeNearby) {
         try {
           console.log('Starting device discovery for nearby devices...');
-          
+
           // Start discovery for nearby devices
           const discoveredDevices = await BluetoothClassic.startDiscovery();
           console.log('Discovered nearby devices:', discoveredDevices);
-          
+
           // Add discovered devices that aren't already in our bonded list
           discoveredDevices.forEach(device => {
             // Check if device is already in bonded list
             const alreadyExists = this.devices.some(existing => existing.address === device.address);
-            
+
             if (!alreadyExists) {
               this.devices.push({
                 id: device.address,
@@ -344,28 +344,28 @@ class BluetoothScaleService {
         // Paired devices get priority
         if (a.isPaired && !b.isPaired) return -1;
         if (!a.isPaired && b.isPaired) return 1;
-        
+
         // Then sort by signal strength (higher RSSI = stronger signal = closer)
         return (b.rssi || -100) - (a.rssi || -100);
       });
 
       console.log('Total devices found:', this.devices.length, '(bonded:', bondedDevices.length, 'nearby:', this.devices.length - bondedDevices.length, ')');
       this.isScanning = false;
-      
+
       if (this.statusCallback) {
         this.statusCallback('scan_complete', `Found ${this.devices.length} devices`);
       }
 
       return this.devices;
-      
+
     } catch (error) {
       console.error('Error scanning for devices:', error);
       this.isScanning = false;
-      
+
       if (this.statusCallback) {
         this.statusCallback('scan_error', `Scan failed: ${error.message}`);
       }
-      
+
       return [];
     }
   }
@@ -374,7 +374,7 @@ class BluetoothScaleService {
   async stopScanning() {
     console.log('Stopping scan...');
     this.isScanning = false;
-    
+
     try {
       // Cancel device discovery if it's running
       if (BluetoothClassic && typeof BluetoothClassic.cancelDiscovery === 'function') {
@@ -390,7 +390,7 @@ class BluetoothScaleService {
   // Get available scale devices from nearby devices (includes both bonded and discovered devices)
   async getAvailableScales(showAll = false, includeNearby = true) {
     const allDevices = await this.startScanning(includeNearby);
-    
+
     if (showAll) {
       console.log('Returning all devices (debug mode)');
       return {
@@ -401,9 +401,9 @@ class BluetoothScaleService {
 
     // Filter devices that might be scales
     const filteredDevices = this.filterScaleDevices(allDevices);
-    
+
     console.log(`Filtered scale devices: ${filteredDevices.length} of ${allDevices.length} total devices`);
-    
+
     return {
       scaleDevices: filteredDevices,
       allDevices: allDevices
@@ -423,16 +423,16 @@ class BluetoothScaleService {
     return devices.filter(device => {
       const deviceName = (device.name || '').toLowerCase();
       const deviceAddress = (device.address || '').toLowerCase();
-      
+
       // Check if device name contains scale-related keywords
-      const nameMatch = scaleKeywords.some(keyword => 
+      const nameMatch = scaleKeywords.some(keyword =>
         deviceName.includes(keyword)
       );
-      
+
       // Check for HC-05/HC-06 pattern in address or name (common in scales)
       const hcModulePattern = /^(hc-?05|hc-?06)/i;
       const addressMatch = hcModulePattern.test(deviceAddress) || hcModulePattern.test(deviceName);
-      
+
       // Include devices with specific address patterns common in scale modules
       const commonScalePatterns = [
         /^00:18:/,  // Common HC-05 prefix
@@ -441,22 +441,22 @@ class BluetoothScaleService {
         /^98:D3:/,  // ESP32 common pattern
         /^00:23:/,  // Another HC-06 pattern (like the user's 00:23:04:00:23:7B)
       ];
-      
-      const patternMatch = commonScalePatterns.some(pattern => 
+
+      const patternMatch = commonScalePatterns.some(pattern =>
         pattern.test(deviceAddress)
       );
-      
+
       // For unnamed devices, only include if they match known scale address patterns
       // This is more restrictive than before - unnamed devices need to match a pattern
-      const unnamedWithScalePattern = (!device.name || device.name.trim() === '' || 
-                                     device.name.includes('Unknown') || 
-                                     device.name.includes('N/A')) && patternMatch;
-      
+      const unnamedWithScalePattern = (!device.name || device.name.trim() === '' ||
+        device.name.includes('Unknown') ||
+        device.name.includes('N/A')) && patternMatch;
+
       // Check if device is manually approved as scale
       const manuallyApproved = this.isApprovedScale(device.address);
-      
+
       const shouldInclude = nameMatch || addressMatch || unnamedWithScalePattern || manuallyApproved;
-      
+
       if (shouldInclude) {
         const reasons = [];
         if (nameMatch) reasons.push('Name');
@@ -467,7 +467,7 @@ class BluetoothScaleService {
       } else {
         console.log(`❌ Excluding non-scale device: ${device.name || 'Unnamed'} (${device.address})`);
       }
-      
+
       return shouldInclude;
     });
   }
@@ -483,21 +483,21 @@ class BluetoothScaleService {
           return await this.connectionPromises.get(deviceId);
         }
       }
-      
+
       // Check if we're already connecting to a different device
       if (this.isConnecting && this.connectingToDeviceId !== deviceId) {
         console.log(`⏸️ Already connecting to ${this.connectingToDeviceId}, canceling connection to ${deviceId}`);
         throw new Error(`Already connecting to device ${this.connectingToDeviceId}. Please wait for current connection to complete.`);
       }
-      
+
       // Mark that we're starting a connection attempt
       this.isConnecting = true;
       this.connectingToDeviceId = deviceId;
-      
+
       // Create and store the connection promise
       const connectionPromise = this._performConnection(deviceId);
       this.connectionPromises.set(deviceId, connectionPromise);
-      
+
       try {
         const result = await connectionPromise;
         return result;
@@ -507,7 +507,7 @@ class BluetoothScaleService {
         this.connectingToDeviceId = null;
         this.connectionPromises.delete(deviceId);
       }
-      
+
     } catch (error) {
       // Clean up connection state on error
       this.isConnecting = false;
@@ -521,7 +521,7 @@ class BluetoothScaleService {
   async _performConnection(deviceId) {
     try {
       console.log('Connecting to Bluetooth Classic device:', deviceId);
-      
+
       if (this.statusCallback && !this.suppressStatusCallbacks) {
         this.statusCallback('connecting', 'Connecting to device...');
       }
@@ -539,28 +539,28 @@ class BluetoothScaleService {
 
       // Connect to the device
       const connectedDevice = await BluetoothClassic.connectToDevice(deviceId);
-      
+
       this.connectedDevice = connectedDevice;
       this.isConnected = true;
       this.lastConnectedDeviceId = deviceId; // Store for reconnection
       this.reconnectAttempts = 0; // Reset reconnect attempts on successful connection
-      
+
       // Reset manual disconnect flag since we're connecting again
       this.isManualDisconnect = false;
-      
+
       console.log('Successfully connected to device:', deviceId);
       console.log('Connected device object:', connectedDevice);
-      
+
       // Re-establish global event listeners if they were removed
       this.setupGlobalEventListeners();
-      
+
       // Set up data listeners
       this.setupDataListeners(connectedDevice);
-      
+
       if (this.statusCallback) {
         console.log('🟢 BluetoothScaleService: Calling status callback with CONNECTED');
       }
-      
+
       // Update connection status in both local callback and global context
       this.updateConnectionStatus('connected', 'Successfully connected to scale');
 
@@ -571,21 +571,21 @@ class BluetoothScaleService {
       this.startConnectionStatusCheck();
 
       // Don't start the old weight reading interval since we have continuous data reading now
-      
+
       return true;
-      
+
     } catch (error) {
       console.error('Error connecting to device:', error);
       this.isConnected = false;
       this.connectedDevice = null;
-      
+
       if (this.statusCallback && !this.suppressStatusCallbacks) {
         console.log('🔴 BluetoothScaleService: Calling status callback with CONNECTION_FAILED:', error.message);
         this.statusCallback('connection_failed', `Connection failed: ${error.message}`);
       } else if (this.suppressStatusCallbacks) {
         console.log('🔇 BluetoothScaleService: Suppressed CONNECTION_FAILED status callback during auto-connect');
       }
-      
+
       return false;
     }
   }
@@ -597,7 +597,7 @@ class BluetoothScaleService {
       console.log('Ignoring data - not connected or no weight callback:', { isConnected: this.isConnected, hasCallback: !!this.weightCallback });
       return;
     }
-    
+
     // If we receive data, we must be connected. Let's ensure the state reflects that.
     if (!this.isConnected && this.connectedDevice) {
       console.log('Data received while in disconnected state. Forcing state to connected.');
@@ -605,23 +605,23 @@ class BluetoothScaleService {
       if (this.statusCallback) {
         this.statusCallback('connected', 'Connection re-established by data stream.');
       }
-      
+
       // Setup default weight callback when re-establishing connection
       this.setupDefaultWeightCallbackIfNeeded();
     }
 
     // console.log('Raw data from scale (stringified):', JSON.stringify(data, null, 2));
     // console.log('Raw data type:', typeof data);
-    
+
     // Append to buffer
     this.dataBuffer += data;
-    
+
     // Process complete lines (assuming data ends with \n or \r\n)
     const lines = this.dataBuffer.split(/[\r\n]+/);
-    
+
     // Keep the last incomplete line in buffer
     this.dataBuffer = lines.pop() || '';
-    
+
     // Process each complete line
     lines.forEach(line => {
       if (line.trim()) {
@@ -633,12 +633,12 @@ class BluetoothScaleService {
   // Handle disconnection from global event listeners
   handleDisconnection() {
     console.log('Device disconnected via global event');
-    
+
     const wasConnected = this.isConnected;
-    
+
     this.connectedDevice = null;
     this.isConnected = false;
-    
+
     // Clear intervals
     if (this.weightReadInterval) {
       clearInterval(this.weightReadInterval);
@@ -652,7 +652,7 @@ class BluetoothScaleService {
       clearInterval(this.connectionStatusInterval);
       this.connectionStatusInterval = null;
     }
-    
+
     if (this.statusCallback) {
       this.statusCallback('device_disconnected', 'Scale disconnected');
     }
@@ -660,7 +660,7 @@ class BluetoothScaleService {
     // Handle persistent connection and auto-reconnect
     if (this.persistentConnection && wasConnected && !this.isManualDisconnect) {
       console.log('🔗 Persistent connection enabled, handling disconnection...');
-      
+
       if (this.autoReconnect) {
         console.log('🔄 Auto-reconnect enabled, scheduling reconnection...');
         // Schedule reconnection attempt after a short delay
@@ -686,7 +686,7 @@ class BluetoothScaleService {
 
     // Only do lightweight connection monitoring in persistent mode
     const checkInterval = this.persistentConnection ? 5000 : 2000; // 5s for persistent, 2s for normal
-    
+
     this.connectionStatusInterval = setInterval(async () => {
       if (this.connectedDevice) {
         try {
@@ -699,20 +699,20 @@ class BluetoothScaleService {
             if (this.statusCallback) {
               this.statusCallback('connected', 'Scale connection restored');
             }
-            
+
             // Setup default weight callback when connection is restored
             this.setupDefaultWeightCallbackIfNeeded();
           } else if (!isConnected && this.isConnected) {
             // Device is disconnected but our status shows connected
             console.log('🔄 Connection status sync: Device is disconnected');
-            
+
             if (this.persistentConnection) {
               // In persistent mode, don't immediately trigger disconnection
               // Just update status and let auto-reconnect handle it
               console.log('� Persistent mode: Connection lost, will attempt reconnection');
               this.isConnected = false;
               this.connectedDevice = null;
-              
+
               if (this.autoReconnect) {
                 this.attemptReconnection();
               } else if (this.statusCallback) {
@@ -725,13 +725,13 @@ class BluetoothScaleService {
           }
         } catch (error) {
           console.log('Connection status check failed:', error.message);
-          
+
           // If we can't check status and we're in persistent mode, assume disconnection
           if (this.persistentConnection && this.isConnected) {
             console.log('🔗 Persistent mode: Status check failed, assuming disconnection');
             this.isConnected = false;
             this.connectedDevice = null;
-            
+
             if (this.autoReconnect) {
               this.attemptReconnection();
             }
@@ -744,12 +744,12 @@ class BluetoothScaleService {
   // Set up data listeners for the connected device
   setupDataListeners(device) {
     console.log('Setting up data listeners for device:', device.address);
-    
+
     try {
       // Global event listeners are already set up in initializeBluetooth
       // Just start the backup polling method
       this.startDataReading();
-      
+
     } catch (error) {
       console.error('Error setting up data listeners:', error);
       if (this.statusCallback) {
@@ -963,46 +963,46 @@ class BluetoothScaleService {
   async quickConnect() {
     try {
       console.log('🎯 Quick connect requested by user...');
-      
+
       if (this.isConnected) {
         return { success: true, message: 'Already connected', device: this.connectedDevice };
       }
-      
+
       if (this.isConnecting) {
-        return { 
-          success: false, 
+        return {
+          success: false,
           message: 'Connection already in progress. Please wait for current connection to complete.',
           suggestions: ['Wait for the current connection to finish', 'Try again in a few seconds']
         };
       }
-      
+
       // Update status to show we're attempting connection
       if (this.statusCallback) {
         this.statusCallback('connecting', 'Searching for bonded scales...');
       }
-      
+
       const connectedDevice = await this.autoConnectToScale();
-      
+
       // Enable persistent connection for better experience
       this.enablePersistentConnection(true);
-      
-      return { 
-        success: true, 
-        message: `Connected to ${connectedDevice.name}`, 
+
+      return {
+        success: true,
+        message: `Connected to ${connectedDevice.name}`,
         device: connectedDevice,
         reconnected: connectedDevice.reconnected || false
       };
-      
+
     } catch (error) {
       console.error('Quick connect failed:', error);
-      
+
       // Update status to show failure
       if (this.statusCallback) {
         this.statusCallback('disconnected', 'Connection failed - tap to browse devices');
       }
-      
-      return { 
-        success: false, 
+
+      return {
+        success: false,
         message: error.message,
         suggestions: [
           'Make sure your Bluetooth scale is powered on',
@@ -1017,7 +1017,7 @@ class BluetoothScaleService {
   // Start periodic weight reading
   startWeightReading() {
     // console.log('Starting weight reading...');
-    
+
     // Clear any existing interval
     if (this.weightReadInterval) {
       clearInterval(this.weightReadInterval);
@@ -1040,7 +1040,7 @@ class BluetoothScaleService {
   // Parse weight data from the scale
   parseWeightData(data) {
     // console.log('Parsing weight data:', JSON.stringify(data));
-    
+
     try {
       // Common weight data formats:
       // "WEIGHT: 1.23 KG"
@@ -1049,20 +1049,20 @@ class BluetoothScaleService {
       // "W 1.23"
       // "123.4"
       // "ST,GS,    0.00KG\r" (your scale format)
-      
+
       let weight = null;
       let unit = 'kg';
-      
+
       // Handle your specific scale format: ST,GS,    0.00KG
       if (data.includes('ST,GS,')) {
         // Extract the weight part after ST,GS,
         const weightPart = data.replace(/^ST,GS,\s*/, '').trim();
         // console.log('Extracted weight part:', JSON.stringify(weightPart));
-        
+
         // Match weight and unit from the extracted part
         const scaleMatch = weightPart.match(/([+-]?\d*\.?\d+)\s*(kg|g|lb|oz)?/i);
         // console.log('Scale match result:', scaleMatch);
-        
+
         if (scaleMatch) {
           weight = parseFloat(scaleMatch[1]);
           unit = (scaleMatch[2] || 'kg').toLowerCase();
@@ -1071,20 +1071,20 @@ class BluetoothScaleService {
       } else {
         // Remove common prefixes for other formats
         let cleanData = data.replace(/^(WEIGHT:|W\s+|SCALE:|S\s+)/i, '').trim();
-        
+
         // Extract number and unit
         const weightMatch = cleanData.match(/([+-]?\d*\.?\d+)\s*(kg|g|lb|oz|gram|kilogram|pound|ounce)?/i);
-        
+
         if (weightMatch) {
           weight = parseFloat(weightMatch[1]);
           const extractedUnit = weightMatch[2];
-          
+
           if (extractedUnit) {
             unit = extractedUnit.toLowerCase();
           }
         }
       }
-      
+
       if (weight !== null && !isNaN(weight)) {
         // Normalize units
         if (unit.includes('gram') || unit === 'g') {
@@ -1096,13 +1096,13 @@ class BluetoothScaleService {
         } else if (unit.includes('ounce') || unit === 'oz') {
           unit = 'oz';
         }
-        
+
         // Convert grams to kg if needed
         if (unit === 'g' && weight > 0) {
           weight = weight / 1000;
           unit = 'kg';
         }
-        
+
         const weightData = {
           weight: weight,
           unit: unit,
@@ -1111,16 +1111,16 @@ class BluetoothScaleService {
           // For gross weight input - just the numeric value without unit
           numericValue: weight
         };
-        
+
         // console.log('✅ Successfully parsed weight data:', JSON.stringify(weightData, null, 2));
-        
+
         // Store the latest weight data
         this.latestWeightData = weightData;
         this.lastWeightData = weightData;
-        
+
         // Dynamic throttling: burst mode for first 10 seconds, then normal
         const currentUpdateInterval = this.burstModeActive ? this.burstModeInterval : this.weightUpdateInterval;
-        
+
         // Throttle weight callback updates to prevent UI crashes
         const now = Date.now();
         if (now - this.lastWeightUpdate >= currentUpdateInterval) {
@@ -1129,7 +1129,7 @@ class BluetoothScaleService {
             // console.log('⏸️ Weight streaming paused, skipping callback');
             return;
           }
-          
+
           if (this.weightCallback && weight !== null) {
             // Prepare weight data object for callback
             const weightDataForCallback = {
@@ -1137,7 +1137,7 @@ class BluetoothScaleService {
               value: weight, // Just the number for input field
               displayValue: `${weight} ${unit}` // Formatted value for display
             };
-            
+
             // Debug: Log exactly what we're sending to the UI
             // console.log('=== BLUETOOTH SERVICE CALLBACK DEBUG ===');
             // console.log('Sending weight data to UI:', JSON.stringify(weightDataForCallback, null, 2));
@@ -1145,7 +1145,7 @@ class BluetoothScaleService {
             // console.log('Weight type:', typeof weight);
             // console.log('Timestamp:', new Date().toISOString());
             // console.log('=== END BLUETOOTH SERVICE CALLBACK DEBUG ===');
-            
+
             // Pass weight data to the callback
             this.weightCallback(weightDataForCallback);
           }
@@ -1159,7 +1159,7 @@ class BluetoothScaleService {
         // console.log('❌ Could not parse weight from data:', JSON.stringify(data));
         // console.log('Weight value:', weight, 'isNaN:', isNaN(weight));
       }
-      
+
     } catch (error) {
       console.error('Error parsing weight data:', error);
     }
@@ -1202,7 +1202,7 @@ class BluetoothScaleService {
     this.burstModeActive = true;
     this.burstModeStartTime = Date.now();
     // console.log('🚀 Burst mode enabled for', durationMs, 'ms');
-    
+
     // Auto-disable after duration
     setTimeout(() => {
       if (this.burstModeActive) {
@@ -1223,28 +1223,28 @@ class BluetoothScaleService {
     console.log('Device disconnected');
     this.isConnected = false;
     this.connectedDevice = null;
-    
+
     // Clear intervals
     if (this.weightReadInterval) {
       clearInterval(this.weightReadInterval);
       this.weightReadInterval = null;
     }
-    
+
     if (this.dataReadInterval) {
       clearInterval(this.dataReadInterval);
       this.dataReadInterval = null;
     }
-    
+
     if (this.connectionStatusInterval) {
       clearInterval(this.connectionStatusInterval);
       this.connectionStatusInterval = null;
     }
-    
+
     // Reset throttling variables
     this.lastWeightUpdate = 0;
     this.latestWeightData = null;
     this.burstModeActive = false;
-    
+
     // Update connection status in both local callback and global context
     this.updateConnectionStatus('disconnected', 'Device disconnected');
   }
@@ -1253,45 +1253,45 @@ class BluetoothScaleService {
   async disconnect(force = false) {
     try {
       console.log('Disconnecting from device... (force:', force, ', persistent:', this.persistentConnection, ')');
-      
+
       // If persistent connection is enabled and this is not a forced disconnect, just pause
       if (this.persistentConnection && !force) {
         console.log('🔗 Persistent connection enabled - pausing connection instead of disconnecting');
-        
+
         // Stop data streaming but keep the connection
         if (this.dataReadInterval) {
           clearInterval(this.dataReadInterval);
           this.dataReadInterval = null;
         }
-        
+
         // Clear weight callback to stop weight listening
         this.weightCallback = null;
-        
+
         // Keep connection monitoring active
         if (this.statusCallback) {
           this.statusCallback('paused', 'Connection paused - scale remains connected');
         }
-        
+
         return;
       }
-      
+
       // If this is a forced disconnect (manual), disable persistent connection to prevent auto-reconnect
       if (force) {
         console.log('🛑 Manual disconnect - setting flag to prevent auto-reconnect');
         this.isManualDisconnect = true;
       }
-      
+
       // Clear intervals
       if (this.weightReadInterval) {
         clearInterval(this.weightReadInterval);
         this.weightReadInterval = null;
       }
-      
+
       if (this.dataReadInterval) {
         clearInterval(this.dataReadInterval);
         this.dataReadInterval = null;
       }
-      
+
       if (this.connectionStatusInterval) {
         clearInterval(this.connectionStatusInterval);
         this.connectionStatusInterval = null;
@@ -1313,26 +1313,26 @@ class BluetoothScaleService {
       if (this.isConnected && this.connectedDevice) {
         await this.connectedDevice.disconnect();
       }
-      
+
       this.isConnected = false;
       this.connectedDevice = null;
       this.dataBuffer = '';
-      
+
       // Clear connection state to prevent race conditions
       this.isConnecting = false;
       this.connectingToDeviceId = null;
       this.connectionPromises.clear();
-      
+
       // Only clear lastConnectedDeviceId if force disconnect
       if (force) {
         this.lastConnectedDeviceId = null;
       }
-      
+
       // Update connection status in both local callback and global context
       this.updateConnectionStatus('disconnected', force ? 'Force disconnected from device' : 'Disconnected from device');
-      
+
       console.log('Successfully disconnected');
-      
+
     } catch (error) {
       console.error('Error disconnecting:', error);
     }
@@ -1373,10 +1373,10 @@ class BluetoothScaleService {
       if (!this.isConnected || !this.connectedDevice) {
         throw new Error('Not connected to any device');
       }
-      
+
       console.log('Sending command to scale:', command);
       await this.connectedDevice.write(command + '\r\n');
-      
+
       return true;
     } catch (error) {
       console.error('Error sending command:', error);
@@ -1482,7 +1482,7 @@ class BluetoothScaleService {
 
     this.reconnectAttempts++;
     console.log(`🔄 Attempting reconnection ${this.reconnectAttempts}/${this.maxReconnectAttempts} to ${this.lastConnectedDeviceId}`);
-    
+
     if (this.statusCallback) {
       this.statusCallback('reconnecting', `Reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
     }
@@ -1526,7 +1526,7 @@ class BluetoothScaleService {
   startWeightMonitoring() {
     // console.log('Starting weight monitoring...');
     this.isListening = true;
-    
+
     if (this.statusCallback) {
       this.statusCallback('monitoring', 'Weight monitoring started');
     }
@@ -1536,12 +1536,12 @@ class BluetoothScaleService {
   stopWeightMonitoring() {
     // console.log('Stopping weight monitoring...');
     this.isListening = false;
-    
+
     if (this.weightReadInterval) {
       clearInterval(this.weightReadInterval);
       this.weightReadInterval = null;
     }
-    
+
     if (this.statusCallback) {
       this.statusCallback('monitoring_stopped', 'Weight monitoring stopped');
     }
@@ -1550,11 +1550,11 @@ class BluetoothScaleService {
   // Cleanup
   destroy() {
     console.log('Destroying BluetoothScaleService...');
-    
+
     this.stopScanning();
     this.stopWeightMonitoring();
     this.disconnect();
-    
+
     // Clean up any remaining references
     this.statusCallback = null;
     this.weightCallback = null;
@@ -1564,7 +1564,7 @@ class BluetoothScaleService {
   }
 
   // =================== WEIGHT STREAMING CONTROL ===================
-  
+
   /**
    * Pause weight data streaming to UI (useful during weight lock)
    * This prevents new weight readings from updating the UI while weight is locked
@@ -1575,19 +1575,19 @@ class BluetoothScaleService {
       // console.log('⏸️ Weight streaming already paused');
       return;
     }
-    
+
     this.isWeightStreamingPaused = true;
     this.pausedForWeightLock = reason.includes('lock');
-    
+
     // If this is for weight lock, set additional strict mode
     if (this.pausedForWeightLock) {
       this.strictWeightLockMode = true;
       console.log('🔒 STRICT WEIGHT LOCK MODE: All weight processing suspended for submission');
     }
-    
+
     // console.log(`⏸️ Weight streaming PAUSED: ${reason}`);
     // console.log('📊 Scale will continue reading but UI updates are suspended');
-    
+
     // Continue collecting data but don't send to UI
     // This ensures we maintain connection and data flow
   }
@@ -1601,17 +1601,17 @@ class BluetoothScaleService {
       // console.log('▶️ Weight streaming already active');
       return;
     }
-    
+
     this.isWeightStreamingPaused = false;
     const wasPausedForLock = this.pausedForWeightLock;
     this.pausedForWeightLock = false;
-    
+
     // Clear strict mode
     this.strictWeightLockMode = false;
-    
+
     // console.log(`▶️ Weight streaming RESUMED: ${reason}`);
     // console.log('📊 UI will now receive weight updates again');
-    
+
     // If we have recent weight data, send it immediately to sync UI
     if (this.latestWeightData && wasPausedForLock) {
       // console.log('🔄 Sending latest weight data to sync UI after resume');
@@ -1651,7 +1651,7 @@ class BluetoothScaleService {
   }
 
   // =================== VIRTUAL BLUETOOTH SCALE FOR DEBUGGING ===================
-  
+
   /**
    * Toggle virtual scale mode (only works in development)
    * @param {boolean} enabled - Whether to enable virtual scale mode
@@ -1661,16 +1661,16 @@ class BluetoothScaleService {
       console.warn('Virtual scale mode is only available in development builds');
       return false;
     }
-    
+
     console.log(`${enabled ? 'Enabling' : 'Disabling'} virtual Bluetooth scale mode`);
     this.isVirtualScaleMode = enabled;
-    
+
     if (enabled) {
       this.startVirtualScale();
     } else {
       this.stopVirtualScale();
     }
-    
+
     return true;
   }
 
@@ -1687,35 +1687,35 @@ class BluetoothScaleService {
    */
   startVirtualScale() {
     if (!__DEV__ || !this.isVirtualScaleMode) return;
-    
+
     console.log('🔄 Starting virtual Bluetooth scale...');
-    
+
     // Disconnect any real device first
     if (this.isConnected && this.connectedDevice) {
       this.disconnect();
     }
-    
+
     // Set initial virtual weight
     this.virtualWeight = 0.0;
     this.virtualWeightDirection = 1;
     this.virtualScaleConnected = true;
     this.isConnected = true;
-    
+
     // Create a virtual device object
     this.connectedDevice = {
       name: '🧪 Virtual Scale (Debug)',
       address: 'VIRTUAL:00:00:00:00:00',
       id: 'virtual-scale-debug'
     };
-    
+
     // Notify UI of connection
     if (this.statusCallback) {
       this.statusCallback('connected', this.connectedDevice);
     }
-    
+
     // Start weight simulation
     this.startVirtualWeightSimulation();
-    
+
     console.log('✅ Virtual Bluetooth scale started successfully');
   }
 
@@ -1724,21 +1724,21 @@ class BluetoothScaleService {
    */
   stopVirtualScale() {
     console.log('🛑 Stopping virtual Bluetooth scale...');
-    
+
     if (this.virtualScaleInterval) {
       clearInterval(this.virtualScaleInterval);
       this.virtualScaleInterval = null;
     }
-    
+
     this.virtualScaleConnected = false;
     this.isConnected = false;
     this.connectedDevice = null;
-    
+
     // Notify UI of disconnection
     if (this.statusCallback) {
       this.statusCallback('disconnected', null);
     }
-    
+
     console.log('✅ Virtual Bluetooth scale stopped');
   }
 
@@ -1747,30 +1747,30 @@ class BluetoothScaleService {
    */
   startVirtualWeightSimulation() {
     if (!__DEV__ || !this.isVirtualScaleMode || !this.virtualScaleConnected) return;
-    
+
     // console.log('📊 Starting virtual weight simulation...');
-    
+
     // Clear any existing interval
     if (this.virtualScaleInterval) {
       clearInterval(this.virtualScaleInterval);
     }
-    
+
     // Simulate weight changes every 500ms
     this.virtualScaleInterval = setInterval(() => {
       if (!this.virtualScaleConnected) return;
-      
+
       // Simulate realistic weight changes
       this.updateVirtualWeight();
-      
+
       // Format the weight data in the same format as real scale: "ST,GS,    X.XXKG"
       const formattedWeight = this.virtualWeight.toFixed(2);
       const virtualScaleData = `ST,GS,    ${formattedWeight}KG\r`;
-      
+
       // Process the virtual data through the same parsing logic
       this.parseWeightData(virtualScaleData);
-      
+
     }, 500); // Update every 500ms for realistic simulation
-    
+
     // console.log('✅ Virtual weight simulation started');
   }
 
@@ -1803,7 +1803,7 @@ class BluetoothScaleService {
         this.virtualWeight += fluctuation;
       }
     ];
-    
+
     // Choose pattern based on direction and random chance
     if (this.virtualWeightDirection === 1) {
       // 70% chance to increase, 20% stable, 10% decrease
@@ -1826,7 +1826,7 @@ class BluetoothScaleService {
         patterns[0](); // Increase
       }
     }
-    
+
     // Keep weight within reasonable bounds
     if (this.virtualWeight < 0) {
       this.virtualWeight = 0;
@@ -1835,7 +1835,7 @@ class BluetoothScaleService {
       this.virtualWeight = 10;
       this.virtualWeightDirection = -1;
     }
-    
+
     // Round to 2 decimal places for realistic precision
     this.virtualWeight = Math.round(this.virtualWeight * 100) / 100;
   }
@@ -1849,15 +1849,15 @@ class BluetoothScaleService {
       console.warn('Virtual scale mode must be enabled to set virtual weight');
       return;
     }
-    
+
     if (typeof weight !== 'number' || weight < 0) {
       console.warn('Invalid weight value. Must be a positive number.');
       return;
     }
-    
+
     this.virtualWeight = Math.round(weight * 100) / 100; // Round to 2 decimal places
     // console.log(`🎯 Virtual scale weight set to: ${this.virtualWeight} kg`);
-    
+
     // Immediately send this weight
     const formattedWeight = this.virtualWeight.toFixed(2);
     const virtualScaleData = `ST,GS,    ${formattedWeight}KG\r`;
@@ -1870,7 +1870,7 @@ class BluetoothScaleService {
    */
   getVirtualScaleControls() {
     if (!__DEV__) return null;
-    
+
     return {
       isEnabled: this.isVirtualScaleMode,
       isConnected: this.virtualScaleConnected,

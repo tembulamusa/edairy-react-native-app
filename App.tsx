@@ -3,7 +3,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import Icon from "react-native-vector-icons/FontAwesome";
-
+import Store from "./src/context/store.js";
 import {
   LoginScreen,
   RegisterScreen,
@@ -164,16 +164,18 @@ function HomeStack() {
 
 export default function App() {
   return (
-    <GlobalProvider>
-      <NavigationContainer>
-        <RootStack.Navigator
-          screenOptions={{ headerShown: false }}
-          initialRouteName="Auth"
-        >
-          <RootStack.Screen name="Auth" component={AuthStack} />
-          <RootStack.Screen name="Home" component={HomeStack} />
-        </RootStack.Navigator>
-      </NavigationContainer>
-    </GlobalProvider>
+    <Store>
+      <GlobalProvider>
+        <NavigationContainer>
+          <RootStack.Navigator
+            screenOptions={{ headerShown: false }}
+            initialRouteName="Auth"
+          >
+            <RootStack.Screen name="Auth" component={AuthStack} />
+            <RootStack.Screen name="Home" component={HomeStack} />
+          </RootStack.Navigator>
+        </NavigationContainer>
+      </GlobalProvider>
+    </Store>
   );
 }
