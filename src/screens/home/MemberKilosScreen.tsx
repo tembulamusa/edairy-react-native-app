@@ -21,9 +21,16 @@ const MemberKilosScreen = () => {
     const [grossWeight, setGrossWeight] = useState("");
     const [scaleWeight, setScaleWeight] = useState<number | null>(null);
     const [totalQuantity, setTotalQuantity] = useState<number | null>(null);
+    const [transporter, setTransporter] = useState<any>(null);
+    const [route, setRoute] = useState<any>(null);
+    const [shift, setShift] = useState<any>(null);
+    const [member, setMember] = useState<any>(null);
+    const [isManualEntry, setIsManualEntry] = useState(false);
+    const deviceUid = null;
     const [commonData, setCommonData] = useState<any>({ cans: [{ name: "Can 1", id: 1, weight: 3.00 }, { name: "Can 2", id: 2, weight: 2.50 }], transporters: [{ name: "reuben", id: 1, idNo: 123 }, { name: "john", id: 2, idNo: 456 }] });
     const [loading, setLoading] = useState(false);
-
+    const [errors, setErrors] = useState<any>({});
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     // Dropdown states
     const [transporterOpen, setTransporterOpen] = useState(false);
@@ -98,17 +105,23 @@ const MemberKilosScreen = () => {
                 total_weight: totalQuantity,
                 device_uid: connectedDevice?.id || null,
                 is_manual_entry: !connectedDevice,
+                transporter_id: transporter?.id || null,
+                route_id: route?.id || null,
+                shift_id: shift?.id || null,
+                member_id: member?.id || null,
+                can_id: can?.id || null,
             };
             console.log("📤 Sending payload:", payload);
 
             const [status, response] = await makeRequest({
-                url: "submit-member-kilos",
+                url: "member-kilos",
                 method: "POST",
                 data: payload,
             });
 
             if (![200, 201].includes(status)) {
                 const msg = response?.message || "Failed to submit data";
+
                 Alert.alert("Error", msg);
                 return;
             }
@@ -162,8 +175,12 @@ const MemberKilosScreen = () => {
                         value={transporterValue}
                         items={transporterItems}
                         setOpen={(val) => val && handleDropdownOpen("transporter")}
-                        setValue={setTransporterValue}
-                        setItems={setTransporterItems}
+                        setValue={(val) => {
+                            setTransporterValue(val);
+                            const selected = commonData.transporters.find((t: any) => t.id === val);
+                            if (selected) setTransporter(selected);
+                            setTransporterOpen(false);
+                        }} setItems={setTransporterItems}
                         searchable={true}
                         searchPlaceholder="Search transporter"
                         placeholder="Select transporter"
@@ -178,8 +195,12 @@ const MemberKilosScreen = () => {
                         value={routeValue}
                         items={routeItems}
                         setOpen={(val) => val && handleDropdownOpen("route")}
-                        setValue={setRouteValue}
-                        setItems={setRouteItems}
+                        setValue={(val) => {
+                            setRouteValue(val);
+                            const selected = commonData.routes.find((r: any) => r.id === val);
+                            if (selected) setRoute(selected);
+                            setRouteOpen(false);
+                        }} setItems={setRouteItems}
                         searchable={true}
                         searchPlaceholder="Search route"
                         placeholder="Select route"
@@ -196,7 +217,12 @@ const MemberKilosScreen = () => {
                         value={shiftValue}
                         items={shiftItems}
                         setOpen={(val) => val && handleDropdownOpen("shift")}
-                        setValue={setShiftValue}
+                        setValue={(val) => {
+                            setShiftOpen(val);
+                            const selected = commonData.shifts.find((s: any) => s.id === val);
+                            if (selected) setShift(selected);
+                            setShiftOpen(false);
+                        }}
                         setItems={setShiftItems}
                         searchable={true}
                         searchPlaceholder="Search shift"
@@ -214,7 +240,12 @@ const MemberKilosScreen = () => {
                         value={memberValue}
                         items={memberItems}
                         setOpen={(val) => val && handleDropdownOpen("member")}
-                        setValue={setMemberValue}
+                        setValue={(val) => {
+                            setMemberValue(val);
+                            const selected = commonData.members.find((m: any) => m.id === val);
+                            if (selected) setMember(selected);
+                            setMemberOpen(false);
+                        }}
                         setItems={setMemberItems}
                         searchable={true}
                         searchPlaceholder="Search member"
@@ -254,7 +285,7 @@ const MemberKilosScreen = () => {
                         placeholder="Scale Wt"
                         value={scaleWeight !== null ? `${scaleWeight}` : ""}
                         keyboardType="numeric"
-                        editable={!connectedDevice} // editable only if no device connected
+                        editable={!connectedDevice}
                         onChangeText={(text) => {
                             if (!connectedDevice) {
                                 const num = parseFloat(text);
