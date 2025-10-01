@@ -7,20 +7,23 @@ import {
     StyleSheet,
     FlatList,
     ActivityIndicator,
+    Alert,
 } from "react-native";
 import { BluetoothDevice } from "react-native-bluetooth-classic";
 
 type ConnectScaleModalProps = {
     visible: boolean;
     onClose: () => void;
+    filterDevice: string;
     devices: BluetoothDevice[];
-    scanForDevices: () => Promise<void>;
+    scanForDevices: (deviceType: string) => Promise<void>;
     onDeviceSelect: (device: BluetoothDevice) => void;
 };
 
 const ConnectScaleModal: React.FC<ConnectScaleModalProps> = ({
     visible,
     onClose,
+    filterDevice,
     devices,
     scanForDevices,
     onDeviceSelect,
@@ -31,9 +34,28 @@ const ConnectScaleModal: React.FC<ConnectScaleModalProps> = ({
         if (visible) scanForDevices();
     }, [visible, scanForDevices]);
 
-    const handleSelect = (device: BluetoothDevice) => {
+    const handleSelect = async (device: BluetoothDevice) => {
         setConnectingId(device.id);
-        onDeviceSelect(device);
+
+        try {
+            const connected = await onDeviceSelect(device); // should return true/false or throw
+            if (connected) {
+                Alert.alert("Connected", `Connected to ${device.name}`);
+            } else {
+                Alert.alert(
+                    "Device Off",
+                    `${device.name || "This device"} appears to be off or unreachable. Please turn it on and try again.`
+                );
+            }
+        } catch (error) {
+            console.error("Connection error:", error);
+            Alert.alert(
+                "Connection Failed",
+                `${device.name || "This device"} is off or unreachable. Please turn it on. Error: ${error.message || error}`
+            );
+        } finally {
+            setConnectingId(null);
+        }
     };
 
     return (
@@ -42,7 +64,7 @@ const ConnectScaleModal: React.FC<ConnectScaleModalProps> = ({
                 <View style={styles.modal}>
                     <Text style={styles.title}>Select Scale</Text>
 
-                    {devices.length === 0 ? (
+                    {devices?.length === 0 ? (
                         <Text style={styles.noDevices}>No devices found</Text>
                     ) : (
                         <FlatList

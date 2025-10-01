@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import makeRequest from "./makeRequest"; // adjust import path
+import { Alert } from "react-native";
 
 // We add filters accordingly
 const fetchCommonData = async (
@@ -7,38 +8,33 @@ const fetchCommonData = async (
     search?: string
 ) => {
     try {
-        const raw = await AsyncStorage.getItem("commonData");
-        let parsed = raw ? JSON.parse(raw) : {};
-
-        if (!parsed[name]) {
+        let commonData = await AsyncStorage.getItem("commonData");
+        let parsed = commonData ? JSON.parse(commonData) : {};
+        let result = [];
+        if (
+            !Array.isArray(parsed[name]) ||  // not an array
+            parsed[name].length === 0        // or empty array
+        ) {
             const [status, response] = await makeRequest({
-                url: `common-data?name=${name}`,
+                url: `global-data?model=${name}`,
                 method: "GET",
             });
-
             if (![200, 201].includes(status)) {
-                throw new Error(response?.message || "Failed to fetch common data");
+                return [];
             }
-
-            parsed = { ...parsed, [name]: response };
-
-            await AsyncStorage.setItem("commonData", JSON.stringify(parsed));
-        }
-
-        let result = parsed[name];
-
-        if (search && Array.isArray(result)) {
-            const searchLower = search.toLowerCase();
-            result = result.filter((item: any) =>
-                Object.values(item).some((val) =>
-                    String(val).toLowerCase().includes(searchLower)
-                )
-            );
+            result = response?.data || [];
+            commonData = { ...parsed, [name]: response?.data ?? [] };
+            await AsyncStorage.setItem("commonData", JSON.stringify(commonData));
+        } else {
+            result = parsed[name];
         }
         return result;
     } catch (error) {
         console.error(`❌ Failed to load common data for ${name}:`, error);
-        throw error;
+        return {
+            error: error,
+            data: null,
+        };
     }
 };
 

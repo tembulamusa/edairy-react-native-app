@@ -1,4 +1,3 @@
-import React from 'react';
 import {
     View,
     Text,
@@ -6,10 +5,12 @@ import {
     TouchableOpacity,
     ScrollView,
     Dimensions,
+    Alert,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { BarChart } from 'react-native-gifted-charts';
 import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const screenWidth = Dimensions.get('window').width;
 const iconSize = screenWidth / 4 - 20;

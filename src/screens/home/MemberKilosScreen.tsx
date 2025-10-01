@@ -6,6 +6,8 @@ import {
     TouchableOpacity,
     StyleSheet,
     Alert,
+    Keyboard,
+    TouchableWithoutFeedback
 } from "react-native";
 import ConnectScaleModal from "../../components/modals/ConnectScaleModal";
 import useBluetoothClassic from "../../hooks/useBluetoothService.ts";
@@ -13,6 +15,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import fetchCommonData from "../../components/utils/fetchCommonData.ts";
 import makeRequest from "../../components/utils/makeRequest.ts";
 import DropDownPicker from "react-native-dropdown-picker";
+import { renderDropdownItem } from "../../assets/styles/all.tsx";
 
 const MemberKilosScreen = () => {
     const [modalVisible, setModalVisible] = useState(false);
@@ -23,49 +26,50 @@ const MemberKilosScreen = () => {
     const [totalQuantity, setTotalQuantity] = useState<number | null>(null);
     const [transporter, setTransporter] = useState<any>(null);
     const [route, setRoute] = useState<any>(null);
+    const [center, setCenter] = useState<any>(null);
     const [shift, setShift] = useState<any>(null);
     const [member, setMember] = useState<any>(null);
+    const [entries, setEntries] = useState<any[]>([]);
     const [isManualEntry, setIsManualEntry] = useState(false);
     const deviceUid = null;
-    const [commonData, setCommonData] = useState<any>({ cans: [{ name: "Can 1", id: 1, weight: 3.00 }, { name: "Can 2", id: 2, weight: 2.50 }], transporters: [{ name: "reuben", id: 1, idNo: 123 }, { name: "john", id: 2, idNo: 456 }] });
+    const [commonData, setCommonData] = useState<any>({});
     const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState<any>({});
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-    // Dropdown states
     const [transporterOpen, setTransporterOpen] = useState(false);
     const [transporterValue, setTransporterValue] = useState<number | null>(null);
     const [transporterItems, setTransporterItems] = useState(
-        commonData.transporters?.map((t: any) => ({ label: t.name, value: t.id })) || []
+        commonData.transporters?.map((t: any) => ({ label: t.full_names, value: t.id })) || []
     );
-
-    // dropdown for states shifts
     const [shiftOpen, setShiftOpen] = useState(false);
     const [shiftValue, setShiftValue] = useState<number | null>(null);
     const [shiftItems, setShiftItems] = useState(
         commonData.shifts?.map((s: any) => ({ label: s.name, value: s.id })) || []
     );
-    // Dropdown states for Cans
     const [canOpen, setCanOpen] = useState(false);
     const [canValue, setCanValue] = useState<number | null>(null);
     const [canItems, setCanItems] = useState(
-        commonData.cans?.map((c: any) => ({ label: c.name || `Can ${c.id}`, value: c.id })) || []
+        commonData.cans?.map((c: any) => ({ label: c.can_id || `Can ${c.id}`, value: c.id })) || []
     );
 
-    // Dropdown states for Members
     const [memberOpen, setMemberOpen] = useState(false);
     const [memberValue, setMemberValue] = useState<number | null>(null);
     const [memberItems, setMemberItems] = useState(
-        commonData.members?.map((m: any) => ({ label: m.name, value: m.id })) || []
+        commonData.members?.map((m: any) => ({ label: `${m.first_name} ${m.last_name}`, value: m.id })) || []
     );
 
     // Dropdown states for routes
     const [routeOpen, setRouteOpen] = useState(false);
     const [routeValue, setRouteValue] = useState<number | null>(null);
     const [routeItems, setRouteItems] = useState(
-        commonData.routes?.map((r: any) => ({ label: r.name, value: r.id })) || []
+        commonData.routes?.map((r: any) => ({ label: r.route_name, value: r.id })) || []
     );
-
+    // Dropdown states for centers
+    const [centerOpen, setCenterOpen] = useState(false);
+    const [centerValue, setCenterValue] = useState<number | null>(null);
+    const [centerItems, setCenterItems] = useState(
+        commonData.centers?.map((c: any) => ({ label: c.centre, value: c.id })) || []
+    );
     const {
         devices,
         connectedDevice,
@@ -77,15 +81,91 @@ const MemberKilosScreen = () => {
     // load cached commonData
     useEffect(() => {
         const loadCommonData = async () => {
-            const data = await AsyncStorage.getItem("commonData");
-            if (data) {
-                setCommonData(JSON.parse(data));
+            try {
+                const [transporters, routes, shifts, members, cans, centers] = await Promise.all([
+                    fetchCommonData({ name: "transporters" }),
+                    fetchCommonData({ name: "routes" }),
+                    fetchCommonData({ name: "shifts" }),
+                    fetchCommonData({ name: "members" }),
+                    fetchCommonData({ name: "cans" }),
+                    fetchCommonData({ name: "centers" }),
+                ]);
+                const allData = { transporters, routes, shifts, members, cans, centers };
+                setCommonData(allData);
+            } catch (error: any) {
+                Alert.alert("Error", 'Failed to load common data');
             }
         };
+
         loadCommonData();
     }, []);
 
-    // update weight when message changes
+    // when setting canItems, mark as disabled if already used in entries
+    useEffect(() => {
+        if (!commonData) return;
+        setTransporterItems(
+            (commonData?.transporters || []).map((t: any) => ({
+                label: t.full_names,
+                value: t.id,
+            }))
+        );
+
+        setRouteItems(
+            (commonData?.routes || []).map((r: any) => ({
+                label: `${r.route_name}(${r.route_code})`,
+                value: r.id,
+            }))
+        );
+
+        setShiftItems(
+            (commonData?.shifts || []).map((s: any) => ({
+                label: s.name,
+                value: s.id,
+            }))
+        );
+
+        setMemberItems(
+            (commonData?.members || []).map((m: any) => ({
+                label: `${m.first_name} ${m.last_name}`,
+                value: m.id,
+            }))
+        );
+
+        setCanItems(
+            (commonData?.cans || []).map((c: any) => ({
+                label: c.can_id || `Can ${c.id}`,
+                value: c.id,
+                disabled: entries.some((e) => e.can_id === c.id), // 🔑 disable if already picked
+            }))
+        );
+        setCenterItems(
+            (commonData?.centers || []).map((c: any) => ({
+                label: c.centre,
+                value: c.id,
+            }))
+        );
+    }, [commonData, entries]); // 👈 re-run when entries change
+
+    useEffect(() => {
+        if (!commonData?.centers) return;
+        if (route?.id) {
+            // filter by route_id
+            const filtered = commonData?.centers
+                .filter((c: any) => c.route_id === route.id)
+                .map((c: any) => ({
+                    label: c.centre,
+                    value: c.id,
+                }));
+
+            setCenterItems(filtered);
+        } else {
+            // reset if no route selected
+            setCenterItems([]);
+            setCenter(null);
+            setCenterValue(null);
+        }
+    }, [commonData, route]);
+
     useEffect(() => {
         if (lastMessage) {
             const parsed = parseFloat(lastMessage);
@@ -97,19 +177,37 @@ const MemberKilosScreen = () => {
     }, [lastMessage]);
 
     const sendMemberKilos = async () => {
+        const requiredFields = [
+            { field: transporter, name: "transporter" },
+            { field: route, name: "route" },
+            { field: member, name: "member" },
+            { field: shift, name: "shift" },
+            { field: center, name: "center" },
+        ];
+
+        const missing = requiredFields.find(r => !r.field);
+        if (missing) {
+            Alert.alert("Missing Data", `Please select a ${missing.name}.`);
+            return;
+        }
+
+        if (entries.length === 0) {
+            Alert.alert("Missing Data", "Please add at least one can entry.");
+            return;
+        }
         setLoading(true);
         try {
             const payload = {
-                can,
-                total_cans: totalCans,
-                total_weight: totalQuantity,
+                cans: entries,
+                total_cans: entries.length,
+                total_quantity: entries.reduce((sum, e) => sum + e.net, 0),
                 device_uid: connectedDevice?.id || null,
                 is_manual_entry: !connectedDevice,
                 transporter_id: transporter?.id || null,
+                center_id: center?.id || null,
                 route_id: route?.id || null,
                 shift_id: shift?.id || null,
                 member_id: member?.id || null,
-                can_id: can?.id || null,
             };
             console.log("📤 Sending payload:", payload);
 
@@ -120,12 +218,18 @@ const MemberKilosScreen = () => {
             });
 
             if (![200, 201].includes(status)) {
-                const msg = response?.message || "Failed to submit data";
-
-                Alert.alert("Error", msg);
+                Alert.alert(`Error ${status}`, response?.message || "Failed to submit data");
                 return;
             }
-            Alert.alert("Success", "Pretend submitted successfully");
+
+            Alert.alert("Success", `Milk kilos for ${member.first_name} sent successfully!`);
+            setEntries([]);
+            setTotalCans(0);
+            setMember(null);
+            setMemberValue(null);
+            setCan(null);
+            setCanValue(null);
+            setTotalQuantity(0);
         } catch (error) {
             console.error(error);
             Alert.alert("Error", "Failed to send data");
@@ -134,24 +238,35 @@ const MemberKilosScreen = () => {
         }
     };
 
-    const takeWeight = () => {
-        if (scaleWeight !== null) {
-            if (can && typeof can.weight === "number" && !isNaN(can.weight)) {
-                const net = scaleWeight - can.weight;
-                setTotalQuantity((prev) => (prev ?? 0) + net);
-                setTotalCans((prev) => prev + 1);
-            } else {
-                Alert.alert("Error", "Please enter a valid can with weight");
-            }
 
-            // reset after 3s
+    const takeWeight = () => {
+        if (scaleWeight !== null && can?.id && typeof can.tare_weight === "number") {
+            const net = scaleWeight - can.tare_weight;
+
+            const newEntry = {
+                can_id: can.id,              // ✅ always store numeric id
+                can_label: can.can_id,       // (optional) keep original label if you want to display it
+                tare_weight: can.tare_weight,
+                scale_weight: scaleWeight,
+                net,
+            };
+
+            setEntries((prev) => [...prev, newEntry]);
+            setTotalQuantity((prev) => (prev ?? 0) + net);
+            setTotalCans((prev) => prev + 1);
+
+            // reset form
             setTimeout(() => {
                 setScaleWeight(null);
                 setGrossWeight("");
                 setCan({});
-            }, 3000);
+                setCanValue(null); // ✅ reset selected can
+            }, 1000);
+        } else {
+            Alert.alert("Error", "Please select a valid can and weight");
         }
     };
+
 
     // Helper function
     const handleDropdownOpen = (dropdownName: string) => {
@@ -168,67 +283,106 @@ const MemberKilosScreen = () => {
 
 
             {/* Transporter Dropdown */}
+            {/* <TouchableWithoutFeedback onPress={() => {
+                setTransporterOpen(false);
+                setRouteOpen(false);
+                setShiftOpen(false);
+                setMemberOpen(false);
+                setCanOpen(false);
+                Keyboard.dismiss();
+            }}> */}
+            {/* <View style={{ flex: 1, zIndex: 3000 }}> */}
             <View style={styles.row}>
                 <View style={styles.col}>
                     <DropDownPicker
                         open={transporterOpen}
                         value={transporterValue}
                         items={transporterItems}
-                        setOpen={(val) => val && handleDropdownOpen("transporter")}
-                        setValue={(val) => {
-                            setTransporterValue(val);
-                            const selected = commonData.transporters.find((t: any) => t.id === val);
-                            if (selected) setTransporter(selected);
-                            setTransporterOpen(false);
-                        }} setItems={setTransporterItems}
+                        setOpen={setTransporterOpen}
+                        setValue={setTransporterValue}
+                        setItems={setTransporterItems}
+                        placeholder="Select transporter"
                         searchable={true}
                         searchPlaceholder="Search transporter"
-                        placeholder="Select transporter"
-                        zIndex={3000}
-                        zIndexInverse={1000}
+                        onChangeValue={(val) => {
+                            setTransporterValue(val);
+                            const selected = commonData?.transporters?.find((t: any) => t.id === val);
+                            if (selected) setTransporter(selected);
+                        }}
+                        renderListItem={renderDropdownItem} // ✅ now works as named import
+                        zIndex={5000}
+                        zIndexInverse={2000}
                     />
                 </View>
-                {/* Route Dropdown */}
-                <View style={styles.col}>
-                    <DropDownPicker
-                        open={routeOpen}
-                        value={routeValue}
-                        items={routeItems}
-                        setOpen={(val) => val && handleDropdownOpen("route")}
-                        setValue={(val) => {
-                            setRouteValue(val);
-                            const selected = commonData.routes.find((r: any) => r.id === val);
-                            if (selected) setRoute(selected);
-                            setRouteOpen(false);
-                        }} setItems={setRouteItems}
-                        searchable={true}
-                        searchPlaceholder="Search route"
-                        placeholder="Select route"
-                        zIndex={3000}
-                        zIndexInverse={1000}
-                    />
-                </View>
-            </View>
-            <View style={styles.row}>
+
                 <View style={styles.col}>
                     {/* Shift Dropdown */}
                     <DropDownPicker
                         open={shiftOpen}
                         value={shiftValue}
                         items={shiftItems}
-                        setOpen={(val) => val && handleDropdownOpen("shift")}
-                        setValue={(val) => {
-                            setShiftOpen(val);
-                            const selected = commonData.shifts.find((s: any) => s.id === val);
-                            if (selected) setShift(selected);
-                            setShiftOpen(false);
-                        }}
+                        setOpen={setShiftOpen}
+                        setValue={setShiftValue}
                         setItems={setShiftItems}
+                        placeholder="Select shift"
                         searchable={true}
                         searchPlaceholder="Search shift"
-                        placeholder="Select shift"
-                        zIndex={2000}
-                        zIndexInverse={1000}
+                        onChangeValue={(val) => {
+                            setShiftValue(val);
+                            const selected = commonData?.shifts?.find((s: any) => s.id === val);
+                            if (selected) setShift(selected);
+                        }}
+                        renderListItem={renderDropdownItem} // ✅ now works as named import
+                        zIndex={4500}
+                        zIndexInverse={2000}
+                    />
+                </View>
+            </View>
+            <View style={styles.row}>
+                {/* Route Dropdown */}
+                <View style={styles.col}>
+                    <DropDownPicker
+                        open={routeOpen}
+                        value={routeValue}
+                        items={routeItems}
+                        setOpen={setRouteOpen}
+                        setValue={setRouteValue}
+                        setItems={setRouteItems}
+                        placeholder="Select route"
+                        searchable={true}
+                        searchPlaceholder="Search route"
+                        onChangeValue={(val) => {
+                            setRouteValue(val);
+                            const selected = commonData?.routes?.find((r: any) => r.id === val);
+                            if (selected) setRoute(selected);
+                        }}
+                        renderListItem={renderDropdownItem} // ✅ now works as named import
+                        zIndex={4000}
+                        zIndexInverse={2000}
+                    />
+                </View>
+                {/* Center Dropdown (filtered by route) */}
+                <View style={styles.col}>
+                    <DropDownPicker
+                        open={centerOpen}
+                        value={centerValue}
+                        items={centerItems}
+                        setOpen={setCenterOpen}
+                        setValue={setCenterValue}
+                        setItems={setCenterItems}
+                        placeholder="Select center"
+                        searchable={true}
+                        searchPlaceholder="Search center"
+                        onChangeValue={(val) => {
+                            setCenterValue(val);
+                            const selected = centerItems.find((c: any) => c.value === val); // ✅ match value, not commonData
+                            if (selected) {
+                                setCenter({ id: selected.value, centre: selected.label }); // store full object
+                            }
+                        }}
+                        renderListItem={renderDropdownItem}
+                        zIndex={3500} // lower than route
+                        zIndexInverse={1500}
                     />
                 </View>
             </View>
@@ -239,17 +393,18 @@ const MemberKilosScreen = () => {
                         open={memberOpen}
                         value={memberValue}
                         items={memberItems}
-                        setOpen={(val) => val && handleDropdownOpen("member")}
-                        setValue={(val) => {
-                            setMemberValue(val);
-                            const selected = commonData.members.find((m: any) => m.id === val);
-                            if (selected) setMember(selected);
-                            setMemberOpen(false);
-                        }}
+                        setOpen={setMemberOpen}
+                        setValue={setMemberValue}
                         setItems={setMemberItems}
+                        placeholder="Select member"
                         searchable={true}
                         searchPlaceholder="Search member"
-                        placeholder="Select member"
+                        onChangeValue={(val) => {
+                            setMemberValue(val);
+                            const selected = commonData?.members?.find((m: any) => m.id === val);
+                            if (selected) setMember(selected);
+                        }}
+                        renderListItem={renderDropdownItem} // ✅ now works as named import
                         zIndex={1000}
                         zIndexInverse={2000}
                     />
@@ -260,23 +415,26 @@ const MemberKilosScreen = () => {
                         open={canOpen}
                         value={canValue}
                         items={canItems}
-                        setOpen={(val) => val && handleDropdownOpen("can")}
-                        setValue={(val) => {
-                            setCanValue(val);
-                            const selected = commonData.cans.find((c: any) => c.id === val);
-                            if (selected) setCan(selected);
-                            setCanOpen(false);
-                        }}
+                        setOpen={setCanOpen}
+                        setValue={setCanValue}
                         setItems={setCanItems}
+                        placeholder="Select can"
                         searchable={true}
                         searchPlaceholder="Search can"
-                        placeholder="Select can"
+                        onChangeValue={(val) => {
+                            setCanValue(val);
+                            const selected = commonData?.cans?.find((c: any) => c.id === val);
+                            if (selected) setCan(selected);
+                        }}
+                        renderListItem={renderDropdownItem} // ✅ now works as named import
                         zIndex={1000}
                         zIndexInverse={2000}
                     />
                 </View>
-            </View>
 
+            </View>
+            {/* </View> */}
+            {/* </TouchableWithoutFeedback> */}
             <View style={styles.row}>
                 <View style={styles.col}>
                     <Text style={styles.label}>Scale</Text>
@@ -296,11 +454,12 @@ const MemberKilosScreen = () => {
                 </View>
 
                 <View style={styles.col}>
-                    <Text style={styles.label}>Can</Text>
+                    <Text style={styles.label}>Can{can?.id}</Text>
+
                     <TextInput
                         style={styles.input}
                         placeholder="Can Wt"
-                        value={can?.weight ? `${can.weight}` : ""}
+                        value={can?.tare_weight ? `${can?.tare_weight}` : ""}
                         editable={false} // never editable
                     />
                 </View>
@@ -308,19 +467,21 @@ const MemberKilosScreen = () => {
                 <View style={styles.col}>
                     <Text style={styles.label}>Net</Text>
                     <Text style={styles.value}>
-                        {scaleWeight !== null && can?.weight
-                            ? `${(scaleWeight - can.weight).toFixed(2)} KG`
+                        {scaleWeight !== null && can?.tare_weight
+                            ? `${(scaleWeight - can.tare_weight).toFixed(2)} KG`
                             : "--"}
                     </Text>
                 </View>
             </View>
 
 
-            {connectedDevice && (
-                <Text>
-                    Connected Device: {connectedDevice?.name} ({connectedDevice?.id})
-                </Text>
-            )}
+            {
+                connectedDevice && (
+                    <Text>
+                        Connected Device: {connectedDevice?.name} ({connectedDevice?.id})
+                    </Text>
+                )
+            }
 
             {/* BUTTONS */}
             <View style={styles.buttonRow}>
@@ -347,6 +508,29 @@ const MemberKilosScreen = () => {
                 </TouchableOpacity>
             </View>
 
+
+            <View style={{ marginVertical: 16 }}>
+                <Text style={{ fontWeight: "bold" }}>Recorded Cans: {entries?.length}</Text>
+                {entries.map((e, idx) => (
+                    <View key={idx} style={{ flexDirection: "row", justifyContent: "space-between", marginVertical: 4 }}>
+                        <Text>
+                            Can ({e.can_label}) - Gross: {e.scale_weight} - Tare: {e.tare_weight} - Net: {e.net}
+                        </Text>
+                        <TouchableOpacity
+                            onPress={() => {
+                                setEntries((prev) => prev.filter((_, i) => i !== idx));
+                                setTotalCans((prev) => prev - 1);
+                                setTotalQuantity((prev) => (prev ?? 0) - e.net);
+                            }}
+                        >
+                            <Text style={{ color: "red" }}>Delete</Text>
+                        </TouchableOpacity>
+                    </View>
+                ))}
+            </View>
+
+
+
             <TouchableOpacity style={styles.submitButton} onPress={sendMemberKilos}>
                 <Text style={styles.submitText}>Send Kilos</Text>
             </TouchableOpacity>
@@ -354,6 +538,7 @@ const MemberKilosScreen = () => {
             {/* MODAL */}
             <ConnectScaleModal
                 visible={modalVisible}
+                filterDevice="scale"
                 onClose={() => setModalVisible(false)}
                 devices={devices}
                 scanForDevices={scanForDevices}
@@ -365,7 +550,7 @@ const MemberKilosScreen = () => {
                     setModalVisible(false);
                 }}
             />
-        </View>
+        </View >
     );
 };
 
