@@ -5,9 +5,10 @@ import { Alert } from "react-native";
 // We add filters accordingly
 const fetchCommonData = async (
     { name }: { name: string },
-    search?: string
+    search?: string, cachable: boolean = true
 ) => {
     try {
+        // await AsyncStorage.removeItem("commonData"); // for testing, remove in production
         let commonData = await AsyncStorage.getItem("commonData");
         let parsed = commonData ? JSON.parse(commonData) : {};
         let result = [];

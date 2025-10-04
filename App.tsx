@@ -25,6 +25,7 @@ import {
   MemberCashoutListScreen,
   ConnectScaleScreen,
   WebViewScreen,
+  UserBalanceSummaryScreen
 } from "./src/screens";
 
 import CustomHeader from "./src/components/CustomHeader";
@@ -47,6 +48,7 @@ type MembersStackParamList = {
   MemberStatementSummaryReport: undefined;
   MemberCashout: undefined;
   ConnectScale: undefined;
+  UserBalanceSummary: undefined;
   LivenessCheck: { url: string };
 };
 
@@ -119,7 +121,12 @@ function MembersStackNavigator() {
         name="MemberCashout"
         component={MemberCashoutListScreen}
       />
-      <MembersStack.Screen name="LivenessCheck" component={WebViewScreen} />
+      <MembersStack.Screen
+        name="LivenessCheck"
+        component={WebViewScreen} />
+      <MembersStack.Screen
+        name="UserBalanceSummary"
+        component={UserBalanceSummaryScreen} />
     </MembersStack.Navigator>
   );
 }

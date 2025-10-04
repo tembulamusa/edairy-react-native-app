@@ -21,15 +21,9 @@ const quickLinks = [
     { name: 'Cashout', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberCashout' },
     { name: 'Transporter Kilos', icon: 'local-shipping', navigateTo: 'Members', screenName: 'TransporterKilos' },
     { name: 'Store Sales', icon: 'store', navigateTo: 'Members', screenName: 'StoreSales' },
-    { name: 'Store Sales Summary', icon: 'store', navigateTo: 'Members', screenName: 'StoreSalesSummary' },
-    { name: 'Store Orders', icon: 'shopping-cart', navigateTo: 'Members', screenName: 'StoreOrders' },
     { name: 'Milk Sales', icon: 'local-drink', navigateTo: 'Members', screenName: 'MilkSales' },
-    { name: 'Deductions', icon: 'money-off' },
-    { name: 'Can Management', icon: 'delete', navigateTo: 'Members', screenName: 'CanManagement' },
-    { name: 'Shift Summary', icon: 'bar-chart', navigateTo: 'Members', screenName: 'ShiftSummaryReport' },
-    { name: 'Transporter Summary', icon: 'directions-bus', navigateTo: 'Members', screenName: 'TransporterSummaryReport' },
-    { name: 'Member Statement', icon: 'receipt', navigateTo: 'Members', screenName: 'MemberStatementSummaryReport' },
-    { name: 'Reprint', icon: 'print' },
+    { name: 'Summary & Balance', icon: 'money-off', navigateTo: 'Members', screenName: 'UserBalanceSummary' },
+    { name: 'Session Summary', icon: 'bar-chart', navigateTo: 'Members', screenName: 'ShiftSummaryReport' },
 ];
 
 // Bar chart data with different colors

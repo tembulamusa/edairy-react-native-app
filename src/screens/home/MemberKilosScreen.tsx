@@ -426,7 +426,7 @@ const MemberKilosScreen = () => {
                             const selected = commonData?.cans?.find((c: any) => c.id === val);
                             if (selected) setCan(selected);
                         }}
-                        renderListItem={renderDropdownItem} // ✅ now works as named import
+                        renderListItem={renderDropdownItem}
                         zIndex={1000}
                         zIndexInverse={2000}
                     />

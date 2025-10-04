@@ -13,6 +13,8 @@ import {
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import Icon from "react-native-vector-icons/MaterialIcons";
 import DropDownPicker from "react-native-dropdown-picker";
+import { renderDropdownItem } from "../../assets/styles/all";
+import makeRequest from "../utils/makeRequest";
 
 type StoreSaleModalProps = {
     visible: boolean;
@@ -20,7 +22,7 @@ type StoreSaleModalProps = {
     onSave: (formData: any) => Promise<void>;
     commonData: {
         members: { id: number; first_name: string; last_name: string }[];
-        stores: { id: number; name: string }[];
+        stores: { id: number; description: string }[];
         stock_items: { id: number; name: string; unit_price: number }[];
     };
 };
@@ -31,6 +33,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
     onSave,
     commonData,
 }) => {
+    const [errors, setErrors] = useState<any | null>({});
     const [transactionDate, setTransactionDate] = useState<Date>(new Date());
     const [saving, setSaving] = useState(false);
     const [showDatePicker, setShowDatePicker] = useState(false);
@@ -55,20 +58,24 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         { id: number; name: string; unit_price: number; quantity: string }[]
     >([]);
 
+    // Payment type
+    const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
+
     // Load dropdowns whenever commonData changes
     useEffect(() => {
         if (commonData?.members) {
-            setMemberItems(
-                commonData.members.map((m) => ({
-                    label: `${m.first_name} ${m.last_name}`,
+            setMemberItems([
+                { label: "No Member / Guest", value: null }, // 🚀 added option
+                ...commonData.members.map((m) => ({
+                    label: `${m?.customer?.first_name} ${m?.customer?.last_name}`,
                     value: m.id,
-                }))
-            );
+                })),
+            ]);
         }
         if (commonData?.stores) {
             setStoreItems(
                 commonData.stores.map((s) => ({
-                    label: s.description,
+                    label: s.description || `Store ${s.id}`,
                     value: s.id,
                 }))
             );
@@ -76,49 +83,80 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         if (commonData?.stock_items) {
             setStockItems(
                 commonData.stock_items.map((s) => ({
-                    label: s.name,
+                    label: s.item?.description || `Item ${s.id}`,
                     value: s.id,
-                    unit_price: s.unit_price,
+                    unit_price: s.selling_price, // for reference
                 }))
             );
         }
     }, [commonData]);
 
+    // Reset payment type if member unselected
+    useEffect(() => {
+        if (!memberValue) setPaymentType("cash");
+    }, [memberValue]);
+
     const addStockEntry = (stockId: number) => {
         const stock = commonData.stock_items.find((s) => s.id === stockId);
         if (stock && !entries.find((e) => e.id === stock.id)) {
-            setEntries([...entries, { ...stock, quantity: "" }]);
+            setEntries([...entries, { ...stock, quantity: 1 }]);
         }
-        setStockValue(null);
+        // setStockValue(null);
     };
+    // ✅ Compute overall total
+    const overallTotal = entries.reduce((sum, e) => {
+        const qty = parseFloat(e.quantity || "0");
+        return sum + qty * e.selling_price;
+    }, 0);
 
     const handleSave = async () => {
-        if (!memberValue || !storeValue || !transactionDate || entries.length === 0) {
-            Alert.alert("Validation", "Please complete all fields.");
+        if (!storeValue || !transactionDate || entries.length === 0) {
+            Alert.alert("Validation", "Please complete store, date, and items.");
             return;
         }
-
-        const items = entries.map((e) => ({
-            stock_item_id: e.id,
-            quantity: parseFloat(e.quantity || "0"),
-            unit_price: e.unit_price,
-            total: parseFloat(e.quantity || "0") * e.unit_price,
-        }));
-
         setSaving(true);
+        setErrors({});
         try {
-            await onSave({
+            let items = entries.map((e) => ({
+                stock_item_id: e.id,
+                quantity: parseFloat(e.quantity || "0"),
+                unit_price: e.unit_price,
+                total: parseFloat(e.quantity || "0") * e.unit_price,
+            }));
+
+            let data = {
                 member_id: memberValue,
                 store_id: storeValue,
                 transaction_date: transactionDate.toISOString().split("T")[0],
+                payment_type: paymentType,
                 items,
+            }
+            const [status, response] = await makeRequest({
+                url: "store-sale",
+                method: "POST",
+                data,
             });
-            onClose();
-            setEntries([]);
-            setMemberValue(null);
-            setStoreValue(null);
+
+            if (![200, 201].includes(status)) {
+                if (!response?.errors) {
+                    Alert.alert("Error", response?.message || "Failed to save sale");
+                }
+                else {
+                    setErrors(response?.errors || {}); // if validation errors
+                }
+                return;
+            } else {
+                Alert.alert("Success", "Sale recorded successfully");
+                setEntries([]);
+                setMemberValue(null);
+                setStoreValue(null);
+                onSave(response?.data);
+                onClose();
+            }
+
         } catch (err: any) {
             Alert.alert("Error", err.message || "Failed to save sale");
+            return
         } finally {
             setSaving(false);
         }
@@ -147,6 +185,8 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                     placeholder="Select Member"
                     zIndex={3000}
                     zIndexInverse={1000}
+                    searchable={true}
+                    searchPlaceholder="Search members..."
                     style={styles.dropdown}
                     dropDownContainerStyle={styles.dropdownBox}
                 />
@@ -165,6 +205,8 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                             placeholder="Select Store"
                             zIndex={2500}
                             zIndexInverse={2000}
+                            searchable={true}
+                            searchPlaceholder="Search stores..."
                             style={styles.dropdown}
                             dropDownContainerStyle={styles.dropdownBox}
                         />
@@ -183,6 +225,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                             isVisible={showDatePicker}
                             mode="date"
                             date={transactionDate}
+                            maximumDate={new Date()}
                             onConfirm={(date) => {
                                 setTransactionDate(date);
                                 setShowDatePicker(false);
@@ -192,53 +235,125 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                     </View>
                 </View>
 
-                {/* Stock selection */}
+                {/* // Stock selection */}
                 <Text style={styles.label}>Add Stock Item</Text>
+
+
                 <DropDownPicker
                     open={stockOpen}
                     value={stockValue}
                     items={stockItems}
                     setOpen={setStockOpen}
-                    setValue={(val) => {
-                        setStockValue(val);
-                        if (val) addStockEntry(val as number);
-                    }}
+                    setValue={setStockValue}
                     setItems={setStockItems}
                     placeholder="Select Stock Item"
-                    zIndex={2000}
-                    zIndexInverse={2500}
-                    style={styles.dropdown}
-                    dropDownContainerStyle={styles.dropdownBox}
+                    searchable={true}
+                    searchPlaceholder="Search stock..."
+                    onChangeValue={(val) => {
+                        setStockValue(val);
+                        if (val) {
+                            addStockEntry(val);  // ✅ Add entry when selected
+                        }
+                    }}
+                    renderListItem={renderDropdownItem}
+                    zIndex={1000}
+                    zIndexInverse={2000}
                 />
 
                 {/* Entries list */}
+                <Text style={[styles.label, { marginTop: 12 }]}>Selected items</Text>
                 <FlatList
                     data={entries}
                     keyExtractor={(item) => item.id.toString()}
                     renderItem={({ item, index }) => (
                         <View style={styles.entry}>
-                            <Text style={{ flex: 1 }}>{item.name}</Text>
+                            <Text style={{ flex: 1, textTransform: "capitalize" }}>
+                                {item?.item?.description}
+                            </Text>
                             <TextInput
-                                style={styles.entryInput}
+                                style={[
+                                    styles.entryInput,
+                                    saving && { backgroundColor: "#f5f5f5", color: "#888" },
+                                ]}
                                 keyboardType="numeric"
-                                placeholder="Qty"
-                                value={item.quantity}
+                                placeholder="1"
+                                value={item.quantity ?? 1}
                                 onChangeText={(val) => {
-                                    const updated = [...entries];
-                                    updated[index].quantity = val;
-                                    setEntries(updated);
+                                    if (!saving) {
+                                        const updated = [...entries];
+                                        updated[index].quantity = val;
+                                        setEntries(updated);
+                                    }
                                 }}
+                                editable={!saving}   // ✅ disable editing
                             />
                             <Text style={styles.priceText}>
-                                @ {item.unit_price} ={" "}
+                                @ {item.selling_price} ={" "}
                                 {item.quantity
-                                    ? (parseFloat(item.quantity) * item.unit_price).toFixed(2)
+                                    ? (parseFloat(item.quantity) * item.selling_price).toFixed(2)
                                     : "0.00"}
                             </Text>
+                            <TouchableOpacity
+                                onPress={() =>
+                                    !saving &&
+                                    setEntries(entries.filter((e) => e.id !== item.id))
+                                }
+                                style={[styles.removeButton, saving && { opacity: 0.4 }]}
+                                disabled={saving}   // ✅ disable deleting
+                            >
+                                <Icon name="delete" size={22} color="#d11a2a" />
+                            </TouchableOpacity>
                         </View>
                     )}
                 />
+                {/* Overall Total */}
+                <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>Overall Total:</Text>
+                    <Text style={styles.totalValue}>{overallTotal.toFixed(2)}</Text>
+                </View>
 
+                {/* Payment type */}
+                <Text style={styles.label}>Payment Type</Text>
+                <View style={styles.radioGroup}>
+                    <TouchableOpacity
+                        style={styles.radioOption}
+                        onPress={() => setPaymentType("cash")}
+                    >
+                        <Icon
+                            name={
+                                paymentType === "cash"
+                                    ? "radio-button-checked"
+                                    : "radio-button-unchecked"
+                            }
+                            size={20}
+                            color="#007AFF"
+                        />
+                        <Text style={styles.radioText}>Cash</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={styles.radioOption}
+                        onPress={() => memberValue && setPaymentType("credit")}
+                        disabled={!memberValue}
+                    >
+                        <Icon
+                            name={
+                                paymentType === "credit"
+                                    ? "radio-button-checked"
+                                    : "radio-button-unchecked"
+                            }
+                            size={20}
+                            color={memberValue ? "#007AFF" : "#ccc"}
+                        />
+                        <Text
+                            style={[
+                                styles.radioText,
+                                { color: memberValue ? "#000" : "#aaa" },
+                            ]}
+                        >
+                            Credit
+                        </Text>
+                    </TouchableOpacity>
+                </View>
                 {/* Buttons */}
                 <View style={styles.actions}>
                     <TouchableOpacity
@@ -256,7 +371,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         {saving ? (
                             <ActivityIndicator color="#fff" />
                         ) : (
-                            <Text style={styles.buttonText}>Save</Text>
+                            <Text style={styles.buttonText}>submit</Text>
                         )}
                     </TouchableOpacity>
                 </View>
@@ -327,4 +442,34 @@ const styles = StyleSheet.create({
     cancelButton: { backgroundColor: "#ccc" },
     saveButton: { backgroundColor: "#007AFF" },
     buttonText: { color: "#fff", fontWeight: "600" },
+    radioGroup: {
+        flexDirection: "row",
+        marginTop: 8,
+    },
+    radioOption: {
+        flexDirection: "row",
+        alignItems: "center",
+        marginRight: 20,
+    },
+    radioText: {
+        marginLeft: 6,
+        fontSize: 14,
+    },
+    totalRow: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        marginTop: 12,
+        paddingVertical: 8,
+        borderTopWidth: 1,
+        borderTopColor: "#ccc",
+    },
+    totalLabel: {
+        fontSize: 16,
+        fontWeight: "600",
+    },
+    totalValue: {
+        fontSize: 16,
+        fontWeight: "700",
+        color: "#007AFF",
+    },
 });

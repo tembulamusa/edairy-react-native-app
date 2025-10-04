@@ -13,4 +13,5 @@ export { default as TransporterSummaryReportScreen } from './TransporterSummaryR
 export { default as StoreSalesSummaryReportScreen } from './StoreSalesSummaryReportScreen';
 export { default as MemberStatementSummaryReportScreen } from './MemberStatementSummaryReportScreen';
 export { default as MemberCashoutListScreen } from './MemberCashoutListScreen';
+export { default as UserBalanceSummaryScreen } from './UserBalanceScreen';
 export { default as WebViewScreen } from './WebViewScreen';
