@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity } from 'react-native';
+import { globalStyles } from '../../styles';
 
 interface NextOfKinProps {
     onNext: (data: { fullName: string; phone: string; relationship: string }) => void;
@@ -28,12 +29,14 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
 
     return (
         <View style={styles.container}>
+            <Text style={globalStyles.pageTitle}>Member Registration</Text>
+            <Text style={globalStyles.pageSubTitle}>Next of Kin</Text>
             <View>
-                <Text style={styles.label}>
-                    Full Name <Text style={styles.required}>*</Text>
+                <Text style={globalStyles.label}>
+                    Full Name <Text style={globalStyles.required}>*</Text>
                 </Text>
                 <TextInput
-                    style={styles.input}
+                    style={globalStyles.input}
                     placeholder="Enter Full Name"
                     value={form.fullName}
                     onChangeText={(v) => handleChange("fullName", v)}
@@ -41,11 +44,11 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
             </View>
 
             <View>
-                <Text style={styles.label}>
-                    Phone Number <Text style={styles.required}>*</Text>
+                <Text style={globalStyles.label}>
+                    Phone Number <Text style={globalStyles.required}>*</Text>
                 </Text>
                 <TextInput
-                    style={styles.input}
+                    style={globalStyles.input}
                     placeholder="Enter Phone Number"
                     value={form.phone}
                     onChangeText={(v) => handleChange("phone", v)}
@@ -54,11 +57,11 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
             </View>
 
             <View>
-                <Text style={styles.label}>
-                    Relationship <Text style={styles.required}>*</Text>
+                <Text style={globalStyles.label}>
+                    Relationship <Text style={globalStyles.required}>*</Text>
                 </Text>
                 <TextInput
-                    style={styles.input}
+                    style={globalStyles.input}
                     placeholder="Enter Relationship"
                     value={form.relationship}
                     onChangeText={(v) => handleChange("relationship", v)}
@@ -66,13 +69,13 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
             </View>
 
             {/* Navigation buttons */}
-            <View style={styles.navRow}>
-                <TouchableOpacity style={styles.navButtonOutline} onPress={onPrevious}>
-                    <Text style={[styles.navButtonText, { color: "#009688" }]}>← Previous</Text>
+            <View style={globalStyles.navRow}>
+                <TouchableOpacity style={globalStyles.navButtonOutline} onPress={onPrevious}>
+                    <Text style={[globalStyles.navButtonText, { color: "#009688" }]}>← Previous</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.navButtonFilled} onPress={handleNext}>
-                    <Text style={styles.navButtonText}>Next →</Text>
+                <TouchableOpacity style={globalStyles.navButtonFilled} onPress={handleNext}>
+                    <Text style={globalStyles.navButtonText}>Next →</Text>
                 </TouchableOpacity>
             </View>
         </View>
@@ -82,21 +85,8 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
 export default NextOfKin;
 
 const styles = StyleSheet.create({
-    container: { flex: 1, padding: 20, justifyContent: 'center' },
-    label: { fontSize: 18, marginBottom: 10 },
-    required: { color: "red" },
-    input: {
-        backgroundColor: "#fff",
-        borderRadius: 25,
-        borderWidth: 1,
-        borderColor: "#d1d5db",
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        fontSize: 14,
-        color: "#111827",
-        elevation: 1,
-        marginBottom: 10,
-    },
+    container: { flex: 1, padding: 20, justifyContent: 'flex-start' },
+
     navRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',

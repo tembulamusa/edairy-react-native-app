@@ -9,6 +9,7 @@ import {
     Platform,
     ActivityIndicator,
 } from "react-native";
+import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import fetchCommonData from "../../components/utils/fetchCommonData.ts";
 import makeRequest from "../../components/utils/makeRequest.ts";
@@ -18,8 +19,7 @@ import Icon from "react-native-vector-icons/MaterialIcons";
 
 const TransporterKilosScreen = () => {
     const [commonData, setCommonData] = useState<any>({});
-
-    // dropdown state
+    const navigation = useNavigation();
     const [transporterOpen, setTransporterOpen] = useState(false);
     const [transporterValue, setTransporterValue] = useState<number | null>(null);
     const [transporterItems, setTransporterItems] = useState<any[]>([]);
@@ -49,7 +49,7 @@ const TransporterKilosScreen = () => {
                 const [transporters, transporterVehicles, routes, shifts] =
                     await Promise.all([
                         fetchCommonData({ name: "transporters" }),
-                        fetchCommonData({ name: "transporterVehicles" }),
+                        fetchCommonData({ name: "transporter_vehicles" }),
                         fetchCommonData({ name: "routes" }),
                         fetchCommonData({ name: "shifts" }),
                     ]);
@@ -140,6 +140,7 @@ const TransporterKilosScreen = () => {
             setVehicleValue(null);
             setRouteValue(null);
             setShiftValue(null);
+            navigation.navigate("Home" as never);
         } catch (error) {
             console.error(error);
             Alert.alert("Error", "Failed to send data");

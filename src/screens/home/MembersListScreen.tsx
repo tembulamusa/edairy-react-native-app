@@ -9,13 +9,13 @@ import {
     Alert,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
-import makeRequest from "../../components/utils/makeRequest";
+import fetchCommonData from "../../components/utils/fetchCommonData";
 
 type Member = {
     id: string;
     first_name: string;
     last_name: string;
-    primary_phone_number: string;
+    primary_phone: string;
     status: string;
     next_level: string;
     uuid: string;
@@ -27,32 +27,35 @@ const MembersListScreen: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [members, setMembers] = useState<Member[]>([]);
 
-    // Fetch members (simulate API)
     useEffect(() => {
-        fetchMembers();
-    }, []);
+        const loadCommonData = async () => {
+            setLoading(true);
+            try {
+                const [members] = await Promise.all([
+                    fetchCommonData({ name: "members", cachable: false })
+                ]);
+                // Flatten the customer relation
+                const formattedMembers = members.map((item: any) => ({
+                    id: item?.id.toString(),
+                    uuid: item?.uuid,
+                    status: item?.status,
+                    next_level: item?.next_level,
+                    first_name: item?.customer?.first_name || "",
+                    last_name: item?.customer?.last_name || "",
+                    primary_phone: item?.customer?.primary_phone || "",
+                }));
 
-    const fetchMembers = async (isRefresh = false) => {
-        setLoading(true);
-        try {
-            const [status, response] = await makeRequest({
-                url: "get-members",
-                method: "GET",
-            });
-            if ([200, 201].includes(status) && response?.members) {
-                setMembers(response?.members);
+                setMembers(formattedMembers);
+            } catch (error: any) {
+                Alert.alert("Error", 'Failed to load members');
             }
-        } catch (err) {
-            console.error("Error fetching members", err);
-            Alert.alert("Error", "Failed to fetch members.");
-        } finally {
-            if (isRefresh) {
-                setRefreshing(false);
-            } else {
-                setLoading(false);
+            finally {
+                setLoading(false)
             }
-        }
-    };
+        };
+
+        loadCommonData();
+    }, []);
 
     const renderMember = ({ item }: { item: Member }) => (
         <TouchableOpacity
@@ -67,7 +70,7 @@ const MembersListScreen: React.FC = () => {
                 <Text style={styles.name}>
                     {item.first_name} {item.last_name}
                 </Text>
-                <Text style={styles.phone}>{item.primary_phone_number}</Text>
+                <Text style={styles.phone}>{item.primary_phone}</Text>
             </View>
 
             {/* Right column */}

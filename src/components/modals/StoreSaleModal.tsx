@@ -128,7 +128,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 member_id: memberValue,
                 store_id: storeValue,
                 transaction_date: transactionDate.toISOString().split("T")[0],
-                payment_type: paymentType,
+                sale_type: paymentType,
                 items,
             }
             const [status, response] = await makeRequest({
@@ -142,7 +142,8 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                     Alert.alert("Error", response?.message || "Failed to save sale");
                 }
                 else {
-                    setErrors(response?.errors || {}); // if validation errors
+                    setErrors(response?.errors || {});
+                    Alert.alert("Error", JSON.stringify(response));
                 }
                 return;
             } else {

@@ -1,6 +1,5 @@
-// RegistrationWizard.tsx
 import React, { useState, useCallback } from "react";
-import { View, StyleSheet, Alert, ActivityIndicator } from "react-native";
+import { View, StyleSheet, ActivityIndicator } from "react-native";
 import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
 import type { Asset } from "react-native-image-picker";
 
@@ -9,16 +8,25 @@ import PersonalInfoForm from "../../components/forms/PersonalInfo";
 import NextOfKin from "../../components/forms/NextOfKin";
 import IdFrontCapture from "../../components/forms/IdFrontCapture";
 import IdBackCapture from "../../components/forms/IdBackCapture";
-import makeRequest from "../../components/utils/makeRequest"; // ✅ import added
+import makeRequest from "../../components/utils/makeRequest";
+import { globalStyles } from "../../styles";
+import CustomAlert from "../../components/utils/customAlert";
 
 export default function RegistrationWizard() {
     const navigation = useNavigation();
     const route = useRoute<any>();
-
     const initialStep = route.params?.step ?? 0;
-    const [step, setStep] = useState<number>(initialStep);
 
-    const [loading, setLoading] = useState(false); // ✅ loading state
+    const [step, setStep] = useState<number>(initialStep);
+    const [loading, setLoading] = useState(false);
+
+    // Alert states
+    const [alertVisible, setAlertVisible] = useState(false);
+    const [alertMessage, setAlertMessage] = useState("");
+    const [alertTitle, setAlertTitle] = useState("Alert");
+    const [alertIcon, setAlertIcon] = useState("info");
+    const [alertConfirm, setAlertConfirm] = useState<(() => void) | undefined>(undefined);
+
     const [data, setData] = useState<ConfirmationData>({
         personalInfo: {
             membershipNo: "",
@@ -51,6 +59,20 @@ export default function RegistrationWizard() {
             }
         }, [route.params?.step])
     );
+
+    // Alert helper
+    const showAlert = (
+        title: string,
+        message: string,
+        icon: string = "info",
+        onConfirm?: () => void
+    ) => {
+        setAlertTitle(title);
+        setAlertMessage(message);
+        setAlertIcon(icon);
+        setAlertConfirm(() => onConfirm);
+        setAlertVisible(true);
+    };
 
     const goNext = () => setStep((prev) => prev + 1);
     const goBack = () => setStep((prev) => Math.max(0, prev - 1));
@@ -92,17 +114,25 @@ export default function RegistrationWizard() {
                 url: "register-member",
                 method: "POST",
                 data: formData,
-                isFormData: true, // ✅ important for FormData
+                isFormData: true,
             });
-
             if ([200, 201].includes(status)) {
-                Alert.alert('Success', "Member successfully created.");
-                navigation.navigate("MembersList" as never);
+                showAlert(
+                    "Success",
+                    "Member registered successfully!",
+                    "check-circle",
+                    () => {
+                        setAlertVisible(false);
+                        navigation.navigate("Members" as never, {
+                            screen: "MembersList" as never,
+                        });
+                    }
+                );
             } else {
-                Alert.alert("Error", response?.error || "Registration failed");
+                showAlert("Error", response?.message || "Registration failed.", "error");
             }
         } catch (err) {
-            Alert.alert("Error", "Something went wrong.");
+            showAlert("Error", "Something went wrong. Please try again.", "error");
         } finally {
             setLoading(false);
         }
@@ -116,9 +146,11 @@ export default function RegistrationWizard() {
         );
     }
 
+    let content: JSX.Element;
+
     switch (step) {
         case 0:
-            return (
+            content = (
                 <PersonalInfoForm
                     onNext={(personalInfo) => {
                         setData((prev) => ({ ...prev, personalInfo }));
@@ -126,8 +158,9 @@ export default function RegistrationWizard() {
                     }}
                 />
             );
+            break;
         case 1:
-            return (
+            content = (
                 <NextOfKin
                     onNext={(nextOfKin) => {
                         setData((prev) => ({ ...prev, nextOfKin }));
@@ -136,8 +169,9 @@ export default function RegistrationWizard() {
                     onPrevious={goBack}
                 />
             );
+            break;
         case 2:
-            return (
+            content = (
                 <IdFrontCapture
                     onNext={(idFront?: Asset) => {
                         setData((prev) => ({
@@ -149,8 +183,9 @@ export default function RegistrationWizard() {
                     onPrevious={goBack}
                 />
             );
+            break;
         case 3:
-            return (
+            content = (
                 <IdBackCapture
                     onNext={(idBack?: Asset) => {
                         setData((prev) => ({
@@ -162,8 +197,9 @@ export default function RegistrationWizard() {
                     onPrevious={goBack}
                 />
             );
-        case 4:
-            return (
+            break;
+        default:
+            content = (
                 <ConfirmationScreen
                     data={data}
                     onEditPersonal={() => setStep(0)}
@@ -172,11 +208,35 @@ export default function RegistrationWizard() {
                     onFinish={() => registerMember(data)}
                 />
             );
-        default:
-            return <View style={styles.container} />;
     }
+
+    return (
+        <View style={styles.container}>
+            {content}
+
+            {/* ✅ Always render CustomAlert */}
+            <CustomAlert
+                visible={alertVisible}
+                title={alertTitle}
+                message={alertMessage}
+                icon={alertIcon}
+                onClose={() => setAlertVisible(false)}
+                onConfirm={
+                    alertConfirm
+                        ? () => {
+                            setAlertVisible(false);
+                            alertConfirm?.();
+                        }
+                        : undefined
+                }
+            />
+        </View>
+    );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#fff" },
+    container: {
+        flex: 1,
+        backgroundColor: "#fff",
+    },
 });

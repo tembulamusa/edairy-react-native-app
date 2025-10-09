@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { Asset } from "react-native-image-picker";
+import { globalStyles } from "../../styles";
 
 type PersonalInfo = {
     membershipNo: string;
@@ -80,27 +81,27 @@ export default function ConfirmationScreen({
     const { personalInfo, nextOfKin, idUploads } = data;
 
     const renderRow = (label: string, value?: string | null) => (
-        <View style={styles.row}>
-            <Text style={styles.rowLabel}>{label}</Text>
-            <Text style={styles.rowValue}>{value ?? "-"}</Text>
+        <View style={globalStyles.row}>
+            <Text style={globalStyles.rowLabel}>{label}</Text>
+            <Text style={globalStyles.rowValue}>{value ?? "-"}</Text>
         </View>
     );
 
     return (
         <ScrollView contentContainerStyle={styles.container}>
-            <Text style={styles.title}>Confirm your details</Text>
-            <Text style={styles.sub}>Review everything below before finishing.</Text>
+            <Text style={globalStyles.title}>Confirm your details</Text>
+            <Text style={globalStyles.sub}>Review everything below before finishing.</Text>
 
             {/* Personal Info Card */}
-            <View style={styles.card}>
-                <View style={styles.cardHeader}>
-                    <Text style={styles.cardTitle}>Personal Information</Text>
+            <View style={globalStyles.card}>
+                <View style={globalStyles.cardHeader}>
+                    <Text style={globalStyles.cardTitle}>Personal Information</Text>
                     <TouchableOpacity
                         onPress={onEditPersonal}
-                        style={styles.smallEditBtn}
+                        style={globalStyles.smallEditBtn}
                         activeOpacity={0.8}
                     >
-                        <Text style={styles.smallEditText}>Edit</Text>
+                        <Text style={globalStyles.smallEditText}>Edit</Text>
                     </TouchableOpacity>
                 </View>
 
@@ -117,15 +118,15 @@ export default function ConfirmationScreen({
             </View>
 
             {/* Next of Kin Card */}
-            <View style={styles.card}>
-                <View style={styles.cardHeader}>
-                    <Text style={styles.cardTitle}>Next of Kin</Text>
+            <View style={globalStyles.card}>
+                <View style={globalStyles.cardHeader}>
+                    <Text style={globalStyles.cardTitle}>Next of Kin</Text>
                     <TouchableOpacity
                         onPress={onEditNextOfKin}
-                        style={styles.smallEditBtn}
+                        style={globalStyles.smallEditBtn}
                         activeOpacity={0.8}
                     >
-                        <Text style={styles.smallEditText}>Edit</Text>
+                        <Text style={globalStyles.smallEditText}>Edit</Text>
                     </TouchableOpacity>
                 </View>
 
@@ -135,37 +136,37 @@ export default function ConfirmationScreen({
             </View>
 
             {/* ID Uploads Card */}
-            <View style={styles.card}>
-                <View style={styles.cardHeader}>
-                    <Text style={styles.cardTitle}>ID Uploads</Text>
+            <View style={globalStyles.card}>
+                <View style={globalStyles.cardHeader}>
+                    <Text style={globalStyles.cardTitle}>ID Uploads</Text>
                     <TouchableOpacity
                         onPress={onEditIDs}
-                        style={styles.smallEditBtn}
+                        style={globalStyles.smallEditBtn}
                         activeOpacity={0.8}
                     >
-                        <Text style={styles.smallEditText}>Edit</Text>
+                        <Text style={globalStyles.smallEditText}>Edit</Text>
                     </TouchableOpacity>
                 </View>
 
-                <View style={styles.imageRow}>
-                    <View style={styles.imageSlot}>
-                        <Text style={styles.imageLabel}>Front</Text>
+                <View style={globalStyles.imageRow}>
+                    <View style={globalStyles.imageSlot}>
+                        <Text style={globalStyles.imageLabel}>Front</Text>
                         {idUploads?.idFront?.uri ? (
-                            <Image source={{ uri: idUploads.idFront.uri }} style={styles.imagePreview} />
+                            <Image source={{ uri: idUploads.idFront.uri }} style={globalStyles.imagePreview} />
                         ) : (
-                            <View style={styles.imagePlaceholder}>
-                                <Text style={styles.placeholderText}>No front image</Text>
+                            <View style={globalStyles.imagePlaceholder}>
+                                <Text style={globalStyles.placeholderText}>No front image</Text>
                             </View>
                         )}
                     </View>
 
-                    <View style={styles.imageSlot}>
-                        <Text style={styles.imageLabel}>Back</Text>
+                    <View style={globalStyles.imageSlot}>
+                        <Text style={globalStyles.imageLabel}>Back</Text>
                         {idUploads?.idBack?.uri ? (
-                            <Image source={{ uri: idUploads.idBack.uri }} style={styles.imagePreview} />
+                            <Image source={{ uri: idUploads.idBack.uri }} style={globalStyles.imagePreview} />
                         ) : (
-                            <View style={styles.imagePlaceholder}>
-                                <Text style={styles.placeholderText}>No back image</Text>
+                            <View style={globalStyles.imagePlaceholder}>
+                                <Text style={globalStyles.placeholderText}>No back image</Text>
                             </View>
                         )}
                     </View>
@@ -173,13 +174,13 @@ export default function ConfirmationScreen({
             </View>
 
             {/* Finish button */}
-            <View style={styles.footer}>
-                <TouchableOpacity style={styles.finishButtonOutline} onPress={() => navigation.goBack()}>
-                    <Text style={styles.finishButtonOutlineText}>Back</Text>
+            <View style={globalStyles.footer}>
+                <TouchableOpacity style={globalStyles.finishButtonOutline} onPress={() => navigation.goBack()}>
+                    <Text style={globalStyles.finishButtonOutlineText}>Back</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.finishButton} onPress={handleFinish}>
-                    <Text style={styles.finishButtonText}>Finish</Text>
+                <TouchableOpacity style={globalStyles.finishButton} onPress={handleFinish}>
+                    <Text style={globalStyles.finishButtonText}>Finish</Text>
                 </TouchableOpacity>
             </View>
         </ScrollView>
@@ -192,80 +193,5 @@ const styles = StyleSheet.create({
         paddingBottom: 40,
         backgroundColor: "#f7fafc",
     },
-    title: {
-        fontSize: 22,
-        fontWeight: "700",
-        color: "#0f766e",
-        textAlign: "left",
-        marginBottom: 4,
-    },
-    sub: {
-        fontSize: 13,
-        color: "#6b7280",
-        marginBottom: 16,
-    },
-    card: {
-        backgroundColor: "#fff",
-        borderRadius: 12,
-        padding: 14,
-        marginBottom: 14,
-        shadowColor: "#000",
-        shadowOpacity: 0.03,
-        shadowOffset: { width: 0, height: 2 },
-        shadowRadius: 6,
-        elevation: 2,
-    },
-    cardHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        marginBottom: 8,
-    },
-    cardTitle: { fontSize: 16, fontWeight: "600", color: "#111827" },
-    smallEditBtn: {
-        paddingHorizontal: 8,
-        paddingVertical: 6,
-        borderRadius: 8,
-    },
-    smallEditText: { color: "#0f766e", fontWeight: "600" },
 
-    row: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
-    rowLabel: { color: "#6b7280", fontSize: 13, flex: 0.45 },
-    rowValue: { color: "#111827", fontSize: 13, textAlign: "right", flex: 0.55 },
-
-    imageRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 8 },
-    imageSlot: { width: "48%" },
-    imageLabel: { color: "#6b7280", marginBottom: 6, fontSize: 13 },
-    imagePreview: { width: "100%", height: 140, borderRadius: 8, resizeMode: "cover" },
-    imagePlaceholder: {
-        width: "100%",
-        height: 140,
-        borderRadius: 8,
-        backgroundColor: "#f3f4f6",
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    placeholderText: { color: "#9ca3af" },
-
-    footer: { flexDirection: "row", justifyContent: "space-between", marginTop: 18 },
-    finishButtonOutline: {
-        flex: 1,
-        borderWidth: 1,
-        borderColor: "#0f766e",
-        paddingVertical: 12,
-        marginRight: 10,
-        borderRadius: 20,
-        alignItems: "center",
-    },
-    finishButtonOutlineText: { color: "#0f766e", fontWeight: "600" },
-
-    finishButton: {
-        flex: 1,
-        backgroundColor: "#0f766e",
-        paddingVertical: 12,
-        marginLeft: 10,
-        borderRadius: 20,
-        alignItems: "center",
-    },
-    finishButtonText: { color: "#fff", fontWeight: "700", fontSize: 15 },
 });

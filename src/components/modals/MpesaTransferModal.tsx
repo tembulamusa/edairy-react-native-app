@@ -9,63 +9,108 @@ import {
     ActivityIndicator,
     Alert,
 } from "react-native";
-import makeRequest from "../utils/makeRequest"; // ✅ adjust path
+import makeRequest from "../utils/makeRequest";
 
 type MpesaTransferModalProps = {
     visible: boolean;
     amount: string;
-    activeCashout: { id?: string };
-    onConfirm: (otp: string) => void; // confirm handler with otp
+    transferType: "mpesa" | "wallet";
+    memberId: string | number;
     onClose: () => void;
 };
 
 const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
     visible,
+    transferType,
     amount,
-    activeCashout,
+    memberId,
     onClose,
-
 }) => {
     const [otp, setOtp] = useState("");
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState("");
-    const [errors, setErrors] = useState([]);
-    const [scaId, setScaId] = useState('');
-    const [transferData, setTransferData] = useState();
+    const [errors, setErrors] = useState<string[]>([]);
+    const [scaId, setScaId] = useState("");
+    const [transferData, setTransferData] = useState<any>(null);
 
-    // Auto-trigger OTP when modal opens
     useEffect(() => {
-        if (visible && activeCashout?.id) {
-            handleRequestOtp();
+        if (visible && memberId) {
+            // 🚀 If transfer is wallet, skip OTP and process directly
+            if (transferType === "wallet") {
+                handleWalletTransfer();
+            } else {
+                handleRequestOtp();
+            }
         } else {
-            setOtp("");
-            setMessage("");
+            resetModal();
         }
     }, [visible]);
 
-    const handleRequestOtp = async () => {
-        if (!activeCashout?.id) return;
+    const resetModal = () => {
+        setOtp("");
+        setMessage("");
+        setErrors([]);
+        setScaId("");
+        setTransferData(null);
+    };
 
+    // ✅ WALLET TRANSFER — no OTP
+    const handleWalletTransfer = async () => {
         try {
             setLoading(true);
-            setMessage("");
-            const endpoint = `mpesa-acceptance-otp-request?id=${activeCashout['uuid']}`;
+            setMessage("Processing wallet transfer...");
+
+            const [status, response] = await makeRequest({
+                url: "wallet-transfer",
+                method: "POST",
+                data: {
+                    member_id: memberId,
+                    amount: amount,
+                },
+            });
+
+            if ([200, 201].includes(status)) {
+                setMessage("Wallet transfer completed successfully!");
+                setErrors([]);
+            } else {
+                setMessage(response?.message || "Wallet transfer failed");
+                setErrors(response?.errors ?? [response?.error]);
+            }
+        } catch (error) {
+            console.error("Wallet transfer error:", error);
+            setMessage("Wallet transfer failed. Try again.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // ✅ M-Pesa OTP Request
+    const handleRequestOtp = async () => {
+        try {
+            setLoading(true);
+            setMessage("Requesting OTP...");
+            const endpoint = `mpesa-acceptance-otp-request`;
+            const data = {
+                amount: amount,
+                transferType: transferType,
+                id: memberId,
+            };
             const [status, response] = await makeRequest({
                 url: endpoint,
-                method: "GET",
+                data: data,
+                method: "POST",
             });
             if ([200, 201].includes(status)) {
-
                 setMessage("OTP has been sent to your phone.");
                 if (!(response?.scaId && response?.transferData)) {
-                    setErrors(['could not find scaId and/or transferData'])
+                    setErrors(["Could not find scaId or transferData"]);
                     return;
                 }
-                setScaId(response?.scaId);
-                setTransferData(response?.transferData);
+                setScaId(response.scaId);
+                setTransferData(response.transferData);
             } else {
                 setMessage(response?.message || "Failed to request OTP");
-                setErrors(response?.[0]?.details?.['errors'] ?? response?.errors);
+                setErrors(response?.errors ?? [response?.error]);
             }
         } catch (error) {
             console.error("OTP request error:", error);
@@ -75,15 +120,15 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
         }
     };
 
+    // ✅ M-Pesa OTP Confirmation
     const handleConfirmOtp = async () => {
-        // Validate OTP
         if (!otp || otp.length !== 6 || !/^\d{6}$/.test(otp)) {
             setErrors(["OTP must be exactly 6 digits"]);
             return;
         }
         try {
             setLoading(true);
-            setMessage("");
+            setMessage("Confirming OTP...");
             setErrors([]);
 
             const endpoint = `mpesa-acceptance-otp-confirm`;
@@ -91,16 +136,16 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
                 url: endpoint,
                 method: "POST",
                 data: {
-                    'otp': otp,
-                    'id': activeCashout['uuid'],
-                    'scaId': scaId,
-                    'transferData': transferData
+                    otp,
+                    id: memberId,
+                    scaId,
+                    transferData,
                 },
             });
+
             if ([200, 201].includes(status)) {
-                setMessage("OTP confirmed successfully.");
-                onClose()
-                onApproved({ ...activeCashout, status: "mpesarequested" });
+                setMessage("OTP confirmed successfully!");
+                onClose();
             } else {
                 setMessage(response?.message || "Failed to confirm OTP");
                 setErrors(response?.errors ?? [response?.error]);
@@ -113,58 +158,62 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
         }
     };
 
-
     return (
-        <Modal
-            visible={visible}
-            animationType="slide"
-            transparent={true}
-            onRequestClose={onClose}
-        >
+        <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
             <View style={styles.modalOverlay}>
                 <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>Confirm Cashout</Text>
-                    <Text>Cashout amount: {amount} KES</Text>
+                    <Text>Amount: {amount} KES</Text>
+                    <Text>Transfer type: {transferType}</Text>
 
                     {loading && (
-                        <ActivityIndicator
-                            size="small"
-                            color="#0f766e"
-                            style={{ marginVertical: 10 }}
-                        />
+                        <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 10 }} />
                     )}
 
                     {message ? <Text style={styles.message}>{message}</Text> : null}
-                    <View>{errors?.map((err, idx) => (
-                        <Text key={idx} style={{ color: "red", marginBottom: 2 }}>{err}</Text>
-                    ))}
-                    </View>
-                    <TextInput
-                        style={styles.input}
-                        placeholder="Enter OTP"
-                        value={otp}
-                        onChangeText={setOtp}
-                        keyboardType="numeric"
-                        maxLength={6}
-                    />
 
-                    <TouchableOpacity onPress={handleRequestOtp}>
-                        <Text style={styles.resendLink}>Resend OTP</Text>
-                    </TouchableOpacity>
+                    {errors.length > 0 && (
+                        <View>
+                            {errors.map((err, idx) => (
+                                <Text key={idx} style={{ color: "red" }}>
+                                    {err}
+                                </Text>
+                            ))}
+                        </View>
+                    )}
+
+                    {/* Only show OTP input if type is not wallet */}
+                    {transferType !== "wallet" && (
+                        <>
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Enter OTP"
+                                value={otp}
+                                onChangeText={setOtp}
+                                keyboardType="numeric"
+                                maxLength={6}
+                            />
+                            <TouchableOpacity onPress={handleRequestOtp}>
+                                <Text style={styles.resendLink}>Resend OTP</Text>
+                            </TouchableOpacity>
+                        </>
+                    )}
 
                     <View style={styles.modalActions}>
-                        <TouchableOpacity
-                            style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
-                            onPress={() => handleConfirmOtp()}
-                            disabled={!otp}
-                        >
-                            <Text style={styles.modalButtonText}>Confirm OTP</Text>
-                        </TouchableOpacity>
+                        {transferType !== "wallet" && (
+                            <TouchableOpacity
+                                style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
+                                onPress={handleConfirmOtp}
+                                disabled={!otp}
+                            >
+                                <Text style={styles.modalButtonText}>Confirm OTP</Text>
+                            </TouchableOpacity>
+                        )}
                         <TouchableOpacity
                             style={[styles.modalButton, { backgroundColor: "gray" }]}
                             onPress={onClose}
                         >
-                            <Text style={styles.modalButtonText}>Cancel</Text>
+                            <Text style={styles.modalButtonText}>Close</Text>
                         </TouchableOpacity>
                     </View>
                 </View>

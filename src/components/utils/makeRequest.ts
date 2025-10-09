@@ -1,7 +1,7 @@
 import { Alert } from "react-native";
 import { getItem } from "./local-storage";
 
-const BASE_URL = "http://192.168.100.18:8000/api/";
+const BASE_URL = "http://10.0.2.2:8000/api/";
 
 const makeRequest = async ({
     url,

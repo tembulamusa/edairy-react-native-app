@@ -11,19 +11,20 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import { BarChart } from 'react-native-gifted-charts';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { globalStyles } from '../../styles';
 
 const screenWidth = Dimensions.get('window').width;
 const iconSize = screenWidth / 4 - 20;
 
 const quickLinks = [
-    { name: 'Farmer Registration', icon: 'person-add', navigateTo: 'Members', screenName: 'MemberRegistration' },
-    { name: 'Member Kilos', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberKilos' },
-    { name: 'Cashout', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberCashout' },
-    { name: 'Transporter Kilos', icon: 'local-shipping', navigateTo: 'Members', screenName: 'TransporterKilos' },
-    { name: 'Store Sales', icon: 'store', navigateTo: 'Members', screenName: 'StoreSales' },
-    { name: 'Milk Sales', icon: 'local-drink', navigateTo: 'Members', screenName: 'MilkSales' },
-    { name: 'Summary & Balance', icon: 'money-off', navigateTo: 'Members', screenName: 'UserBalanceSummary' },
-    { name: 'Session Summary', icon: 'bar-chart', navigateTo: 'Members', screenName: 'ShiftSummaryReport' },
+    { name: 'Farmer Registration', icon: 'person-add', navigateTo: 'Members', screenName: 'MemberRegistration', iconColor: "#1b7f74" },
+    { name: 'Member Kilos', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberKilos', iconColor: "#e76f51" },
+    { name: 'Cashout', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberCashout', iconColor: "#1b7f74" },
+    { name: 'Transporter Kilos', icon: 'local-shipping', navigateTo: 'Members', screenName: 'TransporterKilos', iconColor: "#e9c46a" },
+    { name: 'Store Sales', icon: 'store', navigateTo: 'Members', screenName: 'StoreSales', iconColor: "#1b7f74" },
+    { name: 'Milk Sales', icon: 'local-drink', navigateTo: 'Members', screenName: 'MilkSales', iconColor: "#264653" },
+    { name: 'Summary & Balance', icon: 'money-off', navigateTo: 'Members', screenName: 'UserBalanceSummary', iconColor: "#f4a261" },
+    { name: 'Session Summary', icon: 'bar-chart', navigateTo: 'Members', screenName: 'ShiftSummaryReport', iconColor: "#8ab17d" },
 ];
 
 // Bar chart data with different colors
@@ -71,20 +72,20 @@ const DashboardScreen = () => {
                 </View>
             </View>
 
-            {/* Quick Links */}
+            {/* Quick Links
             <View style={styles.quickLinksHeader}>
                 <Text style={styles.quickLinksTitle}>Quick Links</Text>
                 <TouchableOpacity>
                     <Text style={styles.seeAllText}>See All →</Text>
                 </TouchableOpacity>
-            </View>
+            </View> */}
 
             {/* Icon Grid */}
-            <View style={styles.grid}>
+            <View style={globalStyles.dashboardGrid}>
                 {quickLinks.map((item, index) => (
                     <TouchableOpacity
                         key={index}
-                        style={styles.iconButton}
+                        style={globalStyles.dashboardLink}
                         activeOpacity={0.7}
                         onPress={() => {
                             if (item.navigateTo) {
@@ -95,11 +96,17 @@ const DashboardScreen = () => {
                             }
                         }}
                     >
-                        <Icon name={item.icon} size={30} color="#1b7f74" />
-                        <Text style={styles.iconLabel}>{item.name}</Text>
+                        <Icon
+                            style={globalStyles.dashboardLinkIcon}
+                            name={item.icon}
+                            size={28}
+                            color={item?.iconColor}
+                        />
+                        <Text style={globalStyles.dashboardIconLabel}>{item.name}</Text>
                     </TouchableOpacity>
                 ))}
             </View>
+
         </ScrollView>
     );
 };

@@ -16,6 +16,7 @@ import fetchCommonData from "../../components/utils/fetchCommonData.ts";
 import makeRequest from "../../components/utils/makeRequest.ts";
 import DropDownPicker from "react-native-dropdown-picker";
 import { renderDropdownItem } from "../../assets/styles/all.tsx";
+import { globalStyles } from "../../styles.ts";
 
 const MemberKilosScreen = () => {
     const [modalVisible, setModalVisible] = useState(false);
@@ -55,7 +56,7 @@ const MemberKilosScreen = () => {
     const [memberOpen, setMemberOpen] = useState(false);
     const [memberValue, setMemberValue] = useState<number | null>(null);
     const [memberItems, setMemberItems] = useState(
-        commonData.members?.map((m: any) => ({ label: `${m.first_name} ${m.last_name}`, value: m.id })) || []
+        commonData.members?.map((m: any) => ({ label: `${m.customer?.first_name} ${m.customer?.last_name}`, value: m.id })) || []
     );
 
     // Dropdown states for routes
@@ -126,7 +127,7 @@ const MemberKilosScreen = () => {
 
         setMemberItems(
             (commonData?.members || []).map((m: any) => ({
-                label: `${m.first_name} ${m.last_name}`,
+                label: `${m.customer?.first_name} ${m.customer?.last_name}`,
                 value: m.id,
             }))
         );
@@ -178,11 +179,9 @@ const MemberKilosScreen = () => {
 
     const sendMemberKilos = async () => {
         const requiredFields = [
-            { field: transporter, name: "transporter" },
             { field: route, name: "route" },
             { field: member, name: "member" },
             { field: shift, name: "shift" },
-            { field: center, name: "center" },
         ];
 
         const missing = requiredFields.find(r => !r.field);
@@ -195,48 +194,68 @@ const MemberKilosScreen = () => {
             Alert.alert("Missing Data", "Please add at least one can entry.");
             return;
         }
-        setLoading(true);
-        try {
-            const payload = {
-                cans: entries,
-                total_cans: entries.length,
-                total_quantity: entries.reduce((sum, e) => sum + e.net, 0),
-                device_uid: connectedDevice?.id || null,
-                is_manual_entry: !connectedDevice,
-                transporter_id: transporter?.id || null,
-                center_id: center?.id || null,
-                route_id: route?.id || null,
-                shift_id: shift?.id || null,
-                member_id: member?.id || null,
-            };
-            console.log("📤 Sending payload:", payload);
 
-            const [status, response] = await makeRequest({
-                url: "member-kilos",
-                method: "POST",
-                data: payload,
-            });
+        // 🟡 Confirm before proceeding
+        Alert.alert(
+            "Confirm Submission",
+            `Are you sure you want to send milk kilos for:\n\n👤 ${member.customer?.first_name} ${member.customer?.last_name}?`,
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Confirm",
+                    onPress: async () => {
+                        setLoading(true);
+                        try {
+                            const payload = {
+                                cans: entries,
+                                total_cans: entries.length,
+                                total_quantity: entries.reduce((sum, e) => sum + e.net, 0),
+                                device_uid: connectedDevice?.id || null,
+                                is_manual_entry: !connectedDevice,
+                                transporter_id: transporter?.id || null,
+                                center_id: center?.id || null,
+                                route_id: route?.id || null,
+                                shift_id: shift?.id || null,
+                                member_id: member?.id || null,
+                            };
 
-            if (![200, 201].includes(status)) {
-                Alert.alert(`Error ${status}`, response?.message || "Failed to submit data");
-                return;
-            }
+                            console.log("📤 Sending payload:", payload);
 
-            Alert.alert("Success", `Milk kilos for ${member.first_name} sent successfully!`);
-            setEntries([]);
-            setTotalCans(0);
-            setMember(null);
-            setMemberValue(null);
-            setCan(null);
-            setCanValue(null);
-            setTotalQuantity(0);
-        } catch (error) {
-            console.error(error);
-            Alert.alert("Error", "Failed to send data");
-        } finally {
-            setLoading(false);
-        }
+                            const [status, response] = await makeRequest({
+                                url: "member-kilos",
+                                method: "POST",
+                                data: payload,
+                            });
+
+                            if (![200, 201].includes(status)) {
+                                Alert.alert(`Error ${status}`, response?.message || "Failed to submit data");
+                                return;
+                            }
+
+                            Alert.alert(
+                                "Success",
+                                `Milk kilos for ${member.customer?.first_name} ${member.customer?.last_name} sent successfully!`
+                            );
+
+                            setEntries([]);
+                            setTotalCans(0);
+                            setMember(null);
+                            setMemberValue(null);
+                            setCan(null);
+                            setCanValue(null);
+                            setTotalQuantity(0);
+                        } catch (error) {
+                            console.error(error);
+                            Alert.alert("Error", "Failed to send data");
+                        } finally {
+                            setLoading(false);
+                        }
+                    },
+                },
+            ]
+        );
     };
+
 
 
     const takeWeight = () => {
