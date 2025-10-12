@@ -9,7 +9,7 @@ const makeRequest = async ({
     data = null,
     use_jwt = false,
     responseType = "json",
-    isFormData = false, // 👈 flag for form data
+    isFormData = false,
 }) => {
     url = BASE_URL + url;
 
@@ -17,21 +17,19 @@ const makeRequest = async ({
         accept: "application/json",
     };
 
-    // only set JSON content-type if not formdata
     if (!isFormData) {
         headers["content-type"] = "application/json";
     }
 
-    // 👇 fetch user from AsyncStorage
     const user = await getItem("user");
     const token = user?.access_token;
-    console.log(token);
-    if (token) {
-        headers = { ...headers, Authorization: `Bearer ${token}` };
-    }
+    // Alert.alert(token);
+    // if (use_jwt && token) {
+    headers.Authorization = `Bearer ${token}`;
+    // }
 
     try {
-        let request: any = {
+        const request: any = {
             method,
             headers,
         };
@@ -43,16 +41,21 @@ const makeRequest = async ({
         const response = await fetch(url, request);
 
         let result;
-        if (responseType === "text") {
-            result = await response.text();
-        } else {
-            result = await response.json();
+        try {
+            result =
+                responseType === "text"
+                    ? await response.text()
+                    : await response.json();
+        } catch {
+            result = {};
         }
 
         return [response.status, result];
     } catch (err: any) {
         console.error("Fetch error:", err);
+        Alert.alert("Network Error", "Please check your internet connection.");
         return [500, { message: "Network error" }];
     }
 };
+
 export default makeRequest;

@@ -80,30 +80,50 @@ const SalesReportScreen = () => {
         loadCommonData();
     }, []);
 
-    // Fetch sales summary whenever filters change
     useEffect(() => {
-        const loadSummary = async () => {
+        const loadSalesData = async () => {
             try {
+                // if no store selected, clear summary
+                if (!storeValue) {
+                    setStoreSalesSummary([]);
+                    return;
+                }
+
                 setLoading(true);
+
+                // format dates
+                const today = new Date();
+                const from = fromDate ? fromDate.toISOString().split("T")[0] : today.toISOString().split("T")[0];
+                const to = toDate ? toDate.toISOString().split("T")[0] : today.toISOString().split("T")[0];
+
+                // build filters dynamically
+                const params: any = {
+                    "created_at_egt": from,
+                    "created_at_elt": to,
+                    "store_id": storeValue,
+                };
+
+                if (memberValue) params["member_id"] = memberValue;
+                if (saleType && saleType !== "all") params["sale_type"] = saleType;
+
                 const data = await fetchCommonData({
-                    name: 'store_sales',
-                    params: {
-                        from: fromDate.toISOString().split('T')[0],
-                        to: toDate.toISOString().split('T')[0],
-                        member: memberValue,
-                        store: storeValue,
-                        saleType,
-                    },
+                    name: "store_sales",
+                    cachable: false,
+                    params,
                 });
+
                 setStoreSalesSummary(data || []);
-            } catch (err) {
-                console.log('Failed to fetch sales summary', err);
+            } catch (error) {
+                console.error("Error loading sales report:", error);
+                Alert.alert("Error", "Failed to load sales report");
             } finally {
                 setLoading(false);
             }
         };
-        loadSummary();
-    }, [fromDate, toDate, memberValue, storeValue, saleType]);
+
+        loadSalesData();
+    }, [fromDate, toDate, storeValue, memberValue, saleType]);
+
 
     const onChangeFromDate = (event: any, selectedDate?: Date) => {
         setShowFromPicker(false);
@@ -122,44 +142,7 @@ const SalesReportScreen = () => {
         }
     };
 
-    useEffect(() => {
-        const loadReport = async () => {
-            try {
-                // only proceed if a store is selected
-                if (!storeValue) {
-                    setStoreSalesSummary([]); // clear data if no store selected
-                    return;
-                }
 
-                setLoading(true);
-
-                // if from/to are not set, fallback to today
-                const today = new Date();
-                const from = fromDate ? fromDate.toISOString().split("T")[0] : today.toISOString().split("T")[0];
-                const to = toDate ? toDate.toISOString().split("T")[0] : today.toISOString().split("T")[0];
-
-                const sales = await fetchCommonData({
-                    name: "store_sales",
-                    filters: {
-                        from,
-                        to,
-                        store: storeValue,
-                        member: memberValue,
-                        saleType,
-                    },
-                });
-
-                setStoreSalesSummary(sales || []);
-            } catch (error) {
-                console.error("Error loading sales report:", error);
-                Alert.alert("Error", "Failed to load sales report");
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        loadReport();
-    }, [fromDate, toDate, storeValue, memberValue, saleType]);
 
 
     const handleGenerate = () => {

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
     View,
     Text,
@@ -8,6 +8,7 @@ import {
     StyleSheet,
 } from "react-native";
 import MpesaTransferModal from "../modals/MpesaTransferModal";
+import makeRequest from "../utils/makeRequest";
 
 const MemberWalletTransfer = ({ memberId }: { memberId: number | null }) => {
     const [amount, setAmount] = useState("");
@@ -15,10 +16,44 @@ const MemberWalletTransfer = ({ memberId }: { memberId: number | null }) => {
     const [walletTransferType, setWalletTransferType] = useState<
         "mpesa" | "paybill" | "wallet"
     >("mpesa");
-    const [walletBalance, setWalletBalance] = useState(1000);
-    const [withdrawalCharge, setWithdrawalCharge] = useState(20); // e.g., static or fetched from API
+    const [walletDetails, setWalletDetails] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+    const [withdrawalCharge, setWithdrawalCharge] = useState(20); // can also be dynamic
+
+    useEffect(() => {
+        if (!memberId) return;
+
+        const fetchWalletDetails = async () => {
+            try {
+                setLoading(true);
+                const [status, response] = await makeRequest(
+                    {
+                        url: `wallet-details-balance?owner=member&&member_id=${memberId}`,
+                        method: "GET",
+
+                    }
+                );
+
+                if ([200, 201].includes(status)) {
+                    setWalletDetails(response?.data || { currentBalance: 100 });
+                } else {
+                    setWalletDetails({ currentBalance: 0 });
+                }
+            } catch (error) {
+                console.error("Failed to fetch wallet details:", error);
+                setWalletDetails({ currentBalance: 0 });
+                Alert.alert("Error", "Failed to fetch wallet balance.");
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchWalletDetails();
+    }, [memberId]);
 
     if (!memberId) return null;
+
+    const currentBalance = walletDetails?.currentBalance ?? 0;
 
     const requestTransfer = (type: "mpesa" | "paybill" | "wallet") => {
         const amountNum = parseFloat(amount);
@@ -31,21 +66,19 @@ const MemberWalletTransfer = ({ memberId }: { memberId: number | null }) => {
 
         if (type === "mpesa") {
             totalAmount += withdrawalCharge;
-            if (totalAmount > walletBalance) {
+            if (totalAmount > currentBalance) {
                 Alert.alert(
                     "Insufficient Balance",
-                    `You need ${totalAmount} KES (amount + withdrawal charge), but your balance is only ${walletBalance} KES.`
+                    `You need ${totalAmount} KES (amount + withdrawal charge), but your balance is only ${currentBalance} KES.`
                 );
                 return;
             }
-        } else {
-            if (amountNum > walletBalance) {
-                Alert.alert(
-                    "Insufficient Balance",
-                    "Amount exceeds your wallet balance."
-                );
-                return;
-            }
+        } else if (amountNum > currentBalance) {
+            Alert.alert(
+                "Insufficient Balance",
+                "Amount exceeds your wallet balance."
+            );
+            return;
         }
 
         setWalletTransferType(type);
@@ -55,7 +88,10 @@ const MemberWalletTransfer = ({ memberId }: { memberId: number | null }) => {
     return (
         <View style={styles.walletContainer}>
             <Text style={styles.walletText}>
-                Wallet Balance: {walletBalance.toFixed(2)} KES
+                Wallet Balance:{" "}
+                {loading
+                    ? "Loading..."
+                    : `${currentBalance.toFixed(2)} KES`}
             </Text>
 
             <TextInput
@@ -73,9 +109,9 @@ const MemberWalletTransfer = ({ memberId }: { memberId: number | null }) => {
                         key={type}
                         style={[
                             styles.walletButton,
-                            !amount && { opacity: 0.5 },
+                            (!amount || loading) && { opacity: 0.5 },
                         ]}
-                        disabled={!amount}
+                        disabled={!amount || loading}
                         onPress={() => requestTransfer(type)}
                     >
                         <Text style={styles.walletButtonText}>

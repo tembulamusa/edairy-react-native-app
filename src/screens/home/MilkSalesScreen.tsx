@@ -167,7 +167,7 @@ const MilkSalesScreen = () => {
         <SafeAreaView style={styles.container}>
             {/* Header row */}
             <View style={styles.headerRow}>
-                <Text style={styles.headerTitle}>Milk Sales</Text>
+                <Text style={styles.headerTitle}>Transporter Milk Sales</Text>
                 <TouchableOpacity
                     style={styles.newSaleButton}
                     onPress={() => setModalVisible(true)}

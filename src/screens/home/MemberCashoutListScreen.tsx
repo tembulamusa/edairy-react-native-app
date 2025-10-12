@@ -55,41 +55,44 @@ const MemberCashoutListScreen: React.FC = () => {
                     setNextLevel(userData?.member_details?.next_level || null);
                 }
             } catch (err) {
+                Alert.alert("Error", err);
                 console.error("Error loading user next_level", err);
             }
         })();
     }, []);
 
-    // Load members (common data)
     useEffect(() => {
-        const loadMembers = async () => {
+        const loadCommonData = async () => {
             try {
-                const members = await fetchCommonData({ name: "members", cachable: false });
-                const formattedMembers = members.map((m: any) => ({
-                    id: m.id.toString(),
-                    uuid: m.uuid,
-                    status: m.status,
-                    next_level: m.next_level,
-                    first_name: m.customer?.first_name || "",
-                    last_name: m.customer?.last_name || "",
-                    primary_phone: m.customer?.primary_phone || "",
+                const [members] = await Promise.all([
+                    fetchCommonData({ name: "cashout_members" }),
+                ]);
+
+
+                const formattedMembers = members.map((item: any) => ({
+                    id: item?.id.toString(),
+                    first_name: item?.customer?.first_name || "",
+                    last_name: item?.customer?.last_name || "",
+                    primary_phone: item?.customer?.primary_phone || "",
                 }));
 
-                setCommonData({ members: formattedMembers });
+                // ✅ Correct mapping for DropDownPicker
+                const dropdownItems = formattedMembers.map((m: any) => ({
+                    label: `${m.first_name} ${m.last_name} (${m.primary_phone})`,
+                    value: Number(m.id),
+                }));
 
-                setMemberItems(
-                    formattedMembers.map((m: any) => ({
-                        label: `${m.first_name} ${m.last_name} (${m.primary_phone})`,
-                        value: Number(m.id),
-                    }))
-                );
-            } catch (err) {
-                Alert.alert("Error", "Failed to load members");
+                setMemberItems(dropdownItems);
+
+            } catch (error: any) {
+                console.error("❌ Failed to load common data", error);
+                Alert.alert("Error", "Failed to load common data");
             }
         };
 
-        loadMembers();
+        loadCommonData();
     }, []);
+
 
 
 

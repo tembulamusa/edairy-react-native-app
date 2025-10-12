@@ -54,7 +54,6 @@ const MemberStatementSummaryReportScreen = () => {
             to: toDate.toDateString(),
             member,
         };
-
         console.log('Generate Report with filters:', filters);
         alert('Report Generated!');
     };

@@ -65,9 +65,9 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
     useEffect(() => {
         if (commonData?.members) {
             setMemberItems([
-                { label: "No Member / Guest", value: null }, // 🚀 added option
+                { label: "No Member / Guest", value: null },
                 ...commonData.members.map((m) => ({
-                    label: `${m?.customer?.first_name} ${m?.customer?.last_name}`,
+                    label: `${m?.first_name} ${m?.last_name}`,
                     value: m.id,
                 })),
             ]);
@@ -168,7 +168,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             <View style={styles.fullModal}>
                 {/* Header with close button */}
                 <View style={styles.header}>
-                    <Text style={styles.title}>New Sale</Text>
+                    <Text style={styles.title}>New Store Sale</Text>
                     <TouchableOpacity onPress={onClose}>
                         <Icon name="close" size={28} color="#333" />
                     </TouchableOpacity>

@@ -35,6 +35,8 @@ const MemberKilosScreen = () => {
     const deviceUid = null;
     const [commonData, setCommonData] = useState<any>({});
     const [loading, setLoading] = useState(false);
+    const [memberCreditLimit, setMemberCreditLimit] = useState<number | null>(null);
+    const [fetchingCredit, setFetchingCredit] = useState(false);
     const [errors, setErrors] = useState<any>({});
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [transporterOpen, setTransporterOpen] = useState(false);
@@ -90,6 +92,7 @@ const MemberKilosScreen = () => {
                     fetchCommonData({ name: "members" }),
                     fetchCommonData({ name: "cans" }),
                     fetchCommonData({ name: "centers" }),
+                    fetchCommonData({ name: "member_current_kilos" }),
                 ]);
                 const allData = { transporters, routes, shifts, members, cans, centers };
                 setCommonData(allData);
@@ -127,7 +130,7 @@ const MemberKilosScreen = () => {
 
         setMemberItems(
             (commonData?.members || []).map((m: any) => ({
-                label: `${m.customer?.first_name} ${m.customer?.last_name}`,
+                label: `${m?.first_name} ${m?.last_name}`,
                 value: m.id,
             }))
         );
@@ -176,6 +179,35 @@ const MemberKilosScreen = () => {
             }
         }
     }, [lastMessage]);
+    useEffect(() => {
+        const fetchCreditLimit = async () => {
+            if (!member?.id) {
+                setMemberCreditLimit(null);
+                return;
+            }
+
+            setFetchingCredit(true);
+            try {
+                const [status, response] = await makeRequest({
+                    url: `member-credit-limit?member=${memberValue}`,
+                    method: "GET",
+                });
+
+                if (![200, 201].includes(status)) {
+                    Alert.alert(`Error ${status}`, response?.message || "Failed to submit data");
+                    return;
+                }
+                setMemberCreditLimit(response?.data?.credit_limit ?? 0);
+            } catch (error) {
+                console.error("Failed to fetch credit limit:", error);
+                setMemberCreditLimit(null);
+            } finally {
+                setFetchingCredit(false);
+            }
+        };
+
+        fetchCreditLimit();
+    }, [member]);
 
     const sendMemberKilos = async () => {
         const requiredFields = [
@@ -236,6 +268,7 @@ const MemberKilosScreen = () => {
                                 "Success",
                                 `Milk kilos for ${member.customer?.first_name} ${member.customer?.last_name} sent successfully!`
                             );
+                            setMemberCreditLimit((prev) => (prev ?? 0) + payload.total_quantity);
 
                             setEntries([]);
                             setTotalCans(0);
@@ -554,7 +587,41 @@ const MemberKilosScreen = () => {
                 <Text style={styles.submitText}>Send Kilos</Text>
             </TouchableOpacity>
 
-            {/* MODAL */}
+
+            {/* CREDIT LIMIT SECTION */}
+            {/*  */}
+            {memberValue && <View style={{ marginTop: 24, alignItems: "center" }}>
+                <Text style={{ fontSize: 16, fontWeight: "600", marginBottom: 8 }}>
+                    Member Credit Limit
+                </Text>
+
+                {fetchingCredit ? (
+                    <Text>Loading...</Text>
+                ) : memberCreditLimit !== null ? (
+                    <Text style={{ fontSize: 20, fontWeight: "bold", color: "green" }}>
+                        {memberCreditLimit.toFixed(2)} KGs
+                    </Text>
+                ) : (
+                    <Text style={{ color: "gray" }}>No data available</Text>
+                )}
+
+                <TouchableOpacity
+                    style={{
+                        marginTop: 12,
+                        backgroundColor: "#E67E22",
+                        paddingVertical: 10,
+                        paddingHorizontal: 20,
+                        borderRadius: 8,
+                    }}
+                    onPress={() => Alert.alert("Cashout", "Cashout feature coming soon!")}
+                >
+                    <Text style={{ color: "#fff", fontWeight: "bold" }}>Cashout</Text>
+                </TouchableOpacity>
+            </View>}
+
+
+
+            {/* MODALs */}
             <ConnectScaleModal
                 visible={modalVisible}
                 filterDevice="scale"
