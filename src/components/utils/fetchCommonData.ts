@@ -27,9 +27,7 @@ const fetchCommonData = async ({
         let parsed = commonData ? JSON.parse(commonData) : {};
         let result = [];
 
-        // Only use cache when params are empty (params make results dynamic)
-        const useCache =
-            cachable && (!params || Object.keys(params).length === 0);
+        const useCache = cachable;
 
         if (
             !useCache ||
@@ -47,13 +45,10 @@ const fetchCommonData = async ({
                 url: `global-data?${queryParams}`,
                 method: "GET",
             });
-
             if (![200, 201].includes(status)) {
                 return [];
             }
-
             result = response?.data ?? [];
-
             if (useCache) {
                 const newData = { ...parsed, [name]: result };
                 await AsyncStorage.setItem("commonData", JSON.stringify(newData));
@@ -61,7 +56,6 @@ const fetchCommonData = async ({
         } else {
             result = parsed[name];
         }
-
         return result;
     } catch (error) {
         console.error(`❌ Failed to load common data for ${name}:`, error);

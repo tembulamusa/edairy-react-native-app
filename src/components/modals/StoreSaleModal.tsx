@@ -118,7 +118,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         setErrors({});
         try {
             let items = entries.map((e) => ({
-                stock_item_id: e.id,
+                stock_id: e.id,
                 quantity: parseFloat(e.quantity || "0"),
                 unit_price: e.unit_price,
                 total: parseFloat(e.quantity || "0") * e.unit_price,

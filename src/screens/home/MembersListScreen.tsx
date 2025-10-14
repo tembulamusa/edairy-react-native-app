@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import fetchCommonData from "../../components/utils/fetchCommonData";
+import makeRequest from "../../components/utils/makeRequest";
 
 type Member = {
     id: string;
@@ -19,8 +20,8 @@ type Member = {
     status: string;
     next_level: string;
     uuid: string;
+    cashout_enrolled: boolean | number; // ✅ added
 };
-
 
 const MembersListScreen: React.FC = () => {
     const navigation = useNavigation();
@@ -32,30 +33,72 @@ const MembersListScreen: React.FC = () => {
             setLoading(true);
             try {
                 const [members] = await Promise.all([
-                    fetchCommonData({ name: "members", cachable: false })
+                    fetchCommonData({ name: "members", cachable: false }),
                 ]);
-                // Flatten the customer relation
+
+                // ✅ Corrected reference to item.cashout_enrolled
                 const formattedMembers = members.map((item: any) => ({
-                    id: item?.id.toString(),
+                    id: item?.id?.toString(),
                     uuid: item?.uuid,
                     status: item?.status,
                     next_level: item?.next_level,
-                    first_name: item?.customer?.first_name || "",
-                    last_name: item?.customer?.last_name || "",
-                    primary_phone: item?.customer?.primary_phone || "",
+                    first_name: item?.first_name || "",
+                    last_name: item?.last_name || "",
+                    primary_phone: item?.primary_phone || "",
+                    cashout_enrolled: !!item?.cashout_enrolled, // ✅ convert to boolean
                 }));
 
                 setMembers(formattedMembers);
             } catch (error: any) {
-                Alert.alert("Error", 'Failed to load members');
-            }
-            finally {
-                setLoading(false)
+                Alert.alert("Error", JSON.stringify(error) || "Failed to load members");
+            } finally {
+                setLoading(false);
             }
         };
 
         loadCommonData();
     }, []);
+
+    const handleRegisterCashout = async (member: Member) => {
+        try {
+            if (!member?.id) {
+                Alert.alert("Error", "Invalid member selected.");
+                return;
+            }
+
+            // You can adjust this to your backend route name
+            const endpoint = "member-loan-enroll";
+
+            const payload = {
+                member_id: member.id,
+            };
+
+            const [status, response] = await makeRequest(
+                {
+                    url: endpoint,
+                    method: "POST",
+                    data: payload
+                }
+            );
+
+            if (status === 200 || status === 201) {
+                Alert.alert("Success", response?.message || "Cashout enrollment successful.");
+
+                // Update local state to reflect enrollment
+                setMembers((prevMembers) =>
+                    prevMembers.map((m) =>
+                        m.id === member.id ? { ...m, cashout_enrolled: true } : m
+                    )
+                );
+            } else {
+                Alert.alert("Error", response?.message || "Failed to enroll for cashout.");
+            }
+        } catch (error: any) {
+            console.error("Cashout enrollment error:", error);
+            Alert.alert("Error", error?.message || "Something went wrong during enrollment.");
+        }
+    };
+
 
     const renderMember = ({ item }: { item: Member }) => (
         <TouchableOpacity
@@ -77,29 +120,29 @@ const MembersListScreen: React.FC = () => {
             <View style={styles.rightColumn}>
                 <Text style={styles.status}>{item.status}</Text>
 
-                {item.next_level === "liveness" ? (
-                    <TouchableOpacity
-                        onPress={() => {
-                            const url = `http://192.168.100.18:8000/liveness-check/${item?.uuid}`;
-                            console.log("Navigating with URL:", url);
-                            navigation.navigate(
-                                "LivenessCheck" as never,
-                                { url } as never
-                            );
-                        }}
-                    >
-                        <Text style={[styles.nextLevel, { color: "blue", textDecorationLine: "underline" }]}>
-                            {item.next_level}
+                {!item.cashout_enrolled ? (
+                    <TouchableOpacity onPress={() => handleRegisterCashout(item)}>
+                        <Text
+                            style={[
+                                styles.nextLevel,
+                                {
+                                    color: "blue",
+                                    // textDecorationLine: "underline",
+                                    marginTop: 5,
+                                },
+                            ]}
+                        >
+                            Register Cashout
                         </Text>
                     </TouchableOpacity>
                 ) : (
-                    <Text style={styles.nextLevel}>{item.next_level}</Text>
-                )
-                }
-            </View >
-        </TouchableOpacity >
+                    <Text style={[styles.nextLevel, { color: "green" }]}>
+                        {item.next_level || "Active"}
+                    </Text>
+                )}
+            </View>
+        </TouchableOpacity>
     );
-
 
     if (loading) {
         return (
@@ -151,21 +194,7 @@ const styles = StyleSheet.create({
     },
     addButtonText: { color: "#fff", fontWeight: "600", fontSize: 14 },
     card: {
-        backgroundColor: "#fff",
-        padding: 16,
-        borderRadius: 12,
-        marginBottom: 12,
-        shadowColor: "#000",
-        shadowOpacity: 0.05,
-        shadowOffset: { width: 0, height: 2 },
-        shadowRadius: 6,
-        elevation: 2,
-    },
-    name: { fontSize: 16, fontWeight: "600", color: "#111827" },
-    phone: { fontSize: 14, color: "#6b7280", marginTop: 4 },
-    center: { flex: 1, justifyContent: "center", alignItems: "center" },
-    card: {
-        flexDirection: "row",   // 🔑 two columns side by side
+        flexDirection: "row",
         justifyContent: "space-between",
         alignItems: "center",
         padding: 12,
@@ -178,28 +207,11 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
         elevation: 2,
     },
-    leftColumn: {
-        flex: 1,
-    },
-    name: {
-        fontSize: 16,
-        fontWeight: "bold",
-        color: "#333",
-    },
-    phone: {
-        fontSize: 14,
-        color: "#666",
-    },
-    rightColumn: {
-        alignItems: "flex-end",  // align text to the right
-    },
-    status: {
-        fontSize: 14,
-        fontWeight: "600",
-        color: "green",
-    },
-    nextLevel: {
-        fontSize: 13,
-        color: "#888",
-    },
+    leftColumn: { flex: 1 },
+    name: { fontSize: 16, fontWeight: "bold", color: "#333" },
+    phone: { fontSize: 14, color: "#666" },
+    rightColumn: { alignItems: "flex-end" },
+    status: { fontSize: 14, fontWeight: "600", color: "green" },
+    nextLevel: { fontSize: 13, color: "#888" },
+    center: { flex: 1, justifyContent: "center", alignItems: "center" },
 });

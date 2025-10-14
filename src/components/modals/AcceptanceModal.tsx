@@ -7,15 +7,14 @@ import {
     StyleSheet,
     TextInput,
     ActivityIndicator,
-    Alert,
 } from "react-native";
-import makeRequest from "../utils/makeRequest"; // ✅ adjust path
+import SmsRetriever from "react-native-sms-retriever";
+import makeRequest from "../utils/makeRequest";
 
 type AcceptanceModalProps = {
     visible: boolean;
     amount: string;
-    activeCashout: { id?: string };
-    onConfirm: (otp: string) => void; // confirm handler with otp
+    activeCashout: { id?: string; uuid?: string };
     onClose: () => void;
 };
 
@@ -24,39 +23,73 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
     amount,
     activeCashout,
     onClose,
-
 }) => {
     const [otp, setOtp] = useState("");
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [message, setMessage] = useState("");
-    const [errors, setErrors] = useState([]);
+    const [errors, setErrors] = useState<string[]>([]);
 
-    // Auto-trigger OTP when modal opens
+    // 🟩 When modal opens, request OTP and start SMS listener
     useEffect(() => {
         if (visible && activeCashout?.id) {
             handleRequestOtp();
+            startSmsListener();
         } else {
+            stopSmsListener();
             setOtp("");
             setMessage("");
+            setErrors([]);
         }
+
+        return stopSmsListener;
     }, [visible]);
 
+    // 🟩 SMS listening and auto-fill
+    const startSmsListener = async () => {
+        try {
+            await SmsRetriever.startSmsRetriever();
+            const subscription = SmsRetriever.addSmsListener(event => {
+                const msg = event.message || "";
+                // ✅ Example: "Your DTB OTP is 123456"
+                const otpMatch = msg.match(/\b\d{6}\b/);
+                if (otpMatch) {
+                    const detectedOtp = otpMatch[0];
+                    setOtp(detectedOtp);
+                    setMessage("OTP auto-filled from SMS");
+                }
+                SmsRetriever.removeSmsListener();
+            });
+
+            // store subscription if needed
+        } catch (error) {
+            console.log("Error starting SMS retriever:", error);
+        }
+    };
+
+    const stopSmsListener = () => {
+        try {
+            SmsRetriever.removeSmsListener();
+        } catch (error) {
+            console.log("Error removing SMS listener:", error);
+        }
+    };
+
+    // 🔹 Request OTP
     const handleRequestOtp = async () => {
-        if (!activeCashout?.id) return;
+        if (!activeCashout?.uuid) return;
 
         try {
             setLoading(true);
             setMessage("");
-            const endpoint = `loan-acceptance-otp-request?id=${activeCashout['uuid']}`;
             const [status, response] = await makeRequest({
-                url: endpoint,
+                url: `loan-acceptance-otp-request?id=${activeCashout.uuid}`,
                 method: "GET",
             });
             if ([200, 201].includes(status)) {
                 setMessage("OTP has been sent to your phone.");
             } else {
                 setMessage(response?.message || "Failed to request OTP");
-                setErrors(response?.[0]?.details?.['errors']);
+                setErrors(response?.errors || []);
             }
         } catch (error) {
             console.error("OTP request error:", error);
@@ -66,9 +99,9 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
         }
     };
 
+    // 🔹 Confirm OTP
     const handleConfirmOtp = async () => {
-        // Validate OTP
-        if (!otp || otp.length !== 6 || !/^\d{6}$/.test(otp)) {
+        if (!otp || otp.length !== 6) {
             setErrors(["OTP must be exactly 6 digits"]);
             return;
         }
@@ -77,17 +110,14 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
             setLoading(true);
             setMessage("");
             setErrors([]);
-
-            const endpoint = `loan-acceptance-otp-confirm`;
             const [status, response] = await makeRequest({
-                url: endpoint,
+                url: "loan-acceptance-otp-confirm",
                 method: "POST",
-                data: { 'otp': otp, 'id': activeCashout['uuid'] },
+                data: { otp, id: activeCashout.uuid },
             });
             if ([200, 201].includes(status)) {
                 setMessage("OTP confirmed successfully.");
-                onClose()
-                onApproved({ ...activeCashout, status: "approved" });
+                onClose();
             } else {
                 setMessage(response?.message || "Failed to confirm OTP");
                 setErrors(response?.errors || []);
@@ -100,32 +130,20 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
         }
     };
 
-
     return (
-        <Modal
-            visible={visible}
-            animationType="slide"
-            transparent={true}
-            onRequestClose={onClose}
-        >
+        <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
             <View style={styles.modalOverlay}>
                 <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>Confirm Cashout</Text>
                     <Text>Cashout amount: {amount} KES</Text>
 
-                    {loading && (
-                        <ActivityIndicator
-                            size="small"
-                            color="#0f766e"
-                            style={{ marginVertical: 10 }}
-                        />
-                    )}
-
+                    {loading && <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 10 }} />}
                     {message ? <Text style={styles.message}>{message}</Text> : null}
-                    <View>{errors?.map((err, idx) => (
+
+                    {errors?.map((err, idx) => (
                         <Text key={idx} style={{ color: "red", marginBottom: 2 }}>{err}</Text>
                     ))}
-                    </View>
+
                     <TextInput
                         style={styles.input}
                         placeholder="Enter OTP"
@@ -142,11 +160,12 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
                     <View style={styles.modalActions}>
                         <TouchableOpacity
                             style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
-                            onPress={() => handleConfirmOtp()}
+                            onPress={handleConfirmOtp}
                             disabled={!otp}
                         >
                             <Text style={styles.modalButtonText}>Confirm OTP</Text>
                         </TouchableOpacity>
+
                         <TouchableOpacity
                             style={[styles.modalButton, { backgroundColor: "gray" }]}
                             onPress={onClose}

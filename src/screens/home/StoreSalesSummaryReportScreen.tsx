@@ -98,8 +98,8 @@ const SalesReportScreen = () => {
 
                 // build filters dynamically
                 const params: any = {
-                    "created_at_egt": from,
-                    "created_at_elt": to,
+                    "created_at_gte": from,
+                    // "created_at_lte": to,
                     "store_id": storeValue,
                 };
 
@@ -111,7 +111,6 @@ const SalesReportScreen = () => {
                     cachable: false,
                     params,
                 });
-
                 setStoreSalesSummary(data || []);
             } catch (error) {
                 console.error("Error loading sales report:", error);
@@ -120,7 +119,6 @@ const SalesReportScreen = () => {
                 setLoading(false);
             }
         };
-
         loadSalesData();
     }, [fromDate, toDate, storeValue, memberValue, saleType]);
 
@@ -158,7 +156,7 @@ const SalesReportScreen = () => {
     };
 
     const totalAmount = storeSalesSummary.reduce(
-        (sum, s) => sum + (s.total_amount || 0),
+        (sum, s) => sum + parseFloat(s.total_amount || '0'),
         0
     );
 
@@ -311,10 +309,10 @@ const SalesReportScreen = () => {
                     renderItem={({ item }) => (
                         <View style={styles.summaryRow}>
                             <Text style={styles.summaryText}>
-                                {item.store_name} - {item.member_name}
+                                {new Date(item?.created_at).toISOString().split("T")[0]}
                             </Text>
                             <Text style={styles.summaryAmount}>
-                                {item.total_amount?.toFixed(2) || '0.00'}
+                                {isNaN(item?.total_amount) ? '0.00' : parseFloat(item.total_amount).toFixed(2)}
                             </Text>
                         </View>
                     )}

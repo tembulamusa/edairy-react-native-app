@@ -99,7 +99,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                         if (item.status.toLowerCase() === "awaitingacceptance") {
                             setModalVisible(true);
                         } else {
-                            Alert.alert("Info", "No action available for this cashout");
+                            Alert.alert("Info", "No action available for this cashout at the Moment");
                         }
                     }}
                 >
