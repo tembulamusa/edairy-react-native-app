@@ -98,7 +98,7 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
                         visible={isCashoutModalVisible}
                         onClose={() => setIsCashoutModalVisible(false)}
                         onSubmit={({ cashout }) => {
-                            Alert.alert("Cashout Requested", "Cashout successfully submitted!");
+                            // Alert.alert("Cashout Requested", "Cashout successfully submitted!");
                             if (onRefresh) onRefresh();
                         }}
                         selectedMember={selectedMember}

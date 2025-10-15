@@ -1,55 +1,34 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import {
     View,
     Text,
     StyleSheet,
-    TouchableOpacity,
     Alert,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import DropDownPicker from "react-native-dropdown-picker";
-
 import fetchCommonData from "../../components/utils/fetchCommonData";
 import CashoutsListComponent from "../../components/screenSections/MemberCashoutsComponent";
 import MemberCashoutActions from "../../components/modals/MemberCashoutActions";
 
 const MemberCashoutListScreen: React.FC = () => {
-    const navigation = useNavigation();
-
-    // ---- STATE ----
     const [loading, setLoading] = useState(false);
-    const [cashouts, setCashouts] = useState<any[]>([]);
     const [commonData, setCommonData] = useState<{ members?: any[] }>({});
     const [memberValue, setMemberValue] = useState<number | null>(null);
-    const [selectedMember, setSelectedMember] = useState<any | null>(null); // ✅ NEW
+    const [selectedMember, setSelectedMember] = useState<any | null>(null);
     const [memberOpen, setMemberOpen] = useState(false);
     const [memberItems, setMemberItems] = useState<{ label: string; value: number }[]>([]);
+    const [dropdownDisabled, setDropdownDisabled] = useState(false);
     const [nextLevel, setNextLevel] = useState<string | null>(null);
-    const [memberType, setmemberType] = useState("member");
 
-    useEffect(() => {
-        (async () => {
-            try {
-                const storedUser = await AsyncStorage.getItem("user");
-                if (storedUser) {
-                    const userData = JSON.parse(storedUser);
-                    setNextLevel(userData?.member_details?.next_level || null);
-                }
-            } catch (err) {
-                console.error("Error loading user next_level", err);
-                Alert.alert("Error", "Failed to load user info");
-            }
-        })();
-    }, []);
-
-    // ---- EFFECT: Load members ----
+    // ✅ Load members and handle auto-selection for member-only users
     useEffect(() => {
         const loadCommonData = async () => {
             try {
                 const [members] = await Promise.all([
                     fetchCommonData({ name: "cashout_members", cachable: false }),
                 ]);
+
                 const formattedMembers = members.map((item: any) => ({
                     id: item?.id,
                     uuid: item?.uuid,
@@ -58,8 +37,8 @@ const MemberCashoutListScreen: React.FC = () => {
                     primary_phone: item?.customer?.primary_phone || "",
                     wallet_balance: item?.wallet_balance ?? 0,
                     next_level: item?.next_level ?? null,
-                    member_id: item?.customer_id,
-                    member_type: item?.customer_type
+                    member_id: item?.customer_id, // used for linking to user.member_id
+                    member_type: item?.customer_type,
                 }));
 
                 setCommonData({ members: formattedMembers });
@@ -69,6 +48,29 @@ const MemberCashoutListScreen: React.FC = () => {
                         value: Number(m.id),
                     }))
                 );
+
+                // ✅ Get user info to determine auto-select logic
+                const userDataString = await AsyncStorage.getItem("user");
+                if (userDataString) {
+                    const userData = JSON.parse(userDataString);
+                    const userGroups = userData?.user_groups || [];
+
+                    const isMemberOnly =
+                        !userGroups.includes("transporter") &&
+                        !userGroups.includes("employee");
+                    setNextLevel(userData?.member_details?.next_level || null);
+
+                    if (isMemberOnly) {
+                        // ✅ Match on member_id field, not id
+                        const matched = formattedMembers.find(
+                            (m) => m.member_id === userData.member_id
+                        );
+                        if (matched) {
+                            setMemberValue(matched.id); // select the corresponding dropdown value
+                            setDropdownDisabled(true); // disable dropdown for member-only users
+                        }
+                    }
+                }
             } catch (error) {
                 console.error("❌ Failed to load common data", error);
                 Alert.alert("Error", "Failed to load members");
@@ -78,6 +80,7 @@ const MemberCashoutListScreen: React.FC = () => {
         loadCommonData();
     }, []);
 
+    // ✅ Update selectedMember when memberValue changes
     useEffect(() => {
         if (memberValue && commonData?.members?.length) {
             const found = commonData.members.find((m) => m.id === memberValue);
@@ -86,6 +89,7 @@ const MemberCashoutListScreen: React.FC = () => {
             setSelectedMember(null);
         }
     }, [memberValue, commonData]);
+
     const handleRefresh = async () => {
         try {
             setLoading(true);
@@ -113,7 +117,6 @@ const MemberCashoutListScreen: React.FC = () => {
                 }))
             );
 
-            // 🔁 Maintain the same selected member
             if (memberValue) {
                 const found = formattedMembers.find((m) => m.id === memberValue);
                 setSelectedMember(found || null);
@@ -125,10 +128,9 @@ const MemberCashoutListScreen: React.FC = () => {
             setLoading(false);
         }
     };
-    // ---- RENDER ----
+
     return (
         <View style={styles.container}>
-            {/* Header */}
             <View style={styles.headerRow}>
                 <Text style={styles.header}>Cashouts</Text>
             </View>
@@ -144,6 +146,7 @@ const MemberCashoutListScreen: React.FC = () => {
                     setItems={setMemberItems}
                     placeholder="Select member"
                     searchable
+                    disabled={dropdownDisabled} // ✅ Disable when member-only
                     searchPlaceholder="Search member..."
                     zIndex={2000}
                     zIndexInverse={1000}
@@ -154,7 +157,6 @@ const MemberCashoutListScreen: React.FC = () => {
 
             {/* Cashouts Section */}
             <View style={{ flex: 1 }}>
-
                 {!memberValue ? (
                     <View style={styles.emptyState}>
                         <Text style={styles.emptyText}>
@@ -163,13 +165,11 @@ const MemberCashoutListScreen: React.FC = () => {
                     </View>
                 ) : (
                     <>
-                        {/* ✅ Pass selectedMember into actions */}
                         <MemberCashoutActions
                             memberId={memberValue}
                             selectedMember={selectedMember}
-                            onRefresh={handleRefresh} // ✅ pass refresh callback
+                            onRefresh={handleRefresh}
                         />
-
                         <CashoutsListComponent memberId={memberValue} />
                     </>
                 )}
@@ -180,88 +180,26 @@ const MemberCashoutListScreen: React.FC = () => {
 
 export default MemberCashoutListScreen;
 
-
 const styles = StyleSheet.create({
     container: { flex: 1, padding: 20, backgroundColor: "#f7fafc" },
-    headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
+    headerRow: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: 16,
+    },
     header: { fontSize: 22, fontWeight: "700", color: "#0f766e" },
-    addButton: { backgroundColor: "#0f766e", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
-    addButtonText: { color: "#fff", fontWeight: "600", fontSize: 14 },
     dropdown: { marginBottom: 16, borderColor: "#ccc" },
-    emptyState: { flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 60 },
-    emptyText: { fontSize: 16, color: "#6b7280", textAlign: "center", fontWeight: "500" },
-    walletContainer: { backgroundColor: "#fff", padding: 16, borderRadius: 12, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.05, shadowOffset: { width: 0, height: 2 }, shadowRadius: 6, elevation: 2 },
-    walletText: { fontSize: 16, fontWeight: "600", color: "#111827", marginBottom: 8 },
-    amountInput: { borderWidth: 1, borderColor: "#ccc", borderRadius: 6, padding: 10, marginBottom: 12 },
-    walletButtonsRow: { flexDirection: "row", justifyContent: "space-between" },
-    walletButton: { backgroundColor: "#0f766e", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, flex: 1, marginHorizontal: 4 },
-    walletButtonText: { color: "#fff", fontWeight: "600", textAlign: "center", fontSize: 12 },
-    livenessButton: {
-        flexDirection: "row",
-        alignItems: "center",
+    emptyState: {
+        flex: 1,
         justifyContent: "center",
-        backgroundColor: "#0f766e",
-        paddingVertical: 14,
-        paddingHorizontal: 24,
-        borderRadius: 30,
-        shadowColor: "#000",
-        shadowOpacity: 0.1,
-        shadowOffset: { width: 0, height: 2 },
-        shadowRadius: 4,
-        elevation: 3,
-    },
-    livenessButtonText: {
-        color: "#fff",
-        fontWeight: "600",
-        fontSize: 16,
-    },
-    warningContainer: {
-        backgroundColor: "#FEF3C7",
-        borderColor: "#FBBF24",
-        borderWidth: 1,
-        borderRadius: 12,
-        padding: 20,
         alignItems: "center",
-        justifyContent: "center",
-        marginHorizontal: 10,
-        marginTop: 40,
+        paddingVertical: 60,
     },
-    warningText: {
-        color: "#92400E",
+    emptyText: {
         fontSize: 16,
-        fontWeight: "500",
+        color: "#6b7280",
         textAlign: "center",
-        marginVertical: 12,
-        lineHeight: 22,
+        fontWeight: "500",
     },
-    notifyButton: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "#F59E0B",
-        paddingVertical: 10,
-        paddingHorizontal: 20,
-        borderRadius: 25,
-        elevation: 2,
-    },
-    notifyButtonText: {
-        color: "#fff",
-        fontSize: 15,
-        fontWeight: "600",
-    },
-    cashoutButton: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: "#16a34a",
-        paddingVertical: 12,
-        paddingHorizontal: 20,
-        borderRadius: 8,
-    },
-    cashoutButtonText: {
-        color: "#fff",
-        fontWeight: "600",
-        fontSize: 16,
-        marginLeft: 8,
-    },
-
 });

@@ -40,7 +40,6 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
             setMessage("");
             setErrors([]);
         }
-
         return stopSmsListener;
     }, [visible]);
 

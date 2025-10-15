@@ -45,7 +45,6 @@ const CashoutFormModal: React.FC<CashoutFormModalProps> = ({
                     url: endpoint,
                     method: "GET",
                 });
-                Alert.alert("limit query", JSON.stringify(response));
                 if (status === 200 && response?.data) {
                     setMemberLimit(
                         response?.data?.credit_limit?.toString() || "0"
@@ -93,7 +92,6 @@ const CashoutFormModal: React.FC<CashoutFormModalProps> = ({
                 method: "POST",
                 data: { amount, member_id: memberId },
             });
-            Alert.alert("loan request response", JSON.stringify(response));
             if (![200, 201].includes(status)) {
                 setErrors(response?.errors || ["Something went wrong."]);
                 return;
