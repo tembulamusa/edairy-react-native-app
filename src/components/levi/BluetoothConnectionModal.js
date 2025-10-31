@@ -15,8 +15,8 @@ import {
 } from 'iconsax-react-nativejs';
 import { fontScale, moderateScale } from '../common/responsive';
 
-const BluetoothConnectionModal = ({
-  visible,
+const BluetoothConnectionModal = ({ 
+  visible, 
   onClose,
   type = 'success', // 'success', 'error', 'warning'
   title,
@@ -133,12 +133,12 @@ const BluetoothConnectionModal = ({
       transparent={true}
       animationType="none"
       onRequestClose={handleClose}>
-      <Animated.View
+      <Animated.View 
         style={[
           styles.modalContainer,
           { opacity: fadeAnim }
         ]}>
-        <Animated.View
+        <Animated.View 
           style={[
             styles.modalContent,
             {
@@ -147,10 +147,10 @@ const BluetoothConnectionModal = ({
               transform: [{ scale: scaleAnim }]
             }
           ]}>
-
+          
           {/* Close Button */}
           {showCloseButton && (
-            <TouchableOpacity
+            <TouchableOpacity 
               onPress={handleClose}
               style={styles.closeButton}>
               <CloseCircle size={20} color="#64748B" variant="Bold" />
@@ -208,7 +208,7 @@ const BluetoothConnectionModal = ({
                 </Text>
               </TouchableOpacity>
             )}
-
+            
             {type === 'success' && (
               <TouchableOpacity
                 style={[styles.primaryButton, { backgroundColor: config.primaryButtonColor }]}

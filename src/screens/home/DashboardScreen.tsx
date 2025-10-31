@@ -1,3 +1,4 @@
+import React, { useEffect, useState } from 'react';
 import {
     View,
     Text,
@@ -17,17 +18,17 @@ const screenWidth = Dimensions.get('window').width;
 const iconSize = screenWidth / 4 - 20;
 
 const quickLinks = [
-    { name: 'Farmer Registration', icon: 'person-add', navigateTo: 'Members', screenName: 'MemberRegistration', iconColor: "#1b7f74" },
-    { name: 'Member Kilos', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberKilos', iconColor: "#e76f51" },
-    { name: 'Cashout', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberCashout', iconColor: "#1b7f74" },
-    { name: 'Transporter Kilos', icon: 'local-shipping', navigateTo: 'Members', screenName: 'TransporterKilos', iconColor: "#e9c46a" },
-    { name: 'Store Sales', icon: 'store', navigateTo: 'Members', screenName: 'StoreSales', iconColor: "#1b7f74" },
-    { name: 'Milk Sales', icon: 'local-drink', navigateTo: 'Members', screenName: 'MilkSales', iconColor: "#264653" },
-    { name: 'Summary & Balance', icon: 'money-off', navigateTo: 'Members', screenName: 'UserBalanceSummary', iconColor: "#f4a261" },
-    { name: 'Session Summary', icon: 'bar-chart', navigateTo: 'Members', screenName: 'ShiftSummaryReport', iconColor: "#8ab17d" },
+    { name: 'Scale Test (BLE)', icon: 'speed', navigateTo: 'Members', screenName: 'ScaleTest', iconColor: '#0ea5e9' },
+    { name: 'Farmer Registration', icon: 'person-add', navigateTo: 'Members', screenName: 'MemberRegistration', iconColor: '#1b7f74' },
+    { name: 'Member Kilos', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberKilos', iconColor: '#e76f51' },
+    { name: 'Cashout', icon: 'account-balance-wallet', navigateTo: 'Members', screenName: 'MemberCashout', iconColor: '#1b7f74' },
+    { name: 'Transporter Kilos', icon: 'local-shipping', navigateTo: 'Members', screenName: 'TransporterKilos', iconColor: '#e9c46a' },
+    { name: 'Store Sales', icon: 'store', navigateTo: 'Members', screenName: 'StoreSales', iconColor: '#1b7f74' },
+    { name: 'Milk Sales', icon: 'local-drink', navigateTo: 'Members', screenName: 'MilkSales', iconColor: '#264653' },
+    { name: 'Summary & Balance', icon: 'money-off', navigateTo: 'Members', screenName: 'UserBalanceSummary', iconColor: '#f4a261' },
+    { name: 'Session Summary', icon: 'bar-chart', navigateTo: 'Members', screenName: 'ShiftSummaryReport', iconColor: '#8ab17d' },
 ];
 
-// Bar chart data with different colors
 const chartData = [
     { value: 50, label: '1st', frontColor: '#1b7f74' },
     { value: 75, label: '2nd', frontColor: '#e76f51' },
@@ -38,17 +39,57 @@ const chartData = [
     { value: 55, label: '7th', frontColor: '#e9c46a' },
 ];
 
-
 const DashboardScreen = () => {
-    const navigation = useNavigation(); // 👈 hook to get navigation
+    const navigation = useNavigation();
+    const [userIsMemberOnly, setUserIsMemberOnly] = useState<boolean>(false);
+    const [filteredLinks, setFilteredLinks] = useState(quickLinks);
+
+    useEffect(() => {
+        const checkUserType = async () => {
+            try {
+                const userDataString = await AsyncStorage.getItem('user');
+                if (userDataString) {
+                    const userData = JSON.parse(userDataString);
+                    const userGroups = userData?.user_groups || [];
+
+                    const isMemberOnly =
+                        !userGroups.includes('transporter') &&
+                        !userGroups.includes('employee');
+
+                    setUserIsMemberOnly(isMemberOnly);
+
+                    if (isMemberOnly) {
+                        // show limited menu for member
+                        const memberAllowedScreens = [
+                            'MemberKilos',
+                            'MemberCashout',
+                            'StoreSales',
+                            'UserBalanceSummary',
+                            'ShiftSummaryReport',
+                        ];
+                        const filtered = quickLinks.filter(link =>
+                            memberAllowedScreens.includes(link.screenName)
+                        );
+                        setFilteredLinks(filtered);
+                    } else {
+                        // full dashboard
+                        setFilteredLinks(quickLinks);
+                    }
+                }
+            } catch (error) {
+                console.error('Error checking user type:', error);
+            }
+        };
+
+        checkUserType();
+    }, []);
 
     return (
         <ScrollView style={styles.container}>
-            {/* Stats Card */}
+            {/* --- Stats Card --- */}
             <View style={styles.statsCard}>
                 <Text style={styles.statsTitle}>Milk Delivery Stats 2025</Text>
 
-                {/* Bar Chart */}
                 <BarChart
                     data={chartData}
                     barWidth={24}
@@ -63,7 +104,6 @@ const DashboardScreen = () => {
                     animateOnDataChange
                 />
 
-                {/* Key section */}
                 <View style={styles.keySection}>
                     <Text style={styles.keyTitle}>Key</Text>
                     <Text style={styles.keyInfo}>
@@ -72,17 +112,9 @@ const DashboardScreen = () => {
                 </View>
             </View>
 
-            {/* Quick Links
-            <View style={styles.quickLinksHeader}>
-                <Text style={styles.quickLinksTitle}>Quick Links</Text>
-                <TouchableOpacity>
-                    <Text style={styles.seeAllText}>See All →</Text>
-                </TouchableOpacity>
-            </View> */}
-
-            {/* Icon Grid */}
+            {/* --- Quick Links --- */}
             <View style={globalStyles.dashboardGrid}>
-                {quickLinks.map((item, index) => (
+                {filteredLinks.map((item, index) => (
                     <TouchableOpacity
                         key={index}
                         style={globalStyles.dashboardLink}
@@ -100,13 +132,12 @@ const DashboardScreen = () => {
                             style={globalStyles.dashboardLinkIcon}
                             name={item.icon}
                             size={28}
-                            color={item?.iconColor}
+                            color={item.iconColor}
                         />
                         <Text style={globalStyles.dashboardIconLabel}>{item.name}</Text>
                     </TouchableOpacity>
                 ))}
             </View>
-
         </ScrollView>
     );
 };
@@ -143,36 +174,5 @@ const styles = StyleSheet.create({
     keyInfo: {
         fontSize: 12,
         color: '#555',
-    },
-    quickLinksHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    quickLinksTitle: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: '#222',
-    },
-    seeAllText: {
-        color: '#1b7f74',
-        fontWeight: '600',
-    },
-    grid: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'space-between',
-    },
-    iconButton: {
-        width: iconSize,
-        alignItems: 'center',
-        marginBottom: 20,
-    },
-    iconLabel: {
-        fontSize: 12,
-        textAlign: 'center',
-        marginTop: 6,
-        color: '#444',
     },
 });

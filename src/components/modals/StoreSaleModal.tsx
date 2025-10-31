@@ -15,6 +15,8 @@ import Icon from "react-native-vector-icons/MaterialIcons";
 import DropDownPicker from "react-native-dropdown-picker";
 import { renderDropdownItem } from "../../assets/styles/all";
 import makeRequest from "../utils/makeRequest";
+import BluetoothConnectionModal from "./BluetoothConnectionModal";
+import useBluetoothClassic from "../../hooks/useBluetoothService";
 
 type StoreSaleModalProps = {
     visible: boolean;
@@ -60,6 +62,19 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
     // Payment type
     const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
+
+    // Bluetooth Printer
+    const [printerModalVisible, setPrinterModalVisible] = useState(false);
+    const { 
+        devices: printerDevices, 
+        connectToDevice: connectToPrinter, 
+        scanForDevices: scanForPrinters, 
+        connectedDevice: connectedPrinter, 
+        isScanning: isScanningPrinters, 
+        isConnecting: isConnectingPrinter,
+        printText,
+        printRaw
+    } = useBluetoothClassic({ deviceType: 'printer' });
 
     // Load dropdowns whenever commonData changes
     useEffect(() => {
@@ -109,6 +124,55 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         return sum + qty * e.selling_price;
     }, 0);
 
+    // Format receipt for printing
+    const formatReceipt = (saleData: any) => {
+        const selectedStore = commonData.stores?.find(s => s.id === storeValue);
+        const selectedMember = commonData.members?.find(m => m.id === memberValue);
+        
+        let receipt = "";
+        receipt += "================================\n";
+        receipt += "        STORE SALE RECEIPT\n";
+        receipt += "================================\n";
+        receipt += `Store: ${selectedStore?.description || 'N/A'}\n`;
+        receipt += `Date: ${transactionDate.toISOString().split("T")[0]}\n`;
+        receipt += `Member: ${selectedMember ? `${selectedMember.first_name} ${selectedMember.last_name}` : 'Guest'}\n`;
+        receipt += `Payment: ${paymentType.toUpperCase()}\n`;
+        receipt += "--------------------------------\n";
+        
+        entries.forEach((item, index) => {
+            const qty = parseFloat(item.quantity || "0");
+            const total = qty * item.selling_price;
+            receipt += `${index + 1}. ${item?.item?.description || 'Item'}\n`;
+            receipt += `   Qty: ${qty} x ${item.selling_price.toFixed(2)} = ${total.toFixed(2)}\n`;
+        });
+        
+        receipt += "--------------------------------\n";
+        receipt += `TOTAL: ${overallTotal.toFixed(2)} KES\n`;
+        receipt += "================================\n";
+        receipt += "Thank you for your business!\n";
+        receipt += "================================\n\n\n";
+        
+        return receipt;
+    };
+
+    // Print receipt function
+    const printReceipt = async (saleData: any) => {
+        if (!connectedPrinter || !printText) {
+            console.log("No printer connected or print function not available");
+            return;
+        }
+
+        try {
+            const receiptText = formatReceipt(saleData);
+            console.log("🖨️ Printing receipt...");
+            await printText(receiptText);
+            console.log("✅ Receipt printed successfully");
+        } catch (error) {
+            console.error("❌ Print error:", error);
+            Alert.alert("Print Error", "Failed to print receipt. Please check printer connection.");
+        }
+    };
+
     const handleSave = async () => {
         if (!storeValue || !transactionDate || entries.length === 0) {
             Alert.alert("Validation", "Please complete store, date, and items.");
@@ -148,6 +212,12 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 return;
             } else {
                 Alert.alert("Success", "Sale recorded successfully");
+                
+                // Print receipt if printer is connected
+                if (connectedPrinter) {
+                    await printReceipt(response?.data);
+                }
+                
                 setEntries([]);
                 setMemberValue(null);
                 setStoreValue(null);
@@ -190,6 +260,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                     searchPlaceholder="Search members..."
                     style={styles.dropdown}
                     dropDownContainerStyle={styles.dropdownBox}
+                    
                 />
 
                 {/* Pair: Store + Date */}
@@ -355,6 +426,37 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         </Text>
                     </TouchableOpacity>
                 </View>
+
+                {/* Printer Connection Section */}
+                <View style={styles.printerSection}>
+                    <Text style={styles.label}>Printer</Text>
+                    <View style={styles.printerStatusContainer}>
+                        {connectedPrinter ? (
+                            <View style={styles.printerConnected}>
+                                <View style={styles.printerStatusIndicator} />
+                                <Text style={styles.printerStatusText}>
+                                    Connected: {connectedPrinter.name || 'Printer'}
+                                </Text>
+                            </View>
+                        ) : (
+                            <View style={styles.printerDisconnected}>
+                                <View style={[styles.printerStatusIndicator, { backgroundColor: '#ef4444' }]} />
+                                <Text style={styles.printerStatusText}>
+                                    No printer connected
+                                </Text>
+                            </View>
+                        )}
+                        <TouchableOpacity
+                            style={styles.printerButton}
+                            onPress={() => setPrinterModalVisible(true)}
+                        >
+                            <Text style={styles.printerButtonText}>
+                                {connectedPrinter ? "Change Printer" : "Connect Printer"}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
                 {/* Buttons */}
                 <View style={styles.actions}>
                     <TouchableOpacity
@@ -376,6 +478,21 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         )}
                     </TouchableOpacity>
                 </View>
+
+                {/* Bluetooth Printer Connection Modal */}
+                <BluetoothConnectionModal
+                    visible={printerModalVisible}
+                    onClose={() => setPrinterModalVisible(false)}
+                    type="device-list"
+                    deviceType="printer"
+                    title="Select Printer Device"
+                    devices={printerDevices}
+                    connectToDevice={connectToPrinter}
+                    scanForDevices={scanForPrinters}
+                    isScanning={isScanningPrinters}
+                    isConnecting={isConnectingPrinter}
+                    connectedDevice={connectedPrinter}
+                />
             </View>
         </Modal>
     );

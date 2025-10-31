@@ -9,8 +9,14 @@ import {
 } from "react-native";
 import MpesaTransferModal from "../modals/MpesaTransferModal";
 import makeRequest from "../utils/makeRequest";
-
-const MemberWalletTransfer = ({ memberId }: { memberId: number | null }) => {
+type MemberWalletTransferProps = {
+    memberId: number | null;
+    walletBalance?: number;
+};
+const MemberWalletTransfer: React.FC<MemberWalletTransferProps> = ({
+    memberId,
+    walletBalance,
+}) => {
     const [amount, setAmount] = useState("");
     const [modalVisible, setModalVisible] = useState(false);
     const [walletTransferType, setWalletTransferType] = useState<
@@ -91,7 +97,7 @@ const MemberWalletTransfer = ({ memberId }: { memberId: number | null }) => {
                 Wallet Balance:{" "}
                 {loading
                     ? "Loading..."
-                    : `${currentBalance.toFixed(2)} KES`}
+                    : `${walletBalance ?? currentBalance.toFixed(2)} KES`}
             </Text>
 
             <TextInput
@@ -103,24 +109,33 @@ const MemberWalletTransfer = ({ memberId }: { memberId: number | null }) => {
             />
 
             <Text style={{ fontSize: 14, marginBottom: 4 }}>Send TO:</Text>
+            {/* <Text style={{ fontSize: 18, marginBottom: 4 }}>{memberId}</Text> */}
             <View style={styles.walletButtonsRow}>
-                {(["mpesa", "wallet"] as const).map((type) => (
-                    <TouchableOpacity
-                        key={type}
-                        style={[
-                            styles.walletButton,
-                            (!amount || loading) && { opacity: 0.5 },
-                        ]}
-                        disabled={!amount || loading}
-                        onPress={() => requestTransfer(type)}
-                    >
-                        <Text style={styles.walletButtonText}>
-                            {type === "wallet"
-                                ? "Store/Member"
-                                : type.charAt(0).toUpperCase() + type.slice(1)}
-                        </Text>
-                    </TouchableOpacity>
-                ))}
+                {/* 🟡 Store/Wallet (left) */}
+                <TouchableOpacity
+                    style={[
+                        styles.walletButton,
+                        styles.walletButtonYellow,
+                        (!amount || loading) && { opacity: 0.5 },
+                    ]}
+                    disabled={!amount || loading}
+                    onPress={() => requestTransfer("wallet")}
+                >
+                    <Text style={styles.walletButtonText}>Store/Member</Text>
+                </TouchableOpacity>
+
+                {/* 🟢 M-Pesa (right) */}
+                <TouchableOpacity
+                    style={[
+                        styles.walletButton,
+                        styles.walletButtonGreen,
+                        (!amount || loading) && { opacity: 0.5 },
+                    ]}
+                    disabled={!amount || loading}
+                    onPress={() => requestTransfer("mpesa")}
+                >
+                    <Text style={styles.walletButtonText}>M-Pesa</Text>
+                </TouchableOpacity>
             </View>
 
             {modalVisible && (
@@ -129,15 +144,26 @@ const MemberWalletTransfer = ({ memberId }: { memberId: number | null }) => {
                     amount={amount}
                     memberId={memberId}
                     transferType={walletTransferType}
-                    withdrawalCharge={
-                        walletTransferType === "mpesa" ? withdrawalCharge : 0
-                    }
+                    withdrawalCharge={walletTransferType === "mpesa" ? withdrawalCharge : 0}
                     onSend={() => {
+                        const amt = parseFloat(amount) || 0;
+                        const totalDeduction =
+                            walletTransferType === "mpesa" ? amt + withdrawalCharge : amt;
+                        // ✅ Optimistically update the balance
+                        setWalletDetails((prev: any) => ({
+                            ...prev,
+                            currentBalance: Math.max(0, (prev?.currentBalance ?? 0) - totalDeduction),
+                        }));
+
+                        setAmount("");
+                        setModalVisible(false);
+                    }}
+                    onClose={() => {
                         setModalVisible(false);
                         setAmount("");
                     }}
-                    onClose={() => setModalVisible(false)}
                 />
+
             )}
         </View>
     );
@@ -173,7 +199,9 @@ const styles = StyleSheet.create({
     walletButtonsRow: {
         flexDirection: "row",
         justifyContent: "space-between",
+        gap: 8,
     },
+
     walletButton: {
         backgroundColor: "#0f766e",
         paddingVertical: 8,
@@ -188,4 +216,11 @@ const styles = StyleSheet.create({
         textAlign: "center",
         fontSize: 12,
     },
+    walletButtonYellow: {
+        backgroundColor: "#F59E0B", // 🟡 warm orange-yellow
+    },
+    walletButtonGreen: {
+        backgroundColor: "#16a34a", // 🟢 mpesa green
+    },
+
 });

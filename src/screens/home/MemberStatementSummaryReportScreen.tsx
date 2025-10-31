@@ -191,12 +191,12 @@ const styles = StyleSheet.create({
     },
     dropdown: {
         borderRadius: 25,
-        borderColor: '#ddd',
+        borderColor: '#d1d5db',
         height: 45, // 👈 same as other inputs
         paddingHorizontal: 12,
     },
     dropdownBox: {
-        borderColor: '#ddd',
+        borderColor: '#d1d5db',
     },
     dropdownHeading: {
         fontSize: 14,

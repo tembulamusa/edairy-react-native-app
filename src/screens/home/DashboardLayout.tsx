@@ -1,5 +1,7 @@
 import * as React from 'react';
 import { SafeAreaView, StatusBar, View, StyleSheet, useColorScheme } from 'react-native';
+import ConnectivityStatus from '../../components/ConnectivityStatus';
+import ConnectivityToast from '../../components/ConnectivityToast';
 
 type Props = { children: React.ReactNode };
 
@@ -14,6 +16,8 @@ export default function DashboardLayout({ children }: Props) {
             ]}
         >
             <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+            <ConnectivityStatus />
+            <ConnectivityToast />
             <View
                 style={[
                     styles.container,

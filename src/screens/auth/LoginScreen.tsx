@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+// src/screens/LoginScreen.tsx
+import React, { useState, useContext } from "react";
 import {
     View,
     Text,
@@ -6,42 +7,18 @@ import {
     TouchableOpacity,
     Alert,
     ActivityIndicator,
+    StyleSheet,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { globalStyles } from "../../styles";
-import makeRequest from "../../components/utils/makeRequest.ts";
+import makeRequest from "../../components/utils/makeRequest";
+import { AuthContext } from "../../AuthContext";
 
 export default function LoginScreen({ navigation }: any) {
     const [phoneNumber, setPhoneNumber] = useState("");
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
-
-    // ✅ Check if user exists on mount
-    useEffect(() => {
-        const checkUser = async () => {
-            try {
-                const storedUser = await AsyncStorage.getItem("user");
-                if (storedUser) {
-                    const parsedUser = JSON.parse(storedUser);
-
-                    // check if token expired
-                    if (parsedUser?.expiry && parsedUser.expiry > Date.now()) {
-                        navigation.reset({
-                            index: 0,
-                            routes: [{ name: "Home" }], // redirect to Dashboard/Home
-                        });
-                    } else {
-                        // expired -> clear it
-                        await AsyncStorage.removeItem("user");
-                    }
-                }
-            } catch (err) {
-                console.error("Error checking stored user", err);
-            }
-        };
-
-        checkUser();
-    }, []);
+    const { login } = useContext(AuthContext);
 
     const handleLogin = async () => {
         if (!phoneNumber || !password) {
@@ -59,33 +36,21 @@ export default function LoginScreen({ navigation }: any) {
                 data,
             });
 
-            if ([200, 201].includes(status)) {
-                if (response?.access_token) {
-                    // calculate expiration timestamp
-                    const expiresIn = response?.expires_in ?? 3600; // default 1hr
-                    const expiryTimestamp = Date.now() + expiresIn * 1000;
+            if ([200, 201].includes(status) && response?.access_token) {
+                const token = response.access_token;
 
-                    const userData = {
-                        ...response,
-                        expiry: expiryTimestamp,
-                    };
+                await login(token);
+                await AsyncStorage.setItem("user", JSON.stringify(response));
 
-                    // Save in AsyncStorage
-                    await AsyncStorage.setItem("user", JSON.stringify(userData));
-
-                    // redirect to Home/Dashboard
-                    navigation.reset({
-                        index: 0,
-                        routes: [{ name: "Home" }],
-                    });
-                } else {
-                    Alert.alert("Login Failed", "Phone number or password wrong");
-                }
+                navigation.reset({
+                    index: 0,
+                    routes: [{ name: "Home" }],
+                });
             } else {
-                Alert.alert("Login Failed", JSON.stringify(response) || "Unexpected error");
-                return;
+                Alert.alert("Login Failed", "Invalid phone number or password.");
             }
         } catch (error: any) {
+            console.error(error);
             Alert.alert("Login Failed", error?.message || "Something went wrong");
         } finally {
             setLoading(false);
@@ -98,13 +63,11 @@ export default function LoginScreen({ navigation }: any) {
                 flex: 1,
                 justifyContent: "flex-end",
                 padding: 20,
-                backgroundColor: "transparent",
+                backgroundColor: "rgba(0,0,0,0)", // explicitly transparent
             }}
         >
-            {/* Title */}
             <Text style={[globalStyles.title, { color: "#fff" }]}>Sign In</Text>
 
-            {/* Phone Number */}
             <Text style={[globalStyles.label, { color: "#fff" }]}>Phone Number</Text>
             <TextInput
                 placeholder="254792924299"
@@ -115,7 +78,6 @@ export default function LoginScreen({ navigation }: any) {
                 autoCapitalize="none"
             />
 
-            {/* Password */}
             <Text style={[globalStyles.label, { color: "#fff" }]}>Password</Text>
             <TextInput
                 placeholder="password"
@@ -126,7 +88,6 @@ export default function LoginScreen({ navigation }: any) {
                 onChangeText={setPassword}
             />
 
-            {/* Login Button */}
             <TouchableOpacity
                 style={globalStyles.button}
                 onPress={handleLogin}
@@ -141,3 +102,4 @@ export default function LoginScreen({ navigation }: any) {
         </View>
     );
 }
+

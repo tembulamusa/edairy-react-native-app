@@ -2,11 +2,7 @@
 import { StyleSheet } from "react-native";
 
 export const globalStyles = StyleSheet.create({
-    container: {
-        flex: 1,
-        padding: 20,
-        backgroundColor: "#fff",
-    },
+    
     input: {
         backgroundColor: "#fff",
         borderRadius: 32, // fully rounded
@@ -82,16 +78,21 @@ export const globalStyles = StyleSheet.create({
         marginTop: 4,
         marginBottom: 4
     },
+    
     container: {
-        flex: 1,
-        backgroundColor: "#ffffff"
-    },
-    container: {
+        backgroundColor: "#ffffff",
         flex: 1,
         padding: 20,
         justifyContent: "flex-start",
         alignItems: "center",
     },
+    basedropdown: {
+        borderColor: "#d1d5db", // light gray border
+        borderWidth: 1,
+        borderRadius: 8,
+        backgroundColor: "#fff",
+    },
+    
     previewBox: {
         width: "100%",
         height: 250,

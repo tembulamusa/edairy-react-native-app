@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, Text, Image, StyleSheet, TouchableOpacity } from "react-native";
+import { View, Text, Image, StyleSheet, TouchableOpacity, Platform, PermissionsAndroid, Alert } from "react-native";
 import { launchCamera, launchImageLibrary, Asset } from "react-native-image-picker";
 import { globalStyles } from "../../styles";
 
@@ -11,15 +11,70 @@ interface Props {
 const IdBackCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
     const [image, setImage] = useState<Asset | null>(null);
 
+    const requestCameraPermission = async (): Promise<boolean> => {
+        if (Platform.OS !== "android") return true;
+        try {
+            const result = await PermissionsAndroid.request(
+                PermissionsAndroid.PERMISSIONS.CAMERA,
+                {
+                    title: "Camera Permission",
+                    message: "We need access to your camera to take ID photos.",
+                    buttonPositive: "OK",
+                }
+            );
+            return result === PermissionsAndroid.RESULTS.GRANTED;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    const requestGalleryPermission = async (): Promise<boolean> => {
+        if (Platform.OS !== "android") return true;
+        try {
+            const hasReadMedia = await PermissionsAndroid.request(
+                // @ts-ignore
+                (PermissionsAndroid as any).PERMISSIONS.READ_MEDIA_IMAGES || PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+                {
+                    title: "Photos Permission",
+                    message: "We need access to your photos to pick ID images.",
+                    buttonPositive: "OK",
+                }
+            );
+            return hasReadMedia === PermissionsAndroid.RESULTS.GRANTED;
+        } catch (e) {
+            return false;
+        }
+    };
+
     const handleTakePhoto = async () => {
+        const permitted = await requestCameraPermission();
+        if (!permitted) {
+            Alert.alert("Permission required", "Camera permission is needed to take a photo.");
+            return;
+        }
         const result = await launchCamera({ mediaType: "photo", cameraType: "front" });
+        if (result?.didCancel) return;
+        if (result?.errorCode) {
+            Alert.alert("Camera error", result.errorMessage || result.errorCode);
+            return;
+        }
         if (result.assets && result.assets.length > 0) {
             setImage(result.assets[0]);
         }
     };
 
     const handleBrowseGallery = async () => {
+        const permitted = await requestGalleryPermission();
+        if (!permitted) {
+            Alert.alert("Permission required", "Photos permission is needed to select an image.");
+            return;
+        }
         const result = await launchImageLibrary({ mediaType: "photo" });
+        if (result?.didCancel) return;
+        if (result?.errorCode) {
+            Alert.alert("Gallery error", result.errorMessage || result.errorCode);
+            return;
+        }
         if (result.assets && result.assets.length > 0) {
             setImage(result.assets[0]);
         }

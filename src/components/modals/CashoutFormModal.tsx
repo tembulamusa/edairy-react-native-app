@@ -15,6 +15,7 @@ type CashoutFormModalProps = {
     selectedMember: any;
     visible: boolean;
     memberId: number;
+    customer_type: string;
     onSubmit?: (data: { cashout: {} }) => void;
     onClose: () => void;
 };
@@ -23,6 +24,7 @@ const CashoutFormModal: React.FC<CashoutFormModalProps> = ({
     selectedMember,
     memberId,
     visible,
+    customer_type,
     onSubmit,
     onClose,
 }) => {
@@ -32,6 +34,7 @@ const CashoutFormModal: React.FC<CashoutFormModalProps> = ({
     const [fetchingLimit, setFetchingLimit] = useState(false);
     const [errors, setErrors] = useState<string[]>([]);
     const [message, setMessage] = useState<string | null>(null);
+    const [minCashout, setMinCashoutLimit] = useState('1000');
 
     // 🔹 Fetch member credit limit when modal opens or memberId changes
     useEffect(() => {
@@ -40,7 +43,7 @@ const CashoutFormModal: React.FC<CashoutFormModalProps> = ({
 
             setFetchingLimit(true);
             try {
-                const endpoint = `member-credit-limit?member=${selectedMember?.member_id}`;
+                const endpoint = `member-credit-limit?member=${selectedMember?.member_id ?? selectedMember?.id}`;
                 const [status, response] = await makeRequest({
                     url: endpoint,
                     method: "GET",
@@ -73,7 +76,7 @@ const CashoutFormModal: React.FC<CashoutFormModalProps> = ({
             return;
         }
 
-        if (parseFloat(amount) > parseFloat(memberLimit)) {
+        if (parseFloat(amount) > parseFloat(memberLimit) || parseFloat(amount) < parseFloat(minCashout)) {
             Alert.alert(
                 "Limit Exceeded",
                 `Amount cannot exceed credit limit of ${memberLimit} KES`
@@ -87,10 +90,14 @@ const CashoutFormModal: React.FC<CashoutFormModalProps> = ({
             setMessage(null);
 
             const endpoint = `loan-request`;
+            let data = {amount, 
+                member_id: selectedMember?.member_id ?? selectedMember?.id,
+                customer_type: customer_type,
+             } as any;
             const [status, response] = await makeRequest({
                 url: endpoint,
                 method: "POST",
-                data: { amount, member_id: memberId },
+                data,
             });
             if (![200, 201].includes(status)) {
                 setErrors(response?.errors || ["Something went wrong."]);

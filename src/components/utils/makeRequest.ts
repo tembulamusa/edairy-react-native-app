@@ -1,7 +1,8 @@
 import { Alert } from "react-native";
 import { getItem } from "./local-storage";
+import NetInfo from '@react-native-community/netinfo';
 
-const BASE_URL = "http://10.0.2.2:8000/api/";
+const BASE_URL = "http://192.168.100.2:8000/api/" //"http://10.0.2.2:8000/api/";
 
 const makeRequest = async ({
     url,
@@ -11,6 +12,28 @@ const makeRequest = async ({
     responseType = "json",
     isFormData = false,
 }) => {
+    // Check internet connectivity before making request
+    const netInfo = await NetInfo.fetch();
+    if (!netInfo.isConnected || !netInfo.isInternetReachable) {
+        Alert.alert(
+            "No Internet Connection",
+            "Please check your internet connection and try again.",
+            [
+                { text: "OK", style: "default" },
+                {
+                    text: "Retry",
+                    onPress: () => {
+                        // Retry the request after user confirms
+                        setTimeout(() => {
+                            makeRequest({ url, method, data, use_jwt, responseType, isFormData });
+                        }, 1000);
+                    },
+                },
+            ]
+        );
+        return [503, { message: "No internet connection" }];
+    }
+
     url = BASE_URL + url;
 
     let headers: any = {
@@ -53,7 +76,32 @@ const makeRequest = async ({
         return [response.status, result];
     } catch (err: any) {
         console.error("Fetch error:", err);
-        Alert.alert("Network Error", "Please check your internet connection.");
+
+        // Check if it's a network error
+        const isNetworkError = err.message?.includes('Network request failed') ||
+            err.message?.includes('fetch') ||
+            err.code === 'NETWORK_ERROR';
+
+        if (isNetworkError) {
+            Alert.alert(
+                "Network Error",
+                "Unable to connect to the server. Please check your internet connection.",
+                [
+                    { text: "OK", style: "default" },
+                    {
+                        text: "Retry",
+                        onPress: () => {
+                            setTimeout(() => {
+                                makeRequest({ url, method, data, use_jwt, responseType, isFormData });
+                            }, 1000);
+                        },
+                    },
+                ]
+            );
+        } else {
+            Alert.alert("Error", "An unexpected error occurred. Please try again.");
+        }
+
         return [500, { message: "Network error" }];
     }
 };

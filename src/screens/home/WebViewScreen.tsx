@@ -3,7 +3,7 @@ import { View, StyleSheet, Alert, Platform, PermissionsAndroid } from "react-nat
 import { WebView } from "react-native-webview";
 import { WebViewMessageEvent } from "react-native-webview/lib/WebViewTypes";
 
-export default function WebViewScreen({ route }: any) {
+export default function WebViewScreen({ route, navigation }: any) {
     const { url } = route.params;
     const webviewRef = useRef<WebView>(null);
     const [permissionGranted, setPermissionGranted] = useState(false);
@@ -33,33 +33,37 @@ export default function WebViewScreen({ route }: any) {
         requestCamera();
     }, []);
 
-    // JS injected into WebView to hook console logs
+    // JS injected into WebView to forward console logs to RN
     const injectedJS = `
-    (function() {
-      const oldLog = console.log;
-      console.log = function(...args) {
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: "log", message: args }));
-        oldLog.apply(console, args);
-      };
-      const oldError = console.error;
-      console.error = function(...args) {
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: "error", message: args }));
-        oldError.apply(console, args);
-      };
-    })();
-    true;
-  `;
+        (function() {
+            const oldLog = console.log;
+            console.log = function(...args) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: "log", message: args }));
+                oldLog.apply(console, args);
+            };
+            const oldError = console.error;
+            console.error = function(...args) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({ type: "error", message: args }));
+                oldError.apply(console, args);
+            };
+        })();
+        true;
+    `;
 
-    const handleMessage = (event: WebViewMessageEvent) => {
+    const handleMessage = (msg: any) => {
         try {
-            const data = JSON.parse(event.nativeEvent.data);
-            if (data.type === "log") console.log("📜 [WebView LOG]:", ...data.message);
-            else if (data.type === "error") {
-                console.error("❌ [WebView ERROR]:", ...data.message);
-                Alert.alert("WebView Error", JSON.stringify(data.message));
+            if (msg.status === "success") {
+                Alert.alert("Success", "Liveness Test completed", [
+                    {
+                        text: "OK",
+                        onPress: () => navigation.navigate("Members"),
+                    },
+                ]);
+            } else {
+                Alert.alert("Notice", msg.message || "Unknown message from WebView");
             }
         } catch (err) {
-            console.warn("[WebView RAW]:", event.nativeEvent.data);
+            Alert.alert("Error", "Unable to handle Liveness message");
         }
     };
 
@@ -81,12 +85,25 @@ export default function WebViewScreen({ route }: any) {
                 mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback
                 allowsFullscreenVideo
-                onMessage={handleMessage}
                 injectedJavaScript={injectedJS}
                 geolocationEnabled
                 allowFileAccess
                 allowUniversalAccessFromFileURLs
-                // Grant permissions requested by WebView (Android only)
+                onMessage={(event: WebViewMessageEvent) => {
+                    try {
+                        const msg = JSON.parse(event.nativeEvent.data);
+                        if (msg.status === "success") {
+                            console.log("✅ Liveness done:", msg.data);
+                            handleMessage(msg);
+                        } else if (msg.type === "log") {
+                            console.log("[WebView log]", ...msg.message);
+                        } else if (msg.type === "error") {
+                            console.error("[WebView error]", ...msg.message);
+                        }
+                    } catch (err) {
+                        console.error("Invalid message from WebView:", event.nativeEvent.data);
+                    }
+                }}
                 onPermissionRequest={(event) => {
                     event.grant(event.resources);
                 }}

@@ -9,6 +9,7 @@ import {
     ActivityIndicator,
     Alert,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import makeRequest from "../utils/makeRequest";
 
 type MpesaTransferModalProps = {
@@ -32,19 +33,47 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
     const [errors, setErrors] = useState<string[]>([]);
     const [scaId, setScaId] = useState("");
     const [transferData, setTransferData] = useState<any>(null);
+    const [isMemberOnly, setIsMemberOnly] = useState(false);
+    const [alternativePhone, setAlternativePhone] = useState("");
+    const [showPhoneInput, setShowPhoneInput] = useState(false);
+    const [userPhoneNumber, setUserPhoneNumber] = useState("");
+    const [useMyNumber, setUseMyNumber] = useState(true);
 
     useEffect(() => {
         if (visible && memberId) {
-            // 🚀 If transfer is wallet, skip OTP and process directly
-            if (transferType === "wallet") {
-                handleWalletTransfer();
-            } else {
-                handleRequestOtp();
-            }
+            checkUserRole();
         } else {
             resetModal();
         }
     }, [visible]);
+
+    const checkUserRole = async () => {
+        try {
+            const userDataString = await AsyncStorage.getItem("user");
+            if (userDataString) {
+                const userData = JSON.parse(userDataString);
+                const userGroups = userData?.user_groups || [];
+
+                const memberOnly =
+                    !userGroups.includes("transporter") &&
+                    !userGroups.includes("employee");
+
+                setIsMemberOnly(memberOnly);
+
+                // Store user's phone number for display from member_details
+                setUserPhoneNumber(userData?.member_details?.primary_phone || userData?.primary_phone || userData?.phone_number || userData?.member_phone || "");
+
+                // Auto-request OTP for wallet transfers or non-members
+                if (!memberOnly || transferType === "wallet") {
+                    handleRequestOtp();
+                }
+            }
+        } catch (error) {
+            console.error("Error checking user role:", error);
+            // Default to auto-request if error
+            handleRequestOtp();
+        }
+    };
 
     const resetModal = () => {
         setOtp("");
@@ -52,52 +81,27 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
         setErrors([]);
         setScaId("");
         setTransferData(null);
+        setAlternativePhone("");
+        setShowPhoneInput(false);
+        setIsMemberOnly(false);
+        setUserPhoneNumber("");
+        setUseMyNumber(true);
     };
 
-    // ✅ WALLET TRANSFER — no OTP
-    const handleWalletTransfer = async () => {
-        try {
-            setLoading(true);
-            setMessage("Processing wallet transfer...");
-
-            const [status, response] = await makeRequest({
-                url: "wallet-transfer",
-                method: "POST",
-                data: {
-                    member_id: memberId,
-                    amount: amount,
-                },
-            });
-
-            if ([200, 201].includes(status)) {
-                setMessage("Wallet transfer completed successfully!");
-                setErrors([]);
-            } else {
-                setMessage(response?.message || "Wallet transfer failed");
-                setErrors(response?.errors ?? [response?.error]);
-            }
-        } catch (error) {
-            console.error("Wallet transfer error:", error);
-            setMessage("Wallet transfer failed. Try again.");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // ✅ M-Pesa OTP Request
-    const handleRequestOtp = async () => {
+    const handleRequestOtp = async (phoneNumber?: string) => {
         try {
             setLoading(true);
             setMessage("Requesting OTP...");
-            const endpoint = `mpesa-acceptance-otp-request`;
+            const endpoint = `cash-transfer-otp-request`;
             const data = {
                 amount: amount,
                 transferType: transferType,
-                id: memberId,
+                member_id: memberId,
+                ...(phoneNumber && { phone_number: phoneNumber }),
             };
             const [status, response] = await makeRequest({
                 url: endpoint,
-                data: data,
+                data: data as any,
                 method: "POST",
             });
             if ([200, 201].includes(status)) {
@@ -120,6 +124,27 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
         }
     };
 
+    const handleToggleNumber = (useMy: boolean) => {
+        setUseMyNumber(useMy);
+        if (!useMy) {
+            setShowPhoneInput(true);
+            setMessage("Enter the phone number to receive OTP");
+        } else {
+            setShowPhoneInput(false);
+            setAlternativePhone("");
+            setMessage("");
+        }
+    };
+
+    const handleRequestOtpWithPhone = () => {
+        if (!useMyNumber && !alternativePhone.trim()) {
+            setErrors(["Please enter a phone number"]);
+            return;
+        }
+        const phoneToUse = useMyNumber ? undefined : alternativePhone;
+        handleRequestOtp(phoneToUse);
+    };
+
     // ✅ M-Pesa OTP Confirmation
     const handleConfirmOtp = async () => {
         if (!otp || otp.length !== 6 || !/^\d{6}$/.test(otp)) {
@@ -131,20 +156,22 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
             setMessage("Confirming OTP...");
             setErrors([]);
 
-            const endpoint = `mpesa-acceptance-otp-confirm`;
+            const endpoint = `complete-cash-transfer`;
             const [status, response] = await makeRequest({
                 url: endpoint,
                 method: "POST",
                 data: {
                     otp,
-                    id: memberId,
+                    memberId: memberId,
                     scaId,
                     transferData,
-                },
+                    transferType: transferType
+                } as any,
             });
 
             if ([200, 201].includes(status)) {
                 setMessage("OTP confirmed successfully!");
+                Alert.alert("Thank You", "Mpesa withdrawal request sent")
                 onClose();
             } else {
                 setMessage(response?.message || "Failed to confirm OTP");
@@ -172,7 +199,7 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
 
                     {message ? <Text style={styles.message}>{message}</Text> : null}
 
-                    {errors.length > 0 && (
+                    {errors?.length > 0 && (
                         <View>
                             {errors.map((err, idx) => (
                                 <Text key={idx} style={{ color: "red" }}>
@@ -182,8 +209,81 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
                         </View>
                     )}
 
-                    {/* Only show OTP input if type is not wallet */}
-                    {transferType !== "wallet" && (
+                    {/* Show toggle buttons for members only and M-Pesa transfers */}
+                    {isMemberOnly && transferType === "mpesa" && !scaId && (
+                        <>
+                            <View style={styles.toggleContainer}>
+                                <TouchableOpacity
+                                    onPress={() => handleToggleNumber(true)}
+                                    style={[
+                                        styles.toggleButton,
+                                        useMyNumber && styles.toggleButtonActive
+                                    ]}
+                                >
+                                    <Text style={[
+                                        styles.toggleButtonText,
+                                        useMyNumber && styles.toggleButtonTextActive
+                                    ]}>
+                                        My Number
+                                    </Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={() => handleToggleNumber(false)}
+                                    style={[
+                                        styles.toggleButton,
+                                        !useMyNumber && styles.toggleButtonActive
+                                    ]}
+                                >
+                                    <Text style={[
+                                        styles.toggleButtonText,
+                                        !useMyNumber && styles.toggleButtonTextActive
+                                    ]}>
+                                        Other Number
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+
+                            {useMyNumber && (
+                                <View style={styles.phoneDisplayContainer}>
+                                    <Text style={styles.phoneLabel}>To: {userPhoneNumber}</Text>
+                                </View>
+                            )}
+                        </>
+                    )}
+
+                    {/* Show phone input for members when using other number and M-Pesa transfers */}
+                    {isMemberOnly && transferType === "mpesa" && showPhoneInput && !scaId && (
+                        <>
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Enter phone number (e.g., 254712345678)"
+                                value={alternativePhone}
+                                onChangeText={setAlternativePhone}
+                                keyboardType="numeric"
+                            />
+                        </>
+                    )}
+
+                    {/* Action buttons for members and M-Pesa transfers */}
+                    {isMemberOnly && transferType === "mpesa" && !scaId && (
+                        <View style={styles.memberActionButtons}>
+                            {/* <TouchableOpacity
+                                onPress={onClose}
+                                style={[styles.modalButton, { backgroundColor: "gray", flex: 1, marginRight: 5 }]}
+                            >
+                                <Text style={styles.modalButtonText}>Cancel</Text>
+                            </TouchableOpacity> */}
+                            <TouchableOpacity
+                                onPress={handleRequestOtpWithPhone}
+                                style={[styles.modalButton, { backgroundColor: "#0f766e", flex: 1, marginLeft: 5 }]}
+                            >
+                                <Text style={styles.modalButtonText}>Proceed</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
+
+                    {/* Only show OTP input if type is not wallet and OTP has been requested */}
+                    {transferType && scaId && (
                         <>
                             <TextInput
                                 style={styles.input}
@@ -193,14 +293,20 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
                                 keyboardType="numeric"
                                 maxLength={6}
                             />
-                            <TouchableOpacity onPress={handleRequestOtp}>
+                            <TouchableOpacity onPress={() => handleRequestOtp(alternativePhone || undefined)}>
                                 <Text style={styles.resendLink}>Resend OTP</Text>
                             </TouchableOpacity>
                         </>
                     )}
 
                     <View style={styles.modalActions}>
-                        {transferType !== "wallet" && (
+                        {<TouchableOpacity
+                            style={[styles.modalButton, { backgroundColor: "gray" }]}
+                            onPress={onClose}
+                        >
+                            <Text style={styles.modalButtonText}>Close</Text>
+                        </TouchableOpacity>}
+                        {transferType && scaId && (
                             <TouchableOpacity
                                 style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
                                 onPress={handleConfirmOtp}
@@ -209,12 +315,7 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
                                 <Text style={styles.modalButtonText}>Confirm OTP</Text>
                             </TouchableOpacity>
                         )}
-                        <TouchableOpacity
-                            style={[styles.modalButton, { backgroundColor: "gray" }]}
-                            onPress={onClose}
-                        >
-                            <Text style={styles.modalButtonText}>Close</Text>
-                        </TouchableOpacity>
+
                     </View>
                 </View>
             </View>
@@ -278,4 +379,66 @@ const styles = StyleSheet.create({
         color: "#fff",
         fontWeight: "600",
     },
+    changeNumberButton: {
+        backgroundColor: "#f0f9ff",
+        borderWidth: 1,
+        borderColor: "#0f766e",
+        borderRadius: 8,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        marginVertical: 10,
+        alignItems: "center",
+    },
+    changeNumberText: {
+        color: "#0f766e",
+        fontWeight: "600",
+        fontSize: 14,
+    },
+    phoneDisplayContainer: {
+        backgroundColor: "#f8fafc",
+        borderWidth: 1,
+        borderColor: "#e2e8f0",
+        borderRadius: 8,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        marginVertical: 10,
+    },
+    phoneLabel: {
+        color: "#374151",
+        fontWeight: "500",
+        fontSize: 16,
+        textAlign: "center",
+    },
+    toggleContainer: {
+        flexDirection: "row",
+        marginVertical: 10,
+        backgroundColor: "#f1f5f9",
+        borderRadius: 8,
+        padding: 4,
+    },
+    toggleButton: {
+        flex: 1,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 6,
+        alignItems: "center",
+        backgroundColor: "transparent",
+    },
+    toggleButtonActive: {
+        backgroundColor: "#0f766e",
+    },
+    toggleButtonText: {
+        color: "#64748b",
+        fontWeight: "600",
+        fontSize: 14,
+    },
+    toggleButtonTextActive: {
+        color: "#ffffff",
+    },
+    memberActionButtons: {
+        flexDirection: "row",
+        marginVertical: 15,
+        justifyContent: "space-between",
+    },
+
 });

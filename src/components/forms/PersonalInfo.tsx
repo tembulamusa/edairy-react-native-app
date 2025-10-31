@@ -62,6 +62,22 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
         };
         loadCommonData();
     }, []);
+    const isAtLeast18YearsOld = (dateOfBirth: string): boolean => {
+        const today = new Date();
+        const birthDate = new Date(dateOfBirth);
+        
+        // Calculate age
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const monthDiff = today.getMonth() - birthDate.getMonth();
+        
+        // Adjust age if birthday hasn't occurred this year
+        if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+            age--;
+        }
+        
+        return age >= 18;
+    };
+
     const handleNext = () => {
         if (
             !form.firstName ||
@@ -75,6 +91,16 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
             Alert.alert("Missing Fields", "Please fill in all required fields.");
             return;
         }
+
+        // Check age requirement
+        if (!isAtLeast18YearsOld(form.dob)) {
+            Alert.alert(
+                "Age Requirement", 
+                "You must be at least 18 years old to register as a member."
+            );
+            return;
+        }
+
         onNext(form);
     };
 

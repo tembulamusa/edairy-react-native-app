@@ -1,65 +1,77 @@
-export default filterBluetoothDevices = async (
-    devices = [], deviceType = 'scale'
+const filterBluetoothDevices = async (
+    devices: any[] = [], deviceType: 'scale' | 'printer' = 'scale'
 ) => {
-
-    const scale = () => {
-        const scaleKeywords = [
-            'scale', 'weight', 'balance', 'gram', 'kg', 'lb',
-            'digital', 'precision', 'measure', 'weigh',
-            'hc-05', 'hc-06', 'hc05', 'hc06',  // Common Bluetooth modules used in scales
-            'esp32', 'arduino', 'at-', 'linvor',
-            'jdy', 'zs-040'  // Other common modules used in scales
+    if (deviceType === 'printer') {
+        // Printer filtering by common brand/keyword
+        const printerKeywords = [
+            'printer', 'print', 'pt', 'zjiang', 'czt', 'gp', 'cenxun',
+            'pos', 'thermal', 'xp', 'zt', 'rongta', 'ez', 't9', 'xprinter', 'star'
         ];
-
         return devices.filter(device => {
             const deviceName = (device.name || '').toLowerCase();
-            const deviceAddress = (device.address || '').toLowerCase();
-
-            // Check if device name contains scale-related keywords
-            const nameMatch = scaleKeywords.some(keyword =>
-                deviceName.includes(keyword)
-            );
-
-            // Check for HC-05/HC-06 pattern in address or name (common in scales)
-            const hcModulePattern = /^(hc-?05|hc-?06)/i;
-            const addressMatch = hcModulePattern.test(deviceAddress) || hcModulePattern.test(deviceName);
-
-            // Include devices with specific address patterns common in scale modules
-            const commonScalePatterns = [
-                /^00:18:/,  // Common HC-05 prefix
-                /^00:20:/,  // Common HC-06 prefix  
-                /^20:15:/,  // Another common pattern
-                /^98:D3:/,  // ESP32 common pattern
-                /^00:23:/,  // Another HC-06 pattern (like the user's 00:23:04:00:23:7B)
-            ];
-
-            const patternMatch = commonScalePatterns.some(pattern =>
-                pattern.test(deviceAddress)
-            );
-
-            // For unnamed devices, only include if they match known scale address patterns
-            // This is more restrictive than before - unnamed devices need to match a pattern
-            const unnamedWithScalePattern = (!device.name || device.name.trim() === '' ||
-                device.name.includes('Unknown') ||
-                device.name.includes('N/A')) && patternMatch;
-
-            // Check if device is manually approved as scale
-            const manuallyApproved = this.isApprovedScale(device.address);
-
-            const shouldInclude = nameMatch || addressMatch || unnamedWithScalePattern || manuallyApproved;
-
-            if (shouldInclude) {
-                const reasons = [];
-                if (nameMatch) reasons.push('Name');
-                if (addressMatch) reasons.push('HC-Module');
-                if (unnamedWithScalePattern) reasons.push('Pattern');
-                if (manuallyApproved) reasons.push('Manual');
-                console.log(`✅ Including scale device: ${device.name || 'Unnamed'} (${device.address}) - ${reasons.join(', ')}`);
+            const nameMatch = printerKeywords.some(keyword => deviceName.includes(keyword));
+            if (nameMatch) {
+                console.log(`✅ Including printer device: ${device.name || 'Unnamed'} (${device.address})`);
             } else {
-                console.log(`❌ Excluding non-scale device: ${device.name || 'Unnamed'} (${device.address})`);
+                console.log(`❌ Excluding non-printer device: ${device.name || 'Unnamed'} (${device.address})`);
             }
-
-            return shouldInclude;
+            return nameMatch;
         });
     }
-}
+
+    // Scale filtering (safe baseline without manual approval dependency)
+    const scaleKeywords = [
+        'scale', 'weight', 'weigh', 'weighing', 'balance', 'gram', 'kg', 'lb',
+        'digital', 'precision', 'measure',
+        // Common crane scale identifiers/brands
+        'crane', 'hanging', 'hook', 'ocs', 'ocs-', 'dyna', 'dynamometer', 'kern', 'sf-', 'yh', 'yw',
+        // Common BT modules
+        'hc-05', 'hc-06', 'hc05', 'hc06', 'esp32', 'arduino', 'at-', 'linvor', 'jdy', 'zs-040'
+    ];
+
+    const hcModulePattern = /^(hc-?05|hc-?06)/i;
+    const commonScalePatterns = [
+        /^00:18:/,  // HC-05 prefix
+        /^00:20:/,  // HC-06 prefix
+        /^20:15:/,
+        /^98:D3:/,  // ESP32 pattern
+        /^00:23:/,
+    ];
+
+    const filtered = devices.filter(device => {
+        const deviceName = (device.name || '').toLowerCase();
+        const deviceAddress = (device.address || '').toLowerCase();
+
+        const nameMatch = scaleKeywords.some(keyword => deviceName.includes(keyword));
+        const addressMatch = hcModulePattern.test(deviceAddress) || hcModulePattern.test(deviceName);
+        const patternMatch = commonScalePatterns.some(pattern => pattern.test(deviceAddress));
+
+        // Include XH-series scales like "xh2507024006"
+        const xhSeriesMatch = /^xh[0-9]+/i.test(device.name || '') || /^xh[0-9]+/i.test(deviceAddress || '');
+        // OCS series often start with OCS- or OCS
+        const ocsSeriesMatch = /^(ocs-?|oc-)/i.test(device.name || '') || /^(ocs-?|oc-)/i.test(deviceAddress || '');
+
+        const unnamedWithScalePattern = (!device.name || device.name.trim() === '' ||
+            device.name.includes('Unknown') || device.name.includes('N/A')) && patternMatch;
+
+        const shouldInclude = nameMatch || addressMatch || unnamedWithScalePattern || xhSeriesMatch || ocsSeriesMatch;
+
+        if (shouldInclude) {
+            const reasons: string[] = [];
+            if (nameMatch) reasons.push('Name');
+            if (addressMatch) reasons.push('HC-Module');
+            if (unnamedWithScalePattern) reasons.push('Pattern');
+            if (xhSeriesMatch) reasons.push('XH-ID');
+            if (ocsSeriesMatch) reasons.push('OCS-ID');
+            console.log(`✅ Including scale device: ${device.name || 'Unnamed'} (${device.address}) - ${reasons.join(', ')}`);
+        } else {
+            console.log(`❌ Excluding non-scale device: ${device.name || 'Unnamed'} (${device.address})`);
+        }
+
+        return shouldInclude;
+    });
+
+    return filtered;
+};
+
+export default filterBluetoothDevices;

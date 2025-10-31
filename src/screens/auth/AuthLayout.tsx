@@ -1,5 +1,5 @@
 import React from "react";
-import { View, StyleSheet, ImageBackground } from "react-native";
+import { View, StyleSheet, ImageBackground, StatusBar } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 
 type Props = {
@@ -10,13 +10,14 @@ export default function AuthLayout({ children }: Props) {
     return (
         <ImageBackground
             source={require("../../assets/backgrounds/cow.jpg")}
-            style={{ flex: 1 }}
+            style={styles.imageBackground}
             resizeMode="cover"
         >
+            <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
             <LinearGradient
                 colors={[
-                    "rgba(224, 247, 250, 0.3)", // light top with 30% opacity
-                    "rgba(0, 105, 92, 0.9)",    // deep bottom with 90% opacity
+                    "rgba(224, 247, 250, 0.1)", // very light top
+                    "rgba(0, 105, 92, 0.1)",    // very light bottom
                 ]}
                 start={{ x: 0.5, y: 0 }}
                 end={{ x: 0.5, y: 1 }}
@@ -31,20 +32,25 @@ export default function AuthLayout({ children }: Props) {
 }
 
 const styles = StyleSheet.create({
-    backgroundGradient: {
+    imageBackground: {
         flex: 1,
+        backgroundColor: "rgba(0,0,0,0)",
+    },
+    backgroundGradient: { 
+        flex: 1,
+        backgroundColor: "rgba(0,0,0,0)",
     },
     overlay: {
         flex: 1,
-        backgroundColor: "rgba(0,0,0,0.3)", // optional dark overlay for readability
+        backgroundColor: "rgba(0,0,0,0)",
         paddingHorizontal: 20,
         paddingTop: 20,
         justifyContent: "center",
     },
     innerContainer: {
         flex: 1,
-        justifyContent: "flex-end", // content stays at the bottom
-        backgroundColor: "transparent",
+        justifyContent: "flex-end",
+        backgroundColor: "rgba(0,0,0,0)",
         paddingBottom: 40,
     },
 });

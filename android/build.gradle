@@ -19,3 +19,36 @@ buildscript {
 }
 
 apply plugin: "com.facebook.react.rootproject"
+
+// Force all Android library modules to use our compile/target SDK levels
+subprojects { subproject ->
+    if (subproject.hasProperty('android')) {
+        try {
+            subproject.android.compileSdkVersion = rootProject.ext.compileSdkVersion
+            if (subproject.android.defaultConfig != null) {
+                subproject.android.defaultConfig.targetSdkVersion = rootProject.ext.targetSdkVersion
+                // Guard: some plugins expose minSdkVersion as int or ApiVersion
+                def minSdk = subproject.android.defaultConfig.minSdkVersion
+                def minSdkValue = (minSdk instanceof Integer) ? minSdk : (minSdk?.apiLevel ?: minSdk)
+                if (minSdkValue < rootProject.ext.minSdkVersion) {
+                    subproject.android.defaultConfig.minSdkVersion = rootProject.ext.minSdkVersion
+                }
+            }
+            // Ensure Java 11 toolchain for all Android modules
+            if (subproject.android.hasProperty('compileOptions')) {
+                subproject.android.compileOptions.sourceCompatibility = JavaVersion.VERSION_11
+                subproject.android.compileOptions.targetCompatibility = JavaVersion.VERSION_11
+            } else {
+                subproject.android {
+                    compileOptions {
+                        sourceCompatibility JavaVersion.VERSION_11
+                        targetCompatibility JavaVersion.VERSION_11
+                    }
+                }
+            }
+            if (subproject.hasProperty('kotlinOptions')) {
+                subproject.kotlinOptions.jvmTarget = '11'
+            }
+        } catch (ignored) {}
+    }
+}

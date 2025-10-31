@@ -440,12 +440,12 @@ const styles = StyleSheet.create({
     },
     dropdown: {
         borderRadius: 12,
-        borderColor: '#ddd',
+        borderColor: '#d1d5db',
         height: 45,
         paddingHorizontal: 12,
     },
     dropdownBox: {
-        borderColor: '#ddd',
+        borderColor: '#d1d5db',
     },
     radioContainer: {
         flexDirection: 'row',

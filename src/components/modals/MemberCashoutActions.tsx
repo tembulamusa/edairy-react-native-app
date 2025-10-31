@@ -1,24 +1,107 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, Alert, StyleSheet } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useNavigation } from "@react-navigation/native";
 import CashoutFormModal from "./CashoutFormModal";
 import MemberWalletTransfer from "../screenSections/MemberWalletTransfer";
+import fetchCommonData from "../utils/fetchCommonData";
+import makeRequest from "../utils/makeRequest";
 
 type MemberCashoutActionsProps = {
     memberId: number;
     selectedMember: any;
     setSelectedmember: (member: any) => void;
     onRefresh?: () => void; // ✅ NEW — optional refresh callback from parent
+    customer_type: string;
 };
 
 const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
     memberId,
     selectedMember,
     onRefresh,
+    setSelectedmember,
+    customer_type,
 }) => {
     const navigation = useNavigation();
-    const [isCashoutModalVisible, setIsCashoutModalVisible] = React.useState(false);
+    const [isCashoutModalVisible, setIsCashoutModalVisible] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [memberWalletBalanceDetails, setMemberWalletBalanceDetails] = useState(null);
+
+    const refreshMemberData = async () => {
+        try {
+            setLoading(true);
+
+            // define params BEFORE Promise.all
+            const params: any = {
+                id: selectedMember?.id,
+            };
+
+            // run your fetch
+            const [members] = await Promise.all([
+                fetchCommonData({ name: "cashout_members", params, cachable: false }),
+            ]);
+            const formattedMembers = members.map((item: any) => ({
+                id: item?.id,
+                uuid: item?.uuid,
+                first_name: item?.customer?.first_name || "",
+                last_name: item?.customer?.last_name || "",
+                primary_phone: item?.customer?.primary_phone || "",
+                wallet_balance: item?.wallet_balance ?? 0,
+                next_level: item?.next_level ?? null,
+                member_id: item?.customer_id, // used for linking to user.member_id
+                member_type: item?.customer_type,
+            }));
+
+            // ✅ Update only the selected member if needed
+            if (formattedMembers.length > 0) {
+                setSelectedmember(formattedMembers[0]);
+            }
+
+            // ✅ Optionally trigger full list refresh in parent
+            if (onRefresh) onRefresh();
+
+        } catch (error) {
+            console.error("Error refreshing member:", error);
+            Alert.alert("Error", "Could not refresh member data");
+        } finally {
+            setLoading(false);
+        }
+    };
+    const updateMemberBalance = async () => {
+
+        const [status, response] = await makeRequest(
+            {
+                url: `wallet-details-balance?owner=member&&member_id=${memberId}`,
+                method: "GET",
+
+            }
+        );
+        if ([200, 201].includes(status)) {
+            setMemberWalletBalanceDetails(response?.data || { currentBalance: 0 });
+        } else {
+            setMemberWalletBalanceDetails({ currentBalance: 0 });
+        }
+    }
+
+
+    useEffect(() => {
+        if (!memberId) return;
+
+        const runInitial = async () => {
+            await refreshMemberData();
+            await updateMemberBalance();
+        };
+
+        runInitial();
+
+        const interval = setInterval(() => {
+            refreshMemberData();
+            updateMemberBalance();
+        }, 20000); // every 20 seconds
+
+        return () => clearInterval(interval);
+    }, [memberId]);
+
 
     if (!selectedMember) {
         return (
@@ -30,8 +113,7 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
         );
     }
 
-    const walletBalance = selectedMember?.wallet_balance ?? 0;
-    const nextLevel = selectedMember?.next_level ?? "pending";
+    const nextLevel = selectedMember?.next_level?.toLowerCase() ?? "pending";
 
     // ---- Case: Needs Liveness ----
     if (nextLevel === "liveness") {
@@ -59,7 +141,7 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
     }
 
     // ---- Case: Wallet too low ----
-    if (walletBalance <= 500) {
+    if (memberWalletBalanceDetails?.currentBalance <= 500) {
         if (nextLevel === "admin_verify") {
             return (
                 <View style={styles.warningContainer}>
@@ -97,12 +179,14 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
                     <CashoutFormModal
                         visible={isCashoutModalVisible}
                         onClose={() => setIsCashoutModalVisible(false)}
-                        onSubmit={({ cashout }) => {
-                            // Alert.alert("Cashout Requested", "Cashout successfully submitted!");
-                            if (onRefresh) onRefresh();
+                        onSubmit={async ({ cashout }) => {
+                            // Optionally show a toast or loader
+                            await updateMemberBalance(); // 👈 instantly refresh wallet balance
+                            if (onRefresh) onRefresh();  // if parent list also needs refresh
                         }}
                         selectedMember={selectedMember}
                         memberId={memberId}
+                        customer_type={customer_type}
                     />
                 </View>
             );
@@ -111,7 +195,7 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
         if (nextLevel?.toLowerCase() === "pending") {
             return (
                 <View style={styles.emptyState}>
-
+                    <Text>User Pending. Please See later</Text>
                 </View>
             );
         }
@@ -119,14 +203,44 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
         return (
             <View style={styles.emptyState}>
                 <Text style={styles.emptyText}>
-                    Default: Next level is "{nextLevel}". Please come back later.
+                    Next level is "{nextLevel}". Please Wait or come back later.
                 </Text>
             </View>
         );
     }
 
     // ---- Default: Wallet Transfer ----
-    return <MemberWalletTransfer memberId={memberId} />;
+    return (
+        <View>
+            <MemberWalletTransfer
+                memberId={memberId}
+                walletBalance={memberWalletBalanceDetails?.currentBalance}
+            />
+            {(
+                <View style={{ marginBottom: 10 }}>
+                    <TouchableOpacity
+                        style={styles.cashoutButtonContainer}
+                        onPress={() => setIsCashoutModalVisible(true)}
+                    >
+                        <MaterialIcons name="account-balance-wallet" size={20} color="#16a34a" />
+                        <Text style={styles.cashoutButtonText2}>Request Cashout</Text>
+                    </TouchableOpacity>
+
+                    <CashoutFormModal
+                        visible={isCashoutModalVisible}
+                        onClose={() => setIsCashoutModalVisible(false)}
+                        onSubmit={({ cashout }) => {
+                            if (onRefresh) onRefresh();
+                        }}
+                        selectedMember={selectedMember}
+                        memberId={memberId}
+                        customer_type={customer_type}
+                    />
+                </View>
+            )}
+        </View>
+    );
+
 };
 
 export default MemberCashoutActions;
@@ -189,4 +303,18 @@ const styles = StyleSheet.create({
         borderRadius: 8,
     },
     cashoutButtonText: { color: "#fff", fontWeight: "600", fontSize: 16, marginLeft: 8 },
+    cashoutButtonContainer: {
+        alignSelf: "flex-end", // floats to the right
+        flexDirection: "row",
+        alignItems: "center",
+        marginTop: 8,
+    },
+    cashoutButtonText2: {
+        color: "#16a34a", // blue
+        fontStyle: "italic", // italicized
+        fontWeight: "600", // semibold
+        textDecorationLine: "underline", // underlined
+        marginLeft: 4, // small spacing from icon
+    },
+
 });

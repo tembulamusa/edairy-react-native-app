@@ -13,6 +13,7 @@ import MemberCashoutActions from "../../components/modals/MemberCashoutActions";
 
 const MemberCashoutListScreen: React.FC = () => {
     const [loading, setLoading] = useState(false);
+    const [customer_type, setCustomerType] = useState<string>("member");
     const [commonData, setCommonData] = useState<{ members?: any[] }>({});
     const [memberValue, setMemberValue] = useState<number | null>(null);
     const [selectedMember, setSelectedMember] = useState<any | null>(null);
@@ -168,7 +169,9 @@ const MemberCashoutListScreen: React.FC = () => {
                         <MemberCashoutActions
                             memberId={memberValue}
                             selectedMember={selectedMember}
+                            setSelectedmember={setSelectedMember}
                             onRefresh={handleRefresh}
+                            customer_type={customer_type}
                         />
                         <CashoutsListComponent memberId={memberValue} />
                     </>

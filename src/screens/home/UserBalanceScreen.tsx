@@ -40,7 +40,7 @@ const UserBalanceSummaryScreen = () => {
                 setCommonData(allData);
                 setCustomerItems(
                     (members || []).map((c: any) => ({
-                        label: `${c.customer?.first_name} ${c.customer?.last_name}`,
+                        label: `${c.first_name} ${c.last_name}(${c.primary_phone})`,
                         value: c.id,
                     }))
                 );
@@ -355,12 +355,12 @@ const styles = StyleSheet.create({
     },
     dropdown: {
         borderRadius: 12,
-        borderColor: '#ddd',
+        borderColor: '#d1d5db',
         height: 45,
         paddingHorizontal: 12,
     },
     dropdownBox: {
-        borderColor: '#ddd',
+        borderColor: '#d1d5db',
     },
     radioContainer: {
         flexDirection: 'row',
