@@ -15,7 +15,17 @@ import {
   Warning2,
   Bluetooth,
 } from 'iconsax-react-nativejs';
-import { BluetoothDevice } from 'react-native-bluetooth-classic';
+// Unified device type (supports both BLE and Classic)
+type UnifiedDevice = {
+  id: string;
+  address: string;
+  name?: string;
+  type: 'ble' | 'classic';
+  classicDevice?: any;
+  bleDevice?: any;
+  serviceUUIDs?: string[];
+  rssi?: number;
+};
 
 interface BluetoothConnectionModalProps {
   visible: boolean;
@@ -29,12 +39,12 @@ interface BluetoothConnectionModalProps {
   onRetry?: (() => void) | null;
   suggestions?: string[];
   scanForDevices: () => Promise<void>;
-  connectToDevice: (id: string) => Promise<BluetoothDevice | null>;
+  connectToDevice: (id: string) => Promise<UnifiedDevice | null>;
   isScanning: boolean;
   isConnecting: boolean;
-  devices: BluetoothDevice[];
+  devices: UnifiedDevice[];
   deviceType: 'scale' | 'printer';
-  connectedDevice: BluetoothDevice | null;
+  connectedDevice: UnifiedDevice | null;
   disconnect?: (id?: string) => Promise<void> | void;
 }
 
@@ -97,9 +107,9 @@ const BluetoothConnectionModal: React.FC<BluetoothConnectionModalProps> = ({
     });
   };
 
-  const handleConnect = async (device: BluetoothDevice) => {
-    const id = device.address || device.id;
-    console.log('Attempt connect', id);
+  const handleConnect = async (device: UnifiedDevice) => {
+    const id = device.id || device.address;
+    console.log('Attempt connect', id, 'type:', device.type);
     setConnectingId(id);
     setModalStatus(null);
     setModalMessage('');
@@ -107,7 +117,7 @@ const BluetoothConnectionModal: React.FC<BluetoothConnectionModalProps> = ({
       const result = await connectToDevice(id);
       if (result) {
         setModalStatus('success');
-        setModalMessage(`Connected to ${device.name || 'device'}`);
+        setModalMessage(`Connected to ${device.name || 'device'} (${device.type?.toUpperCase() || 'UNKNOWN'})`);
         setTimeout(() => handleClose(), 1500);
       } else {
         setModalStatus('error');
@@ -129,14 +139,14 @@ const BluetoothConnectionModal: React.FC<BluetoothConnectionModalProps> = ({
     }
   };
 
-  const handleDisconnect = async (device: BluetoothDevice) => {
+  const handleDisconnect = async (device: UnifiedDevice) => {
     if (!disconnect) {
       console.warn('Disconnect function not provided');
       setModalStatus('error');
       setModalMessage('Disconnect operation not available');
       return;
     }
-    const id = device.address || device.id;
+    const id = device.id || device.address;
     console.log('Attempt disconnect', id);
     setDisconnectingId(id);
     setModalStatus(null);
@@ -228,19 +238,25 @@ const BluetoothConnectionModal: React.FC<BluetoothConnectionModalProps> = ({
               ) : (
                 <FlatList
                   data={devices}
-                  keyExtractor={(item) => item.address || item.id}
+                  keyExtractor={(item) => item.id || item.address}
                   style={styles.devicesList}
                   renderItem={({ item }) => {
-                    const id = item.address || item.id;
-                    const isConnecting = connectingId === id || isConnecting;
+                    const id = item.id || item.address;
+                    const isConnectingThis = connectingId === id || isConnecting;
                     const isDisconnecting = disconnectingId === id;
-                    const isBusy = isConnecting || isDisconnecting;
-                    const isConnected = connectedDevice && (connectedDevice.address === item.address || connectedDevice.id === item.id);
+                    const isBusy = isConnectingThis || isDisconnecting;
+                    const isConnected = connectedDevice && (
+                      connectedDevice.id?.toLowerCase() === id?.toLowerCase() || 
+                      connectedDevice.address?.toLowerCase() === id?.toLowerCase()
+                    );
 
                     return (
                       <View style={styles.deviceItem}>
                         <View style={styles.deviceInfo}>
-                          <Text style={styles.deviceName}>{item.name || 'Unnamed Device'}</Text>
+                          <Text style={styles.deviceName}>
+                            {item.name || 'Unnamed Device'}
+                            {item.type && <Text style={{ color: '#64748B', fontSize: 11 }}> ({item.type.toUpperCase()})</Text>}
+                          </Text>
                           <Text style={styles.deviceAddress}>{item.address || item.id}</Text>
                         </View>
 

@@ -12,7 +12,7 @@ import {
     ScrollView,
 } from "react-native";
 import BluetoothConnectionModal from '../../components/modals/BluetoothConnectionModal';
-import useBluetoothClassic from "../../hooks/useBluetoothService.ts";
+import useBluetoothService from "../../hooks/useBluetoothService.ts";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import fetchCommonData from "../../components/utils/fetchCommonData.ts";
 import makeRequest from "../../components/utils/makeRequest.ts";
@@ -81,8 +81,8 @@ const MemberKilosScreen = () => {
     const [scaleModalVisible, setScaleModalVisible] = useState(false);
     const [successModalVisible, setSuccessModalVisible] = useState(false);
     const [isPrinting, setIsPrinting] = useState(false);
-    // --- Scale hook for weight operations ---
-    const scaleBluetooth = useBluetoothClassic({ deviceType: "scale" });
+    // --- Scale hook for weight operations (unified BLE + Classic) ---
+    const scaleBluetooth = useBluetoothService({ deviceType: "scale" });
 
     // --- Destructure for scale operations ---
     const {
@@ -99,39 +99,101 @@ const MemberKilosScreen = () => {
     // Printer hook no longer needed - using direct BluetoothManager in printReceipt utility
 
     // Update scale weight when data is received from connected device
+    // lastMessage is already weight in kgs (0.01 precision) from useBluetoothService
     useEffect(() => {
         if (lastMessage && connectedScaleDevice) {
+            // lastMessage is already weight in kgs, just parse and use it
             const weight = parseFloat(lastMessage);
             if (!isNaN(weight)) {
                 setScaleWeight(weight);
-                console.log(`⚖️ Scale weight updated: ${weight} KG`);
             }
         }
     }, [lastMessage, connectedScaleDevice]);
 
-    // Auto-connect to scale on mount
+    // Auto-connect on load: Check AsyncStorage and connect based on stored type
     useEffect(() => {
-        const connectToLastScale = async () => {
+        const autoConnectToLastDevice = async () => {
             try {
-                console.log('🔌 Auto-connect starting');
+                // Skip if already connected
+                if (connectedScaleDevice) {
+                    try {
+                        let stillConnected = false;
+                        if (connectedScaleDevice.type === 'ble' && connectedScaleDevice.bleDevice) {
+                            stillConnected = (connectedScaleDevice.bleDevice as any).isConnected === true;
+                        } else if (connectedScaleDevice.type === 'classic' && connectedScaleDevice.classicDevice) {
+                            stillConnected = await connectedScaleDevice.classicDevice.isConnected();
+                        }
+                        if (stillConnected) {
+                            console.log('[MemberKilos] AUTO-CONNECT: Already connected, skipping');
+                            return;
+                        }
+                    } catch {}
+                }
 
-                // Printer connection is handled separately when needed
+                // Retrieve last device from AsyncStorage
+                const lastScale = await AsyncStorage.getItem('last_device_scale');
+                if (!lastScale) {
+                    console.log('[MemberKilos] AUTO-CONNECT: No last device found in storage');
+                    return;
+                }
 
-                // Try to connect to scale
-                const lastUsedScale = await AsyncStorage.getItem('last_device_scale');
-                if (lastUsedScale) {
-                    const scaleData = JSON.parse(lastUsedScale);
-                    console.log('🔌 Auto-connecting to last scale:', scaleData.name || scaleData.address);
-                    await connectToScaleDevice(scaleData.address);
-                } else {
-                    console.log('ℹ️ No last scale found in storage');
+                let deviceData: any = null;
+                try {
+                    deviceData = typeof lastScale === 'string' ? JSON.parse(lastScale) : lastScale;
+                    console.log('[MemberKilos] AUTO-CONNECT: Last device found:', deviceData);
+                    console.log('[MemberKilos] AUTO-CONNECT: Device type:', deviceData.type || 'unknown');
+                } catch (parseError) {
+                    console.error('[MemberKilos] AUTO-CONNECT: Error parsing stored device:', parseError);
+                    return;
+                }
+
+                const deviceId = deviceData.id || deviceData.address || deviceData.address_or_id;
+                if (!deviceId) {
+                    console.log('[MemberKilos] AUTO-CONNECT: No valid device ID found');
+                    return;
+                }
+
+                // First, trigger a scan to discover devices
+                console.log('[MemberKilos] AUTO-CONNECT: Starting device scan to find saved device...');
+                scanForScaleDevices(); // Don't await - let it run in background
+
+                // Wait for scan to complete (15 seconds for BLE scan + buffer)
+                console.log('[MemberKilos] AUTO-CONNECT: Waiting for scan to complete (18 seconds)...');
+                await new Promise<void>(r => setTimeout(() => r(), 18000)); // Wait 18 seconds for scan to finish
+
+                // Re-check scaleDevices after waiting (state should be updated by now)
+                // Use a small delay to ensure state is updated
+                await new Promise<void>(r => setTimeout(() => r(), 500));
+                
+                console.log('[MemberKilos] AUTO-CONNECT: Checking for device after scan...');
+                console.log('[MemberKilos] AUTO-CONNECT: Looking for device ID:', deviceId);
+                
+                // The connectToDevice function in the hook will handle finding and connecting
+                // It will try BLE first, then Classic as fallback
+                // So we can just call it with the device ID and let the hook handle the rest
+                const storedType = deviceData.type || 'ble';
+                console.log('[MemberKilos] AUTO-CONNECT: Stored type is', storedType, '- attempting connection to:', deviceId);
+                console.log('[MemberKilos] AUTO-CONNECT: connectToDevice will try BLE first, then Classic if needed...');
+                
+                try {
+                    await connectToScaleDevice(deviceId);
+                    console.log('[MemberKilos] AUTO-CONNECT: ✓ Connection attempt completed');
+                } catch (connectError) {
+                    console.error('[MemberKilos] AUTO-CONNECT: Connection error:', connectError);
                 }
             } catch (error) {
-                console.error("Failed to auto-connect to scale:", error);
+                console.error('[MemberKilos] AUTO-CONNECT: Failed:', error);
+                // Don't show alert - just log the error to avoid annoying the user
             }
         };
-        connectToLastScale();
-    }, []); // Only run once on mount
+
+        // Run auto-connect after a short delay to allow component to mount
+        const timeout = setTimeout(() => {
+            autoConnectToLastDevice();
+        }, 2000); // Slightly longer delay to ensure hook is initialized
+
+        return () => clearTimeout(timeout);
+    }, []); // Run once on mount
 
     // Show alert if connection failed
     useEffect(() => {
@@ -263,6 +325,16 @@ const MemberKilosScreen = () => {
         }
         const tare = measuringCan.tare_weight; // Always use measuring can's tare
         const net = parseFloat((scaleWeight - tare).toFixed(2));
+        
+        // Prevent adding entry if net weight is negative
+        if (net < 0) {
+            Alert.alert(
+                "Invalid Weight",
+                `Net weight is negative (${net.toFixed(2)} KG). Please check the scale weight and measuring can tare weight. Entry not added.`
+            );
+            return;
+        }
+        
         const entry = {
             can_id: can?.id ?? null,
             can_label: can?.can_id ?? `Can ${can?.id ?? "N/A"}`,
@@ -277,13 +349,24 @@ const MemberKilosScreen = () => {
         setCanValue(null);
     };
 
-    // Format receipt for member kilos
-    const formatMemberKilosReceipt = (responseData: any) => {
-        const selectedMember = commonData.members?.find((m: any) => m.id === memberValue);
-        const selectedTransporter = commonData.transporters?.find((t: any) => t.id === transporterValue);
-        const selectedShift = commonData.shifts?.find((s: any) => s.id === shiftValue);
-        const selectedRoute = commonData.routes?.find((r: any) => r.id === routeValue);
-        const selectedCenter = commonData.centers?.find((c: any) => c.id === centerValue);
+    // Format receipt for member kilos (takes all needed parameters to avoid closure issues)
+    const formatMemberKilosReceipt = (
+        responseData: any,
+        capturedEntries: any[],
+        capturedTotalCans: number,
+        capturedTotalQuantity: number | null,
+        capturedMemberValue: number | null,
+        capturedTransporterValue: number | null,
+        capturedShiftValue: number | null,
+        capturedRouteValue: number | null,
+        capturedCenterValue: number | null,
+        capturedCommonData: any
+    ) => {
+        const selectedMember = capturedCommonData?.members?.find((m: any) => m.id === capturedMemberValue);
+        const selectedTransporter = capturedCommonData?.transporters?.find((t: any) => t.id === capturedTransporterValue);
+        const selectedShift = capturedCommonData?.shifts?.find((s: any) => s.id === capturedShiftValue);
+        const selectedRoute = capturedCommonData?.routes?.find((r: any) => r.id === capturedRouteValue);
+        const selectedCenter = capturedCommonData?.centers?.find((c: any) => c.id === capturedCenterValue);
 
         let receipt = "";
         receipt += "      E-DAIRY LIMITED\n";
@@ -298,17 +381,17 @@ const MemberKilosScreen = () => {
         receipt += `Route: ${selectedRoute?.route_name || 'N/A'}\n`;
         receipt += `Center: ${selectedCenter?.centre || 'N/A'}\n`;
         receipt += "--------------------------------\n";
-        receipt += `Total Cans: ${totalCans}\n`;
-        receipt += `Total Quantity: ${totalQuantity?.toFixed(2)} KG\n`;
+        receipt += `Total Cans: ${capturedTotalCans}\n`;
+        receipt += `Total Quantity: ${(capturedTotalQuantity || 0).toFixed(2)} KG\n`;
         receipt += "--------------------------------\n";
         receipt += "Cans Details:\n";
 
-        entries.forEach((entry, index) => {
-            receipt += `${index + 1}. Can ${entry.can_label} - Net: ${entry.net} KG\n`;
+        (capturedEntries || []).forEach((entry: any, index: number) => {
+            receipt += `${index + 1}. Can ${entry?.can_label || 'N/A'} - Net: ${entry?.net || 0} KG\n`;
         });
 
         receipt += "--------------------------------\n";
-        receipt += `TOTAL NET WEIGHT: ${totalQuantity?.toFixed(2)} KG\n`;
+        receipt += `TOTAL NET WEIGHT: ${(capturedTotalQuantity || 0).toFixed(2)} KG\n`;
         receipt += "================================\n";
         receipt += "Thank you for your delivery!\n";
         receipt += "================================\n";
@@ -323,8 +406,35 @@ const MemberKilosScreen = () => {
         if (!memberValue) { Alert.alert("Validation", "Please select a member."); return; }
         if (entries.length === 0) { Alert.alert("Nothing to send", "No recorded cans to send."); return; }
 
+        // Check if any entry has negative net weight
+        const hasNegativeNet = entries.some((entry) => {
+            const net = entry?.net ?? 0;
+            return net < 0;
+        });
+
+        if (hasNegativeNet) {
+            Alert.alert(
+                "Invalid Entry",
+                "One or more entries have negative net weight. Please check your entries and remove or correct any entries with negative values before sending.",
+                [{ text: "OK" }]
+            );
+            return;
+        }
+
         setLoading(true);
         try {
+            // Capture ALL state values before async operations to avoid closure issues
+            const currentConnectedDevice = connectedScaleDevice;
+            const capturedEntries = [...entries]; // Create a copy
+            const capturedTotalCans = totalCans;
+            const capturedTotalQuantity = totalQuantity;
+            const capturedMemberValue = memberValue;
+            const capturedTransporterValue = transporterValue;
+            const capturedShiftValue = shiftValue;
+            const capturedRouteValue = routeValue;
+            const capturedCenterValue = centerValue;
+            const capturedCommonData = commonData;
+
             const payload = {
                 member_id: memberValue,
                 transporter_id: transporterValue,
@@ -334,22 +444,41 @@ const MemberKilosScreen = () => {
                 cans: entries,
                 total_cans: totalCans,
                 total_quantity: totalQuantity,
-                is_manual_entry: !connectedScaleDevice, // 👈 automatically true if no device
-                device_uid: connectedScaleDevice?.id ?? null, // 👈 include device id if connected
+                is_manual_entry: !currentConnectedDevice, // 👈 use captured value
+                device_uid: currentConnectedDevice?.id || currentConnectedDevice?.address || null, // 👈 use captured value
             };
-            // Alert.alert("data center id", payload.center_id?.toString() ?? "N/A");                     
+
             const [status, response] = await makeRequest({
                 url: "member-kilos", // adjust to your real endpoint
                 method: "POST",
                 data: payload as any,
             });
+
             if ([200, 201].includes(status)) {
+                // Prepare receipt text first using captured values
+                let receiptText = "";
+                try {
+                    receiptText = formatMemberKilosReceipt(
+                        response?.data,
+                        capturedEntries,
+                        capturedTotalCans,
+                        capturedTotalQuantity,
+                        capturedMemberValue,
+                        capturedTransporterValue,
+                        capturedShiftValue,
+                        capturedRouteValue,
+                        capturedCenterValue,
+                        capturedCommonData
+                    );
+                } catch (formatError) {
+                    console.error("Error formatting receipt:", formatError);
+                    // Create a simple receipt if formatting fails
+                    receiptText = `MEMBER KILOS RECEIPT\nDate: ${new Date().toISOString().split("T")[0]}\nTotal Quantity: ${(capturedTotalQuantity || 0).toFixed(2)} KG\n`;
+                }
+
                 // Show success modal with loading state
                 setSuccessModalVisible(true);
                 setIsPrinting(true);
-
-                // Prepare receipt text
-                const receiptText = formatMemberKilosReceipt(response?.data);
 
                 // Print receipt in the background
                 try {
@@ -365,31 +494,68 @@ const MemberKilosScreen = () => {
                     }
 
                     // Reconnect to scale if there was one connected prior
-                    const lastScale = await AsyncStorage.getItem('last_device_scale');
-                    if (lastScale) {
-                        const scaleData = JSON.parse(lastScale);
-                        try {
-                            console.log('🔄 Reconnecting to scale...');
-                            await connectToScaleDevice(scaleData.address);
-                            console.log('✅ Reconnected to scale');
-                        } catch (reErr) {
-                            console.warn('⚠️ Failed to reconnect to scale:', reErr);
+                    try {
+                        const lastScale = AsyncStorage.getItem('last_device_scale');
+                        if (lastScale) {
+                            try {
+                                const scaleData = typeof lastScale === 'string' ? JSON.parse(lastScale) : lastScale;
+
+                                if (scaleData && (scaleData.id || scaleData.address || scaleData.address_or_id)) {
+                                    console.log('🔄 Reconnecting to scale...');
+                                    console.log('🔄 Scale data:', scaleData);
+                                    console.log('🔄 Scale type:', scaleData.type || 'unknown');
+
+                                    // Use id as primary identifier (fallback to address for backward compatibility)
+                                    const deviceId = scaleData.id || scaleData.address || scaleData.address_or_id;
+
+                                    if (deviceId) {
+                                        // Check device type and reconnect accordingly
+                                        const storedType = scaleData.type || 'ble';
+                                        if (storedType === 'ble') {
+                                            // Try to reconnect - will only connect if device is available
+                                            await connectToScaleDevice(deviceId);
+                                            console.log('✅ Reconnected to scale');
+                                        } else {
+                                            console.log('⚠️ Stored device type is', storedType, '- BLE only mode, skipping reconnection');
+                                        }
+                                    }
+                                } else {
+                                    console.warn('⚠️ Invalid scale data structure');
+                                }
+                            } catch (parseErr) {
+                                console.warn('⚠️ Failed to parse stored scale data:', parseErr);
+                                // Don't crash, just log the error
+                            }
+                        } else {
+                            console.log('ℹ️ No last scale device found in storage');
                         }
+                    } catch (storageErr) {
+                        console.warn('⚠️ Error retrieving last scale device:', storageErr);
+                        // Don't crash, just log the error
                     }
                 } catch (printerError) {
                     console.error("❌ Printer error:", printerError);
                     // Don't show error to user - just log it
                 } finally {
                     setIsPrinting(false);
-
-                    // Clear local records
-                    setEntries([]);
-                    setTotalCans(0);
-                    setTotalQuantity(0);
-                    setMemberValue(null);
-                    setCanValue(null);
-                    setCan(null);
                 }
+
+                // Clear local records AFTER printing/reconnection is complete
+                // Use setTimeout to ensure state updates happen after current render cycle
+                // Also wrap in try-catch to prevent crashes during state updates
+                setTimeout(() => {
+                    try {
+                        setEntries([]);
+                        setTotalCans(0);
+                        setTotalQuantity(0);
+                        setScaleWeight(null);
+                        setCanValue(null);
+                        setCan(null);
+                        // Note: Don't clear memberValue here - let user decide or handle elsewhere if needed
+                    } catch (clearError) {
+                        console.error("Error clearing state:", clearError);
+                    }
+                }, 100);
             } else {
                 console.error("sendMemberKilos error", response);
                 Alert.alert("Failed", response?.message || "Failed to send kilos.");
@@ -621,29 +787,29 @@ const MemberKilosScreen = () => {
                                 <TextInput
                                     style={styles.input}
                                     placeholder="Scale Wt"
-                                    value={scaleWeightText}
+                                    value={scaleWeight !== null && scaleWeight !== undefined ? String(scaleWeight) : ""}
                                     keyboardType="decimal-pad"
                                     editable={!connectedScaleDevice}
                                     onChangeText={(text) => {
+                                        // Only handle onChangeText if scale is NOT connected (manual entry mode)
                                         if (!connectedScaleDevice) {
                                             // Allow only digits and a single decimal
                                             const cleaned = text.replace(/[^0-9.]/g, "");
                                             if ((cleaned.match(/\./g) || []).length > 1) return;
 
-                                            setScaleWeightText(cleaned);
-
                                             // Convert to number if valid
-                                            const num = parseFloat(cleaned);
-                                            if (!isNaN(num)) setScaleWeight(num);
-                                            else setScaleWeight(null);
+                                            if (cleaned === "" || cleaned === ".") {
+                                                setScaleWeight(null);
+                                            } else {
+                                                const parsed = parseFloat(cleaned);
+                                                if (!isNaN(parsed)) {
+                                                    setScaleWeight(parsed);
+                                                } else {
+                                                    setScaleWeight(null);
+                                                }
+                                            }
                                         }
-                                    }}
-                                    onBlur={() => {
-                                        // Format to 2 decimals when done typing
-                                        if (scaleWeight !== null) {
-                                            const formatted = scaleWeight.toFixed(2);
-                                            setScaleWeightText(formatted);
-                                        }
+                                        // If connected to scale, onChangeText is ignored (value comes from lastMessage)
                                     }}
                                 />
                             </View>
@@ -679,7 +845,7 @@ const MemberKilosScreen = () => {
                                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
                                     <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#22c55e', marginRight: 6 }} />
                                     <Text style={{ color: '#22c55e', fontWeight: '600', fontSize: 12 }}>
-                                        Connected: {connectedScaleDevice.name || 'Unknown Device'}
+                                        Connected: {connectedScaleDevice?.name || connectedScaleDevice?.address || 'Unknown Device'} ({connectedScaleDevice?.type === 'ble' ? 'BLE' : connectedScaleDevice?.type === 'classic' ? 'CLASSIC' : 'UNKNOWN'})
                                     </Text>
                                 </View>
                             ) : (
