@@ -18,7 +18,6 @@ const screenWidth = Dimensions.get('window').width;
 const iconSize = screenWidth / 4 - 20;
 
 const quickLinks = [
-    { name: 'Scale Test (BLE)', icon: 'speed', navigateTo: 'Members', screenName: 'ScaleTest', iconColor: '#0ea5e9' },
     { name: 'Farmer Registration', icon: 'person-add', navigateTo: 'Members', screenName: 'MemberRegistration', iconColor: '#1b7f74' },
     { name: 'Member Kilos', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberKilos', iconColor: '#e76f51' },
     { name: 'Cashout', icon: 'account-balance-wallet', navigateTo: 'Members', screenName: 'MemberCashout', iconColor: '#1b7f74' },

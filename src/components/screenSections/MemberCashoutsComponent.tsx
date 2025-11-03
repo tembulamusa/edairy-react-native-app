@@ -75,12 +75,11 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
 
         try {
             const [status, response] = await makeRequest({
-                url: `member-loan-transactions?memberId=${memberId}`,
+                url: `member-loan-transactions?member_id=${memberId}`,
                 method: "GET",
             });
-
-            if ([200, 201].includes(status) && response?.transactions) {
-                setTransactions(response.transactions);
+            if ([200, 201].includes(status)) {
+                setTransactions(response?.data || []);
             } else {
                 setTransactions([]);
             }
