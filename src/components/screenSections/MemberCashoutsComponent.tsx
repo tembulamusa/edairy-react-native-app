@@ -102,9 +102,11 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
         return () => clearInterval(interval);
     }, [memberId]);
 
-    /** --------------------------
-     * Render Cashout Item
-     -------------------------- */
+    /*
+    * --------------------------
+    * Render Cashout Item
+    -------------------------- 
+    */
     const renderCashoutItem = ({ item }: { item: Cashout }) => {
         const isAwaitingAcceptance =
             item.status?.toLowerCase() === "awaitingacceptance";

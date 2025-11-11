@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     View,
     Text,
@@ -11,11 +11,13 @@ import {
     ActivityIndicator,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+// @ts-ignore - library lacks TypeScript declarations in current setup
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import DropDownPicker from 'react-native-dropdown-picker';
-import StoreSaleModal from '../../components/modals/StoreSaleModal';
 import fetchCommonData from '../../components/utils/fetchCommonData';
 import MilkSaleModal from '../../components/modals/MilkSaleModal';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import useBluetoothService from '../../hooks/useBluetoothService';
 
 const MilkSalesScreen = () => {
     const [fromDate, setFromDate] = useState(new Date());
@@ -41,33 +43,46 @@ const MilkSalesScreen = () => {
     const [transporterValue, setTransporterValue] = useState<number | null>(null);
     const [transporterItems, setTransporterItems] = useState<any[]>([]);
 
+    const [printing, setPrinting] = useState(false);
+
+    const {
+        devices: printerDevices,
+        connectToDevice: connectToPrinterDevice,
+        scanForDevices: scanForPrinters,
+        connectedDevice: connectedPrinter,
+        isConnecting: isConnectingPrinter,
+        printText,
+    } = useBluetoothService({ deviceType: 'printer' });
+
+    const printerDevicesRef = useRef<any[]>(printerDevices || []);
+    useEffect(() => {
+        printerDevicesRef.current = printerDevices || [];
+    }, [printerDevices]);
+
+    const autoConnectAttemptedRef = useRef(false);
+
 
     useEffect(() => {
         const loadCommonData = async () => {
             try {
-                const [transporters, milk_sales, customers, shifts] = await Promise.all([
+                const [transporters, customers, shifts] = await Promise.all([
                     fetchCommonData({ name: 'transporters' }),
-                    fetchCommonData({ name: 'milk_sales' }),
                     fetchCommonData({ name: 'customers' }),
                     fetchCommonData({ name: 'shifts' }),
                 ]);
-                const allData = { transporters, milk_sales, customers, shifts };
+                const allData = { transporters, customers, shifts };
                 setCommonData(allData);
 
                 // ✅ Transporters
                 setTransporterItems(
-                    transporters?.customer?.map((m: any) => ({
-                        label: `${m.first_name} ${m.last_name}`,
-                        value: m.id,
-                    })) || []
-                );
-
-                // ✅ Milk Sales
-                setMilkSaleItems(
-                    milk_sales?.map((s: any) => ({
-                        label: s.item?.description || s.name || `Store ${s.id}`,
-                        value: s.id,
-                    })) || []
+                    (transporters || []).map((transporter: any) => ({
+                        label:
+                            transporter?.full_names ||
+                            transporter?.name ||
+                            transporter?.registration_number ||
+                            `Transporter ${transporter?.id}`,
+                        value: transporter?.id,
+                    }))
                 );
 
                 // ✅ Customers
@@ -125,7 +140,7 @@ const MilkSalesScreen = () => {
 
                 const sales = await fetchCommonData({
                     name: "milk_sales",
-                    filters: {
+                    params: {
                         from,
                         to,
                         customer: customerValue,
@@ -146,21 +161,192 @@ const MilkSalesScreen = () => {
     }, [fromDate, toDate, customerValue, saleType]);
 
 
-    const handleGenerate = () => {
-        const filters = {
-            from: fromDate.toDateString(),
-            to: toDate.toDateString(),
-            customer: customerValue,
-            saleType,
-        };
-        console.log('Generate Report with filters:', filters);
-        alert('Report Generated!');
-    };
-
     const totalAmount = milkSalesSummary.reduce(
         (sum, s) => sum + (s.total_amount || 0),
         0
     );
+
+    const wait = useCallback(
+        (ms: number) => new Promise<void>(resolve => setTimeout(() => resolve(), ms)),
+        []
+    );
+
+    const persistLastPrinter = useCallback(async (device: any) => {
+        if (!device) return;
+        try {
+            const payload = {
+                id: device?.id || device?.address || device?.address_or_id,
+                address: device?.address || device?.id || device?.address_or_id,
+                name: device?.name || device?.label || 'Printer',
+                type: device?.type || 'classic',
+                saved_at: new Date().toISOString(),
+            };
+
+            if (!payload.id || !payload.address) return;
+
+            await AsyncStorage.setItem('last_device_printer', JSON.stringify(payload));
+        } catch (error) {
+            console.error('[MilkSales] persistLastPrinter error', error);
+        }
+    }, []);
+
+    const formatSummaryReceipt = useCallback(() => {
+        const transporter = transporterItems.find(item => item.value === transporterValue);
+        const customer = customerItems.find(item => item.value === customerValue);
+        const shift = shiftItems.find(item => item.value === shiftValue);
+
+        let receipt = '';
+        receipt += '================================\n';
+        receipt += '      MILK SALES SUMMARY\n';
+        receipt += '================================\n';
+        receipt += `Generated: ${new Date().toISOString()}\n`;
+        receipt += `From: ${fromDate.toISOString().split('T')[0]}\n`;
+        receipt += `To: ${toDate.toISOString().split('T')[0]}\n`;
+        receipt += `Sale Type: ${saleType.toUpperCase()}\n`;
+        receipt += `Transporter: ${transporter?.label || 'All'}\n`;
+        receipt += `Customer: ${customer?.label || 'All'}\n`;
+        receipt += `Shift: ${shift?.label || 'All'}\n`;
+        receipt += '--------------------------------\n';
+
+        if (milkSalesSummary.length === 0) {
+            receipt += 'No milk sales found.\n';
+        } else {
+            milkSalesSummary.forEach((item, index) => {
+                const date = item?.transaction_date
+                    ? new Date(item.transaction_date).toISOString().split('T')[0]
+                    : 'N/A';
+                const amount = parseFloat(item?.total_amount || item?.quantity || '0');
+                receipt += `${index + 1}. ${date}  ${amount.toFixed(2)} KES\n`;
+            });
+        }
+
+        receipt += '--------------------------------\n';
+        receipt += `Entries: ${milkSalesSummary.length}\n`;
+        receipt += `Total Amount: ${totalAmount.toFixed(2)} KES\n`;
+        receipt += '================================\n';
+        receipt += 'Thank you for using eDairy\n';
+        receipt += '================================\n\n';
+
+        return receipt;
+    }, [transporterItems, transporterValue, customerItems, customerValue, shiftItems, shiftValue, milkSalesSummary, saleType, fromDate, toDate, totalAmount]);
+
+    const connectToStoredPrinter = useCallback(async () => {
+        if (connectedPrinter) {
+            await persistLastPrinter(connectedPrinter);
+            return connectedPrinter;
+        }
+
+        try {
+            const stored = await AsyncStorage.getItem('last_device_printer');
+            if (!stored) return null;
+
+            const data = JSON.parse(stored);
+            const deviceId = data?.id || data?.address || data?.address_or_id;
+            if (!deviceId) return null;
+
+            const result = await connectToPrinterDevice(deviceId);
+            if (result) {
+                await persistLastPrinter(result);
+                return result;
+            }
+        } catch (error) {
+            console.error('[MilkSales] connectToStoredPrinter error', error);
+        }
+        return null;
+    }, [connectedPrinter, connectToPrinterDevice, persistLastPrinter]);
+
+    const connectToInnerPrinter = useCallback(async () => {
+        try {
+            await scanForPrinters();
+            await wait(2000);
+            const devices = printerDevicesRef.current || [];
+            const innerPrinter = devices.find((device: any) => {
+                const name = (device?.name || device?.label || '').toLowerCase();
+                return name.includes('innerprinter');
+            });
+
+            if (!innerPrinter) return null;
+
+            const deviceId = innerPrinter?.id || innerPrinter?.address || innerPrinter?.address_or_id;
+            if (!deviceId) return null;
+
+            const result = await connectToPrinterDevice(deviceId);
+            if (result) {
+                await persistLastPrinter(result);
+                return result;
+            }
+        } catch (error) {
+            console.error('[MilkSales] connectToInnerPrinter error', error);
+        }
+        return null;
+    }, [scanForPrinters, connectToPrinterDevice, persistLastPrinter, wait]);
+
+    const handlePrintReport = useCallback(async () => {
+        if (printing || isConnectingPrinter) return;
+        if (!milkSalesSummary || milkSalesSummary.length === 0) {
+            Alert.alert('No Data', 'There are no milk sales to print.');
+            return;
+        }
+
+        setPrinting(true);
+        try {
+            let printer = connectedPrinter;
+            if (!printer) {
+                printer = await connectToStoredPrinter();
+            }
+            if (!printer) {
+                printer = await connectToInnerPrinter();
+            }
+
+            if (!printer) {
+                Alert.alert(
+                    'Printer Not Found',
+                    'Unable to connect to InnerPrinter. Please ensure it is powered on and within range.'
+                );
+                return;
+            }
+
+            if (!printText) {
+                Alert.alert('Print Error', 'Printer interface not available.');
+                return;
+            }
+
+            const receipt = formatSummaryReceipt();
+            await printText(receipt);
+            await persistLastPrinter(printer);
+            Alert.alert('Success', 'Milk sales report sent to printer.');
+        } catch (error) {
+            console.error('[MilkSales] handlePrintReport error', error);
+            Alert.alert('Print Error', 'Failed to print the report. Please try again.');
+        } finally {
+            setPrinting(false);
+        }
+    }, [
+        printing,
+        isConnectingPrinter,
+        milkSalesSummary,
+        connectedPrinter,
+        connectToStoredPrinter,
+        connectToInnerPrinter,
+        printText,
+        formatSummaryReceipt,
+        persistLastPrinter,
+    ]);
+
+    useEffect(() => {
+        if (autoConnectAttemptedRef.current) return;
+        autoConnectAttemptedRef.current = true;
+
+        (async () => {
+            let printer = connectedPrinter;
+            if (!printer) {
+                printer = await connectToStoredPrinter();
+            }
+            if (!printer) {
+                await connectToInnerPrinter();
+            }
+        })();
+    }, [connectedPrinter, connectToStoredPrinter, connectToInnerPrinter]);
 
 
     return (
@@ -350,18 +536,25 @@ const MilkSalesScreen = () => {
             )}
 
             {/* Print Report Button */}
-            <TouchableOpacity style={styles.generateButton} onPress={handleGenerate}>
-                <Text style={styles.generateButtonText}>Print Report</Text>
+            <TouchableOpacity
+                style={[styles.generateButton, (printing || isConnectingPrinter || !milkSalesSummary.length) && { opacity: 0.6 }]}
+                onPress={handlePrintReport}
+                disabled={printing || isConnectingPrinter || !milkSalesSummary.length}
+            >
+                <Text style={styles.generateButtonText}>
+                    {printing || isConnectingPrinter ? 'Printing…' : 'Print Report'}
+                </Text>
             </TouchableOpacity>
 
             {/* Modal */}
             <MilkSaleModal
                 visible={modalVisible}
                 onClose={() => setModalVisible(false)}
-                onSave={(data) => {
+                onSave={async (data) => {
                     console.log('New Sale Data:', data);
-                    alert('New Sale Saved!');
+                    Alert.alert('Success', 'New sale saved!');
                     setModalVisible(false);
+                    return;
                 }}
                 commonData={{
                     customers: commonData?.customers,

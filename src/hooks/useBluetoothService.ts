@@ -381,7 +381,15 @@ export default function useBluetoothService({
         setDevices([]);
         setBleDevices([]);
         setClassicDevices([]);
-        
+
+        if (deviceType === "printer") {
+            console.log('[UNIFIED] SCAN: Printer mode detected, scanning Classic devices only');
+            await scanClassicDevices();
+            setIsScanning(false);
+            console.log('[UNIFIED] ========== PRINTER SCAN COMPLETE ==========');
+            return;
+        }
+
         // Scan BLE first (primary)
         await scanBLEDevices();
         
@@ -397,7 +405,7 @@ export default function useBluetoothService({
         setTimeout(() => {
             setIsScanning(false);
         }, 15500); // Slightly longer than BLE scan
-    }, [scanBLEDevices, scanClassicDevices]);
+    }, [deviceType, scanBLEDevices, scanClassicDevices]);
 
     // 🔗 Connect to Classic Bluetooth device (SEPARATE FUNCTION - SECONDARY)
     const connectClassicDevice = useCallback(async (
