@@ -111,9 +111,9 @@ const MembersListScreen: React.FC = () => {
             {/* Left column */}
             <View style={styles.leftColumn}>
                 <Text style={styles.name}>
-                    {item.first_name} {item.last_name}
+                    {item?.first_name} {item?.last_name}
                 </Text>
-                <Text style={styles.phone}>{item.primary_phone}</Text>
+                <Text style={styles.phone}>{item?.primary_phone}</Text>
             </View>
 
             {/* Right column */}

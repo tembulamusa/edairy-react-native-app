@@ -2,13 +2,21 @@ const filterBluetoothDevices = async (
     devices: any[] = [], deviceType: 'scale' | 'printer' = 'scale'
 ) => {
     if (deviceType === 'printer') {
-        // Printer filtering by common brand/keyword
-        const printerKeywords = [
-            'printer', 'print', 'pt', 'zjiang', 'czt', 'gp', 'cenxun',
-            'pos', 'thermal', 'xp', 'zt', 'rongta', 'ez', 't9', 'xprinter', 'star'
-        ];
+        // Printer filtering - prioritize InnerPrinter
         return devices.filter(device => {
             const deviceName = (device.name || '').toLowerCase();
+            
+            // Prioritize InnerPrinter devices
+            if (deviceName.includes('innerprinter') || deviceName.includes('inner')) {
+                console.log(`✅✓✓✓ Including InnerPrinter device: ${device.name || 'Unnamed'} (${device.address})`);
+                return true;
+            }
+            
+            // Other printer keywords
+            const printerKeywords = [
+                'printer', 'print', 'pt', 'zjiang', 'czt', 'gp', 'cenxun',
+                'pos', 'thermal', 'xp', 'zt', 'rongta', 'ez', 't9', 'xprinter', 'star'
+            ];
             const nameMatch = printerKeywords.some(keyword => deviceName.includes(keyword));
             if (nameMatch) {
                 console.log(`✅ Including printer device: ${device.name || 'Unnamed'} (${device.address})`);

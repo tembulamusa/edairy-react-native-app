@@ -19,6 +19,7 @@ interface CustomAlertProps {
     onConfirm?: () => void;
     confirmText?: string;
     cancelText?: string;
+    type?: "success" | "error" | "info";
 }
 
 const CustomAlert: React.FC<CustomAlertProps> = ({
@@ -30,6 +31,7 @@ const CustomAlert: React.FC<CustomAlertProps> = ({
     onConfirm,
     confirmText = "OK",
     cancelText = "Cancel",
+    type = "info",
 }) => {
     const scaleAnim = useRef(new Animated.Value(0.8)).current;
     const opacityAnim = useRef(new Animated.Value(0)).current;
@@ -65,6 +67,35 @@ const CustomAlert: React.FC<CustomAlertProps> = ({
     // 👇 Do not render anything when not visible (avoids blocking UI)
     if (!visible) return null;
 
+    // Determine colors based on type
+    const getColors = () => {
+        switch (type) {
+            case "success":
+                return {
+                    iconColor: "#22C55E", // Green
+                    titleColor: "#16A34A", // Darker green
+                    messageColor: "#15803D", // Even darker green
+                    buttonColor: "#22C55E", // Green
+                };
+            case "error":
+                return {
+                    iconColor: "#EF4444", // Red
+                    titleColor: "#DC2626", // Darker red
+                    messageColor: "#B91C1C", // Even darker red
+                    buttonColor: "#EF4444", // Red
+                };
+            default:
+                return {
+                    iconColor: "#009688", // Teal (default)
+                    titleColor: "#111", // Black
+                    messageColor: "#555", // Gray
+                    buttonColor: "#009688", // Teal
+                };
+        }
+    };
+
+    const colors = getColors();
+
     return (
         <Modal
             transparent
@@ -82,21 +113,21 @@ const CustomAlert: React.FC<CustomAlertProps> = ({
                                 { opacity: opacityAnim, transform: [{ scale: scaleAnim }] },
                             ]}
                         >
-                            <Icon name={icon} size={40} color="#009688" />
-                            <Text style={styles.title}>{title}</Text>
-                            <Text style={styles.message}>{message}</Text>
+                            <Icon name={icon} size={40} color={colors.iconColor} />
+                            <Text style={[styles.title, { color: colors.titleColor }]}>{title}</Text>
+                            <Text style={[styles.message, { color: colors.messageColor }]}>{message}</Text>
 
                             <View style={styles.buttonsRow}>
                                 {onConfirm ? (
                                     <>
                                         <TouchableOpacity
-                                            style={styles.cancelButton}
+                                            style={[styles.cancelButton, { borderColor: colors.buttonColor }]}
                                             onPress={onClose}
                                         >
-                                            <Text style={styles.cancelText}>{cancelText}</Text>
+                                            <Text style={[styles.cancelText, { color: colors.buttonColor }]}>{cancelText}</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
-                                            style={styles.confirmButton}
+                                            style={[styles.confirmButton, { backgroundColor: colors.buttonColor }]}
                                             onPress={onConfirm}
                                         >
                                             <Text style={styles.confirmText}>{confirmText}</Text>
@@ -104,7 +135,7 @@ const CustomAlert: React.FC<CustomAlertProps> = ({
                                     </>
                                 ) : (
                                     <TouchableOpacity
-                                        style={styles.singleButton}
+                                        style={[styles.singleButton, { backgroundColor: colors.buttonColor }]}
                                         onPress={onClose}
                                     >
                                         <Text style={styles.confirmText}>{confirmText}</Text>
@@ -142,11 +173,9 @@ const styles = StyleSheet.create({
         fontSize: 18,
         fontWeight: "700",
         marginTop: 10,
-        color: "#111",
     },
     message: {
         textAlign: "center",
-        color: "#555",
         fontSize: 15,
         marginVertical: 10,
     },
@@ -159,7 +188,6 @@ const styles = StyleSheet.create({
     cancelButton: {
         flex: 1,
         borderWidth: 1,
-        borderColor: "#009688",
         borderRadius: 10,
         paddingVertical: 10,
         alignItems: "center",
@@ -167,21 +195,18 @@ const styles = StyleSheet.create({
     },
     confirmButton: {
         flex: 1,
-        backgroundColor: "#009688",
         borderRadius: 10,
         paddingVertical: 10,
         alignItems: "center",
         marginLeft: 5,
     },
     singleButton: {
-        backgroundColor: "#009688",
         borderRadius: 10,
         paddingVertical: 10,
         paddingHorizontal: 20,
         marginTop: 10,
     },
     cancelText: {
-        color: "#009688",
         fontWeight: "600",
     },
     confirmText: {

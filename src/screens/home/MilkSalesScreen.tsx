@@ -78,6 +78,8 @@ const MilkSalesScreen = () => {
                     (transporters || []).map((transporter: any) => ({
                         label:
                             transporter?.full_names ||
+                            `${transporter?.first_name || ''} ${transporter?.last_name || ''}`.trim() ||
+                            transporter?.company_name ||
                             transporter?.name ||
                             transporter?.registration_number ||
                             `Transporter ${transporter?.id}`,

@@ -8,6 +8,9 @@ import {
     Alert,
     ActivityIndicator,
     StyleSheet,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { globalStyles } from "../../styles";
@@ -35,7 +38,6 @@ export default function LoginScreen({ navigation }: any) {
                 method: "POST",
                 data,
             });
-
             if ([200, 201].includes(status) && response?.access_token) {
                 const token = response.access_token;
 
@@ -47,7 +49,7 @@ export default function LoginScreen({ navigation }: any) {
                     routes: [{ name: "Home" }],
                 });
             } else {
-                Alert.alert("Login Failed", "Invalid phone number or password.");
+                Alert.alert("Login Failed", response?.message || "Invalid phone number or password.");
             }
         } catch (error: any) {
             console.error(error);
@@ -58,48 +60,57 @@ export default function LoginScreen({ navigation }: any) {
     };
 
     return (
-        <View
-            style={{
-                flex: 1,
-                justifyContent: "flex-end",
-                padding: 20,
-                backgroundColor: "rgba(0,0,0,0)", // explicitly transparent
-            }}
+        <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
         >
-            <Text style={[globalStyles.title, { color: "#fff" }]}>Sign In</Text>
-
-            <Text style={[globalStyles.label, { color: "#fff" }]}>Phone Number</Text>
-            <TextInput
-                placeholder="254792924299"
-                placeholderTextColor="#d1d5db"
-                style={globalStyles.input}
-                value={phoneNumber}
-                onChangeText={setPhoneNumber}
-                autoCapitalize="none"
-            />
-
-            <Text style={[globalStyles.label, { color: "#fff" }]}>Password</Text>
-            <TextInput
-                placeholder="password"
-                placeholderTextColor="#d1d5db"
-                secureTextEntry
-                style={globalStyles.input}
-                value={password}
-                onChangeText={setPassword}
-            />
-
-            <TouchableOpacity
-                style={globalStyles.button}
-                onPress={handleLogin}
-                disabled={loading}
+            <ScrollView
+                contentContainerStyle={{
+                    flexGrow: 1,
+                    justifyContent: "flex-end",
+                    padding: 20,
+                    backgroundColor: "rgba(0,0,0,0)", // explicitly transparent
+                }}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
             >
-                {loading ? (
-                    <ActivityIndicator color="#fff" />
-                ) : (
-                    <Text style={globalStyles.buttonText}>Login</Text>
-                )}
-            </TouchableOpacity>
-        </View>
+                <Text style={[globalStyles.title, { color: "#fff" }]}>Sign In</Text>
+
+                <Text style={[globalStyles.label, { color: "#fff" }]}>Phone Number</Text>
+                <TextInput
+                    placeholder="254792924299"
+                    placeholderTextColor="#d1d5db"
+                    style={globalStyles.input}
+                    value={phoneNumber}
+                    onChangeText={setPhoneNumber}
+                    autoCapitalize="none"
+                    keyboardType="phone-pad"
+                />
+
+                <Text style={[globalStyles.label, { color: "#fff" }]}>Password</Text>
+                <TextInput
+                    placeholder="password"
+                    placeholderTextColor="#d1d5db"
+                    secureTextEntry
+                    style={globalStyles.input}
+                    value={password}
+                    onChangeText={setPassword}
+                />
+
+                <TouchableOpacity
+                    style={globalStyles.button}
+                    onPress={handleLogin}
+                    disabled={loading}
+                >
+                    {loading ? (
+                        <ActivityIndicator color="#fff" />
+                    ) : (
+                        <Text style={globalStyles.buttonText}>Login</Text>
+                    )}
+                </TouchableOpacity>
+            </ScrollView>
+        </KeyboardAvoidingView>
     );
 }
 

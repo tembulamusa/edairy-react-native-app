@@ -9,6 +9,8 @@ import {
     Alert,
     TextInput,
     ScrollView,
+    KeyboardAvoidingView,
+    Platform,
 } from "react-native";
 // @ts-ignore - library lacks TypeScript declarations in current setup
 import Icon from "react-native-vector-icons/MaterialIcons";
@@ -191,28 +193,50 @@ const MilkSaleModal: React.FC<MilkSaleModalProps> = ({
         return null;
     }, [connectedPrinter, connectToPrinterDevice, persistLastPrinter, scanForPrinters, wait]);
 
-    const connectToInnerPrinter = useCallback(async () => {
+    const connectToAnyAvailablePrinter = useCallback(async () => {
         try {
+            console.log("[MilkSale] AUTO-CONNECT: Scanning for InnerPrinter...");
             await scanForPrinters();
             await wait(2000);
             const devices = printerDevicesRef.current || [];
-            const innerPrinter = devices.find((device: any) => {
-                const name = (device?.name || device?.label || "").toLowerCase();
-                return name.includes("innerprinter");
+            console.log("[MilkSale] AUTO-CONNECT: Found", devices.length, "printer devices");
+            
+            if (devices.length === 0) {
+                console.log("[MilkSale] AUTO-CONNECT: No printers found in scan");
+                return null;
+            }
+            
+            // Filter for InnerPrinter devices first (case-insensitive)
+            const innerPrinters = devices.filter(device => {
+                const deviceName = (device.name || '').toLowerCase();
+                return deviceName.includes('innerprinter') || deviceName.includes('inner');
             });
-
-            if (!innerPrinter) return null;
-
-            const deviceId = innerPrinter?.id || innerPrinter?.address || innerPrinter?.address_or_id;
-            if (!deviceId) return null;
-
+            
+            let targetPrinter;
+            if (innerPrinters.length > 0) {
+                targetPrinter = innerPrinters[0];
+                console.log("[MilkSale] AUTO-CONNECT: Found InnerPrinter device:", targetPrinter.name || targetPrinter.id);
+            } else {
+                // Fallback to first available printer if no InnerPrinter found
+                targetPrinter = devices[0];
+                console.log("[MilkSale] AUTO-CONNECT: No InnerPrinter found, using first available printer:", targetPrinter.name || targetPrinter.id);
+            }
+            
+            const deviceId = targetPrinter?.id || targetPrinter?.address || targetPrinter?.address_or_id;
+            
+            if (!deviceId) {
+                console.log("[MilkSale] AUTO-CONNECT: Target printer missing device id");
+                return null;
+            }
+            
+            console.log("[MilkSale] AUTO-CONNECT: Attempting connection to", targetPrinter.name || deviceId);
             const result = await connectToPrinterDevice(deviceId);
             if (result) {
                 await persistLastPrinter(result);
                 return result;
             }
         } catch (error) {
-            console.error("[MilkSale] connectToInnerPrinter error", error);
+            console.error("[MilkSale] connectToAnyAvailablePrinter error", error);
         }
         return null;
     }, [scanForPrinters, connectToPrinterDevice, persistLastPrinter, wait]);
@@ -235,12 +259,15 @@ const MilkSaleModal: React.FC<MilkSaleModalProps> = ({
             return true;
         }
 
+        // First, try stored printer
         const stored = await connectToStoredPrinter();
         if (stored) return true;
 
-        const inner = await connectToInnerPrinter();
-        return !!inner;
-    }, [connectedPrinter, isConnectingPrinter, connectToStoredPrinter, connectToInnerPrinter]);
+        // If stored printer failed or doesn't exist, try any available printer
+        console.log("[MilkSale] AUTO-CONNECT: Trying to connect to any available printer...");
+        const anyPrinter = await connectToAnyAvailablePrinter();
+        return !!anyPrinter;
+    }, [connectedPrinter, isConnectingPrinter, connectToStoredPrinter, connectToAnyAvailablePrinter]);
 
     const handlePrintAfterSale = useCallback(async (saleData?: any) => {
         if (connectedPrinter && printText) {
@@ -254,7 +281,7 @@ const MilkSaleModal: React.FC<MilkSaleModalProps> = ({
         if (!autoConnected) {
             Alert.alert(
                 "Printer Not Connected",
-                "Unable to auto-connect to InnerPrinter. Please connect manually.",
+                "Unable to auto-connect to a printer. Please select a printer manually to complete printing.",
                 [
                     {
                         text: "OK",
@@ -336,22 +363,28 @@ const MilkSaleModal: React.FC<MilkSaleModalProps> = ({
 
     return (
         <Modal visible={visible} animationType="slide" transparent={false}>
-            <View style={styles.fullModal}>
-                {/* Header */}
-                <View style={styles.headerWrapper}>
-                    <View style={styles.header}>
-                        <Text style={styles.title}>New Milk Sale</Text>
-                        <TouchableOpacity onPress={onClose}>
-                            <Icon name="close" size={28} color="#fff" />
-                        </TouchableOpacity>
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+            >
+                <View style={styles.fullModal}>
+                    {/* Header */}
+                    <View style={styles.headerWrapper}>
+                        <View style={styles.header}>
+                            <Text style={styles.title}>New Milk Sale</Text>
+                            <TouchableOpacity onPress={onClose}>
+                                <Icon name="close" size={28} color="#fff" />
+                            </TouchableOpacity>
+                        </View>
                     </View>
-                </View>
 
-                <ScrollView
-                    style={styles.contentScroll}
-                    contentContainerStyle={styles.contentContainer}
-                    keyboardShouldPersistTaps="handled"
-                >
+                    <ScrollView
+                        style={styles.contentScroll}
+                        contentContainerStyle={styles.contentContainer}
+                        keyboardShouldPersistTaps="handled"
+                        showsVerticalScrollIndicator={false}
+                    >
                     {/* Transporter + Customer */}
                     <View style={styles.row}>
                         <View style={styles.col}>
@@ -549,7 +582,8 @@ const MilkSaleModal: React.FC<MilkSaleModalProps> = ({
                     isConnecting={isConnectingPrinter}
                     connectedDevice={connectedPrinter}
                 />
-            </View>
+                </View>
+            </KeyboardAvoidingView>
         </Modal>
     );
 };

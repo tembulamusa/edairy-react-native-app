@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { View, StyleSheet, ActivityIndicator } from "react-native";
+import { View, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform } from "react-native";
 import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
 import type { Asset } from "react-native-image-picker";
 
@@ -25,6 +25,7 @@ export default function RegistrationWizard() {
     const [alertMessage, setAlertMessage] = useState("");
     const [alertTitle, setAlertTitle] = useState("Alert");
     const [alertIcon, setAlertIcon] = useState("info");
+    const [alertType, setAlertType] = useState<"success" | "error" | "info">("info");
     const [alertConfirm, setAlertConfirm] = useState<(() => void) | undefined>(undefined);
 
     const [data, setData] = useState<ConfirmationData>({
@@ -65,11 +66,13 @@ export default function RegistrationWizard() {
         title: string,
         message: string,
         icon: string = "info",
+        type: "success" | "error" | "info" = "info",
         onConfirm?: () => void
     ) => {
         setAlertTitle(title);
         setAlertMessage(message);
         setAlertIcon(icon);
+        setAlertType(type);
         setAlertConfirm(() => onConfirm);
         setAlertVisible(true);
     };
@@ -121,6 +124,7 @@ export default function RegistrationWizard() {
                     "Success",
                     "Member registered successfully!",
                     "check-circle",
+                    "success",
                     () => {
                         setAlertVisible(false);
                         navigation.navigate("Members" as never, {
@@ -129,10 +133,10 @@ export default function RegistrationWizard() {
                     }
                 );
             } else {
-                showAlert("Error", response?.message || "Registration failed.", "error");
+                showAlert("Error", response?.message || "Registration failed.", "error", "error");
             }
         } catch (err) {
-            showAlert("Error", "Something went wrong. Please try again.", "error");
+            showAlert("Error", "Something went wrong. Please try again.", "error", "error");
         } finally {
             setLoading(false);
         }
@@ -211,7 +215,11 @@ export default function RegistrationWizard() {
     }
 
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView
+            style={styles.container}
+            behavior={Platform.OS === "ios" ? "padding" : "padding"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 160}
+        >
             {content}
 
             {/* ✅ Always render CustomAlert */}
@@ -220,6 +228,7 @@ export default function RegistrationWizard() {
                 title={alertTitle}
                 message={alertMessage}
                 icon={alertIcon}
+                type={alertType}
                 onClose={() => setAlertVisible(false)}
                 onConfirm={
                     alertConfirm
@@ -230,7 +239,7 @@ export default function RegistrationWizard() {
                         : undefined
                 }
             />
-        </View>
+        </KeyboardAvoidingView>
     );
 }
 

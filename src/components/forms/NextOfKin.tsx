@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { globalStyles } from '../../styles';
 
 interface NextOfKinProps {
@@ -28,64 +28,77 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
     };
 
     return (
-        <View style={styles.container}>
-            <Text style={globalStyles.pageTitle}>Member Registration</Text>
-            <Text style={globalStyles.pageSubTitle}>Next of Kin</Text>
-            <View>
-                <Text style={globalStyles.label}>
-                    Full Name <Text style={globalStyles.required}>*</Text>
-                </Text>
-                <TextInput
-                    style={globalStyles.input}
-                    placeholder="Enter Full Name"
-                    value={form.fullName}
-                    onChangeText={(v) => handleChange("fullName", v)}
-                />
-            </View>
+        <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === "ios" ? "padding" : "padding"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+        >
+            <ScrollView
+                contentContainerStyle={styles.container}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+            >
+                <Text style={globalStyles.pageTitle}>Member Registration</Text>
+                <Text style={globalStyles.pageSubTitle}>Next of Kin</Text>
+                <View>
+                    <Text style={globalStyles.label}>
+                        Full Name <Text style={globalStyles.required}>*</Text>
+                    </Text>
+                    <TextInput
+                        style={globalStyles.input}
+                        placeholder="Enter Full Name"
+                        value={form.fullName}
+                        onChangeText={(v) => handleChange("fullName", v)}
+                    />
+                </View>
 
-            <View>
-                <Text style={globalStyles.label}>
-                    Phone Number <Text style={globalStyles.required}>*</Text>
-                </Text>
-                <TextInput
-                    style={globalStyles.input}
-                    placeholder="Enter Phone Number"
-                    value={form.phone}
-                    onChangeText={(v) => handleChange("phone", v)}
-                    keyboardType="numeric"
-                />
-            </View>
+                <View style={{ marginTop: 16 }}>
+                    <Text style={globalStyles.label}>
+                        Phone Number <Text style={globalStyles.required}>*</Text>
+                    </Text>
+                    <TextInput
+                        style={globalStyles.input}
+                        placeholder="Enter Phone Number"
+                        value={form.phone}
+                        onChangeText={(v) => handleChange("phone", v)}
+                        keyboardType="numeric"
+                    />
+                </View>
 
-            <View>
-                <Text style={globalStyles.label}>
-                    Relationship <Text style={globalStyles.required}>*</Text>
-                </Text>
-                <TextInput
-                    style={globalStyles.input}
-                    placeholder="Enter Relationship"
-                    value={form.relationship}
-                    onChangeText={(v) => handleChange("relationship", v)}
-                />
-            </View>
+                <View style={{ marginTop: 16, marginBottom: 20 }}>
+                    <Text style={globalStyles.label}>
+                        Relationship <Text style={globalStyles.required}>*</Text>
+                    </Text>
+                    <TextInput
+                        style={globalStyles.input}
+                        placeholder="Enter Relationship"
+                        value={form.relationship}
+                        onChangeText={(v) => handleChange("relationship", v)}
+                    />
+                </View>
 
-            {/* Navigation buttons */}
-            <View style={globalStyles.navRow}>
-                <TouchableOpacity style={globalStyles.navButtonOutline} onPress={onPrevious}>
-                    <Text style={[globalStyles.navButtonText, { color: "#009688" }]}>← Previous</Text>
-                </TouchableOpacity>
+                {/* Navigation buttons */}
+                <View style={globalStyles.navRow}>
+                    <TouchableOpacity style={globalStyles.navButtonOutline} onPress={onPrevious}>
+                        <Text style={[globalStyles.navButtonText, { color: "#009688" }]}>← Previous</Text>
+                    </TouchableOpacity>
 
-                <TouchableOpacity style={globalStyles.navButtonFilled} onPress={handleNext}>
-                    <Text style={globalStyles.navButtonText}>Next →</Text>
-                </TouchableOpacity>
-            </View>
-        </View>
+                    <TouchableOpacity style={globalStyles.navButtonFilled} onPress={handleNext}>
+                        <Text style={globalStyles.navButtonText}>Next →</Text>
+                    </TouchableOpacity>
+                </View>
+            </ScrollView>
+        </KeyboardAvoidingView>
     );
 };
 
 export default NextOfKin;
 
 const styles = StyleSheet.create({
-    container: { flex: 1, padding: 20, justifyContent: 'flex-start' },
+    container: { 
+        padding: 20, 
+        paddingBottom: 200, // Extra padding for bottom tab bar (60px) + keyboard clearance + navigation buttons
+    },
 
     navRow: {
         flexDirection: 'row',

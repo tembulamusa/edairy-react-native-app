@@ -1,5 +1,5 @@
 // src/screens/MemberKilosScreen.tsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
     View,
     Text,
@@ -20,7 +20,6 @@ import DropDownPicker from "react-native-dropdown-picker";
 import { renderDropdownItem } from "../../assets/styles/all.tsx";
 import CashoutFormModal from "../../components/modals/CashoutFormModal.tsx";
 import SuccessModal from "../../components/modals/SuccessModal.tsx";
-import { printReceiptWithPrinter } from "../../components/utils/printReceipt.ts";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useNavigation } from "@react-navigation/native";
 import { globalStyles } from "../../styles.ts";
@@ -79,9 +78,11 @@ const MemberKilosScreen = () => {
     const [measuringCanOpen, setMeasuringCanOpen] = useState(false);
 
     const [scaleModalVisible, setScaleModalVisible] = useState(false);
+    const [printerModalVisible, setPrinterModalVisible] = useState(false);
     const [successModalVisible, setSuccessModalVisible] = useState(false);
     const [isPrinting, setIsPrinting] = useState(false);
-    // --- Scale hook for weight operations (unified BLE + Classic) ---
+
+    // --- Scale hook for weight operations (BLE only) ---
     const scaleBluetooth = useBluetoothService({ deviceType: "scale" });
 
     // --- Destructure for scale operations ---
@@ -96,7 +97,26 @@ const MemberKilosScreen = () => {
         disconnect: disconnectScale,
     } = scaleBluetooth;
 
-    // Printer hook no longer needed - using direct BluetoothManager in printReceipt utility
+    // --- Printer hook for printing operations (BLE only) ---
+    const printerBluetooth = useBluetoothService({ deviceType: "printer" });
+
+    // --- Destructure for printer operations ---
+    const {
+        devices: printerDevices,
+        connectToDevice: connectToPrinterDevice,
+        scanForDevices: scanForPrinterDevices,
+        connectedDevice: connectedPrinterDevice,
+        isScanning: isScanningPrinter,
+        isConnecting: isConnectingPrinter,
+        disconnect: disconnectPrinter,
+        printText: printTextToPrinter,
+    } = printerBluetooth;
+
+    // Ref to track printer devices for auto-connect (similar to StoreSaleModal)
+    const printerDevicesRef = useRef<any[]>(printerDevices || []);
+    useEffect(() => {
+        printerDevicesRef.current = printerDevices || [];
+    }, [printerDevices]);
 
     // Update scale weight when data is received from connected device
     // lastMessage is already weight in kgs (0.01 precision) from useBluetoothService
@@ -106,13 +126,22 @@ const MemberKilosScreen = () => {
             const weight = parseFloat(lastMessage);
             if (!isNaN(weight)) {
                 setScaleWeight(weight);
+                // Clear manual text input when scale is connected
+                setScaleWeightText("");
             }
         }
     }, [lastMessage, connectedScaleDevice]);
-
-    // Auto-connect on load: Check AsyncStorage and connect based on stored type
+    
+    // Clear scaleWeightText when scale connects to allow fresh input
     useEffect(() => {
-        const autoConnectToLastDevice = async () => {
+        if (connectedScaleDevice) {
+            setScaleWeightText("");
+        }
+    }, [connectedScaleDevice]);
+
+    // Auto-connect scale on load: Check AsyncStorage and connect based on stored type
+    useEffect(() => {
+        const autoConnectToLastScale = async () => {
             try {
                 // Skip if already connected
                 if (connectedScaleDevice) {
@@ -124,76 +153,244 @@ const MemberKilosScreen = () => {
                             stillConnected = await connectedScaleDevice.classicDevice.isConnected();
                         }
                         if (stillConnected) {
-                            console.log('[MemberKilos] AUTO-CONNECT: Already connected, skipping');
+                            console.log('[MemberKilos] AUTO-CONNECT SCALE: Already connected, skipping');
                             return;
                         }
-                    } catch {}
+                    } catch { }
                 }
 
                 // Retrieve last device from AsyncStorage
                 const lastScale = await AsyncStorage.getItem('last_device_scale');
                 if (!lastScale) {
-                    console.log('[MemberKilos] AUTO-CONNECT: No last device found in storage');
+                    console.log('[MemberKilos] AUTO-CONNECT SCALE: No last device found in storage');
                     return;
                 }
 
                 let deviceData: any = null;
                 try {
                     deviceData = typeof lastScale === 'string' ? JSON.parse(lastScale) : lastScale;
-                    console.log('[MemberKilos] AUTO-CONNECT: Last device found:', deviceData);
-                    console.log('[MemberKilos] AUTO-CONNECT: Device type:', deviceData.type || 'unknown');
+                    console.log('[MemberKilos] AUTO-CONNECT SCALE: Last device found:', deviceData);
+                    console.log('[MemberKilos] AUTO-CONNECT SCALE: Device type:', deviceData.type || 'unknown');
                 } catch (parseError) {
-                    console.error('[MemberKilos] AUTO-CONNECT: Error parsing stored device:', parseError);
+                    console.error('[MemberKilos] AUTO-CONNECT SCALE: Error parsing stored device:', parseError);
                     return;
                 }
 
                 const deviceId = deviceData.id || deviceData.address || deviceData.address_or_id;
                 if (!deviceId) {
-                    console.log('[MemberKilos] AUTO-CONNECT: No valid device ID found');
+                    console.log('[MemberKilos] AUTO-CONNECT SCALE: No valid device ID found');
                     return;
                 }
 
                 // First, trigger a scan to discover devices
-                console.log('[MemberKilos] AUTO-CONNECT: Starting device scan to find saved device...');
+                console.log('[MemberKilos] AUTO-CONNECT SCALE: Starting device scan to find saved device...');
                 scanForScaleDevices(); // Don't await - let it run in background
 
                 // Wait for scan to complete (15 seconds for BLE scan + buffer)
-                console.log('[MemberKilos] AUTO-CONNECT: Waiting for scan to complete (18 seconds)...');
+                console.log('[MemberKilos] AUTO-CONNECT SCALE: Waiting for scan to complete (18 seconds)...');
                 await new Promise<void>(r => setTimeout(() => r(), 18000)); // Wait 18 seconds for scan to finish
 
                 // Re-check scaleDevices after waiting (state should be updated by now)
                 // Use a small delay to ensure state is updated
                 await new Promise<void>(r => setTimeout(() => r(), 500));
-                
-                console.log('[MemberKilos] AUTO-CONNECT: Checking for device after scan...');
-                console.log('[MemberKilos] AUTO-CONNECT: Looking for device ID:', deviceId);
-                
+
+                console.log('[MemberKilos] AUTO-CONNECT SCALE: Checking for device after scan...');
+                console.log('[MemberKilos] AUTO-CONNECT SCALE: Looking for device ID:', deviceId);
+
                 // The connectToDevice function in the hook will handle finding and connecting
                 // It will try BLE first, then Classic as fallback
                 // So we can just call it with the device ID and let the hook handle the rest
                 const storedType = deviceData.type || 'ble';
-                console.log('[MemberKilos] AUTO-CONNECT: Stored type is', storedType, '- attempting connection to:', deviceId);
-                console.log('[MemberKilos] AUTO-CONNECT: connectToDevice will try BLE first, then Classic if needed...');
-                
+                console.log('[MemberKilos] AUTO-CONNECT SCALE: Stored type is', storedType, '- attempting connection to:', deviceId);
+                console.log('[MemberKilos] AUTO-CONNECT SCALE: connectToDevice will try BLE first, then Classic if needed...');
+
                 try {
                     await connectToScaleDevice(deviceId);
-                    console.log('[MemberKilos] AUTO-CONNECT: ✓ Connection attempt completed');
+                    console.log('[MemberKilos] AUTO-CONNECT SCALE: ✓ Connection attempt completed');
                 } catch (connectError) {
-                    console.error('[MemberKilos] AUTO-CONNECT: Connection error:', connectError);
+                    console.error('[MemberKilos] AUTO-CONNECT SCALE: Connection error:', connectError);
                 }
             } catch (error) {
-                console.error('[MemberKilos] AUTO-CONNECT: Failed:', error);
+                console.error('[MemberKilos] AUTO-CONNECT SCALE: Failed:', error);
                 // Don't show alert - just log the error to avoid annoying the user
             }
         };
 
         // Run auto-connect after a short delay to allow component to mount
         const timeout = setTimeout(() => {
-            autoConnectToLastDevice();
+            autoConnectToLastScale();
         }, 2000); // Slightly longer delay to ensure hook is initialized
 
         return () => clearTimeout(timeout);
     }, []); // Run once on mount
+
+    // Helper: Persist printer to AsyncStorage (similar to StoreSaleModal)
+    const persistLastPrinter = useCallback(async (device: any) => {
+        if (!device) return;
+        try {
+            const payload = {
+                id: device?.id || device?.address || device?.address_or_id,
+                address: device?.address || device?.id || device?.address_or_id,
+                name: device?.name || device?.label || "InnerPrinter",
+                type: device?.type || "classic", // InnerPrinter uses Classic
+                saved_at: new Date().toISOString(),
+            };
+
+            if (!payload.id || !payload.address) {
+                console.log("[MemberKilos] persistLastPrinter: Missing id/address, skipping save");
+                return;
+            }
+
+            await AsyncStorage.setItem("last_device_printer", JSON.stringify(payload));
+            console.log("[MemberKilos] persistLastPrinter: Saved printer", payload.name);
+        } catch (error) {
+            console.error("[MemberKilos] persistLastPrinter: Failed to save printer", error);
+        }
+    }, []);
+
+    // Helper: Connect to any available InnerPrinter (similar to StoreSaleModal)
+    const connectToAnyAvailablePrinter = useCallback(async (): Promise<boolean> => {
+        try {
+            console.log("[MemberKilos] AUTO-CONNECT: Scanning for InnerPrinter...");
+            await scanForPrinterDevices();
+            
+            // Wait a bit for scan to complete
+            await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
+            
+            // Get the latest devices from the ref (updated by useEffect)
+            const devices = printerDevicesRef.current || [];
+            console.log("[MemberKilos] AUTO-CONNECT: Found", devices.length, "printer devices");
+            
+            if (devices.length === 0) {
+                console.log("[MemberKilos] AUTO-CONNECT: No printers found in scan");
+                return false;
+            }
+            
+            // Filter for InnerPrinter devices first (case-insensitive)
+            const innerPrinters = devices.filter(device => {
+                const deviceName = (device.name || '').toLowerCase();
+                return deviceName.includes('innerprinter') || deviceName.includes('inner');
+            });
+            
+            let targetPrinter;
+            if (innerPrinters.length > 0) {
+                targetPrinter = innerPrinters[0];
+                console.log("[MemberKilos] AUTO-CONNECT: Found InnerPrinter device:", targetPrinter.name || targetPrinter.id);
+            } else {
+                // Fallback to first available printer if no InnerPrinter found
+                targetPrinter = devices[0];
+                console.log("[MemberKilos] AUTO-CONNECT: No InnerPrinter found, using first available printer:", targetPrinter.name || targetPrinter.id);
+            }
+            
+            const deviceId = targetPrinter?.id || targetPrinter?.address || targetPrinter?.address_or_id;
+            
+            if (!deviceId) {
+                console.log("[MemberKilos] AUTO-CONNECT: Target printer missing device id");
+                return false;
+            }
+            
+            console.log("[MemberKilos] AUTO-CONNECT: Attempting connection to", targetPrinter.name || deviceId);
+            const result = await connectToPrinterDevice(deviceId);
+            const success = !!result;
+            console.log("[MemberKilos] AUTO-CONNECT:", success ? "✓ Connected" : "✗ Connection failed");
+
+            if (success) {
+                await persistLastPrinter(result);
+                // Wait for connection to be fully established
+                console.log("[MemberKilos] AUTO-CONNECT: Waiting for connection to stabilize...");
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            return success;
+        } catch (error) {
+            console.error("[MemberKilos] AUTO-CONNECT: Error connecting to printer:", error);
+            return false;
+        }
+    }, [scanForPrinterDevices, connectToPrinterDevice, persistLastPrinter]);
+
+    // Helper: Attempt auto-connect (try saved first, then scan for InnerPrinter)
+    const attemptAutoConnectPrinter = useCallback(async (): Promise<boolean> => {
+        if (connectedPrinterDevice || isConnectingPrinter) {
+            return true;
+        }
+
+        try {
+            // First, try stored printer
+            const stored = await AsyncStorage.getItem("last_device_printer");
+            if (stored) {
+                let data: any = null;
+                try {
+                    data = JSON.parse(stored);
+                } catch (parseError) {
+                    console.error("[MemberKilos] AUTO-CONNECT: Failed to parse stored printer:", parseError);
+                }
+
+                if (data) {
+                    const deviceId = data?.id || data?.address || data?.address_or_id;
+                    if (deviceId) {
+                        console.log("[MemberKilos] AUTO-CONNECT: Scanning for saved printer...");
+                        await scanForPrinterDevices();
+                        await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
+                        console.log("[MemberKilos] AUTO-CONNECT: Attempting connection to stored printer", deviceId);
+                        const result = await connectToPrinterDevice(deviceId);
+                        const success = !!result;
+                        console.log("[MemberKilos] AUTO-CONNECT:", success ? "✓ Connected to stored printer" : "✗ Stored printer connection failed");
+
+                        if (success) {
+                            await persistLastPrinter(result);
+                            // Wait for connection to be fully established
+                            console.log("[MemberKilos] AUTO-CONNECT: Waiting for connection to stabilize...");
+                            await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // If stored printer failed or doesn't exist, try any available InnerPrinter
+            console.log("[MemberKilos] AUTO-CONNECT: Trying to connect to any available InnerPrinter...");
+            return await connectToAnyAvailablePrinter();
+        } catch (error) {
+            console.error("[MemberKilos] AUTO-CONNECT: Unexpected error:", error);
+            return false;
+        }
+    }, [connectToPrinterDevice, scanForPrinterDevices, connectedPrinterDevice, isConnectingPrinter, persistLastPrinter, connectToAnyAvailablePrinter]);
+
+    // Auto-connect printer on load: Check AsyncStorage and connect to InnerPrinter (similar to StoreSaleModal)
+    useEffect(() => {
+        const autoConnectToLastPrinter = async () => {
+            try {
+                // Skip if already connected
+                if (connectedPrinterDevice) {
+                    try {
+                        let stillConnected = false;
+                        if (connectedPrinterDevice.type === 'ble' && connectedPrinterDevice.bleDevice) {
+                            stillConnected = (connectedPrinterDevice.bleDevice as any).isConnected === true;
+                        } else if (connectedPrinterDevice.type === 'classic' && connectedPrinterDevice.classicDevice) {
+                            stillConnected = await connectedPrinterDevice.classicDevice.isConnected();
+                        }
+                        if (stillConnected) {
+                            console.log('[MemberKilos] AUTO-CONNECT PRINTER: Already connected, skipping');
+                            return;
+                        }
+                    } catch { }
+                }
+
+                // Use the attemptAutoConnectPrinter helper (similar to StoreSaleModal)
+                await attemptAutoConnectPrinter();
+            } catch (error) {
+                console.error('[MemberKilos] AUTO-CONNECT PRINTER: Failed:', error);
+                // Don't show alert - just log the error
+            }
+        };
+
+        // Run auto-connect after a short delay to allow component to mount
+        const timeout = setTimeout(() => {
+            autoConnectToLastPrinter();
+        }, 5000); // Delay printer auto-connect a bit more to let scale connect first
+
+        return () => clearTimeout(timeout);
+    }, [attemptAutoConnectPrinter, connectedPrinterDevice]); // Include dependencies
 
     // Show alert if connection failed
     useEffect(() => {
@@ -323,9 +520,13 @@ const MemberKilosScreen = () => {
             Alert.alert("Missing Measuring Can", "Select a measuring can for tare weight before recording.");
             return;
         }
+        if (!can || !canValue || !can.id) {
+            Alert.alert("Missing Can", "Please select a can before recording the weight.");
+            return;
+        }
         const tare = measuringCan.tare_weight; // Always use measuring can's tare
         const net = parseFloat((scaleWeight - tare).toFixed(2));
-        
+
         // Prevent adding entry if net weight is negative
         if (net < 0) {
             Alert.alert(
@@ -334,7 +535,7 @@ const MemberKilosScreen = () => {
             );
             return;
         }
-        
+
         const entry = {
             can_id: can?.id ?? null,
             can_label: can?.can_id ?? `Can ${can?.id ?? "N/A"}`,
@@ -401,10 +602,458 @@ const MemberKilosScreen = () => {
         return receipt;
     };
 
+    // Helper: Connect to saved printer or scan and connect to first InnerPrinter
+    const connectToPrinterForPrinting = useCallback(async (): Promise<boolean> => {
+        try {
+            console.log('[PRINT] Step 1: Checking for saved printer in AsyncStorage...');
+
+            // Check AsyncStorage for last printer
+            try {
+                const lastPrinter = await AsyncStorage.getItem('last_device_printer');
+                if (lastPrinter) {
+                    try {
+                        const printerData = JSON.parse(lastPrinter);
+                        const deviceId = printerData.id || printerData.address || printerData.address_or_id;
+                        const savedType = printerData.type || 'classic'; // Default to classic for safety
+                        const printerName = (printerData.name || '').toLowerCase();
+                        const isInnerPrinter = printerName.includes('innerprinter') || printerName.includes('inner');
+
+                        if (deviceId) {
+                            console.log('[PRINT] Found saved printer:', printerData.name || deviceId);
+                            console.log('[PRINT] Saved printer type:', savedType);
+                            
+                            // If it's InnerPrinter or saved as Classic, ensure we use Classic connection
+                            if (isInnerPrinter || savedType === 'classic') {
+                                console.log('[PRINT] InnerPrinter or Classic printer detected - will use Classic connection');
+                            }
+
+                            // Try to connect to saved printer with timeout
+                            // connectToDevice will handle forcing Classic for InnerPrinter
+                            try {
+                                const result = await Promise.race([
+                                    connectToPrinterDevice(deviceId),
+                                    new Promise<null>((_, reject) =>
+                                        setTimeout(() => reject(new Error('Connection timeout')), 10000)
+                                    )
+                                ]);
+
+                                if (result) {
+                                    console.log('[PRINT] ✅ Connected to saved printer');
+                                    // Verify it's using the correct type
+                                    if (result.type === 'classic' && (isInnerPrinter || savedType === 'classic')) {
+                                        console.log('[PRINT] ✅ Verified: Connected via Classic as expected');
+                                    }
+                                    return true;
+                                } else {
+                                    console.log('[PRINT] ⚠️ Failed to connect to saved printer, will scan for InnerPrinter');
+                                }
+                            } catch (connectErr) {
+                                console.warn('[PRINT] ⚠️ Error connecting to saved printer:', connectErr);
+                                // Continue to scan
+                            }
+                        }
+                    } catch (parseErr) {
+                        console.warn('[PRINT] Error parsing saved printer:', parseErr);
+                    }
+                } else {
+                    console.log('[PRINT] No saved printer found in AsyncStorage');
+                }
+            } catch (storageErr) {
+                console.warn('[PRINT] Error reading AsyncStorage:', storageErr);
+            }
+
+            // If saved printer not found or connection failed, scan for InnerPrinter
+            try {
+                console.log('[PRINT] Step 2: Scanning for InnerPrinter devices...');
+                await scanForPrinterDevices();
+
+                // Wait for scan to complete
+                await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
+
+                // Filter for InnerPrinter devices
+                const innerPrinters = printerDevices.filter(device => {
+                    const deviceName = (device.name || '').toLowerCase();
+                    return deviceName.includes('innerprinter') || deviceName.includes('inner');
+                });
+
+                if (innerPrinters.length > 0) {
+                    const firstInnerPrinter = innerPrinters[0];
+                    const deviceId = firstInnerPrinter.id || firstInnerPrinter.address;
+
+                    console.log('[PRINT] Found InnerPrinter:', firstInnerPrinter.name || deviceId);
+                    console.log('[PRINT] Connecting to first InnerPrinter...');
+
+                    try {
+                        const result = await Promise.race([
+                            connectToPrinterDevice(deviceId),
+                            new Promise<null>((_, reject) =>
+                                setTimeout(() => reject(new Error('Connection timeout')), 10000)
+                            )
+                        ]);
+
+                        if (result) {
+                            // Save printer to AsyncStorage
+                            try {
+                                const printerInfo = {
+                                    id: firstInnerPrinter.id,
+                                    address: firstInnerPrinter.id,
+                                    name: firstInnerPrinter.name || 'InnerPrinter',
+                                    type: 'classic', // InnerPrinter uses Classic Bluetooth, not BLE
+                                    address_or_id: firstInnerPrinter.id,
+                                    saved_at: new Date().toISOString()
+                                };
+                                await AsyncStorage.setItem('last_device_printer', JSON.stringify(printerInfo));
+                                console.log('[PRINT] ✅ Connected to InnerPrinter and saved to AsyncStorage');
+                                return true;
+                            } catch (saveErr) {
+                                console.warn('[PRINT] ⚠️ Error saving printer (but connected):', saveErr);
+                                return true; // Still return true since connection succeeded
+                            }
+                        } else {
+                            console.log('[PRINT] ⚠️ Failed to connect to InnerPrinter');
+                        }
+                    } catch (connectErr) {
+                        console.error('[PRINT] ⚠️ Error connecting to InnerPrinter:', connectErr);
+                    }
+                } else {
+                    console.log('[PRINT] ⚠️ No InnerPrinter found in scan');
+                }
+            } catch (scanErr) {
+                console.error('[PRINT] ⚠️ Error scanning for printers:', scanErr);
+            }
+
+            return false;
+        } catch (error) {
+            console.error('[PRINT] Error connecting to printer:', error);
+            return false;
+        }
+    }, [connectToPrinterDevice, scanForPrinterDevices, printerDevices]);
+
+    // Helper: Print receipt using connected printer
+    const printReceipt = useCallback(async (receiptText: string, deviceOverride?: any): Promise<boolean> => {
+        console.log('[PRINTER] Printing receipt...');
+        
+        // Use provided device or fall back to state
+        let printerDevice = deviceOverride || connectedPrinterDevice;
+        
+        // If device was provided but state might not be updated yet, wait and verify
+        if (deviceOverride && !connectedPrinterDevice) {
+            console.log('[PRINT] Device provided but state not updated yet, waiting for state sync...');
+            // Wait for state to update (React state updates are async)
+            for (let i = 0; i < 5; i++) {
+                await new Promise<void>(resolve => setTimeout(() => resolve(), 200));
+                if (connectedPrinterDevice) {
+                    console.log('[PRINT] State updated, using state device');
+                    printerDevice = connectedPrinterDevice;
+                    break;
+                }
+            }
+            // If state still not updated, use the provided device
+            if (!connectedPrinterDevice) {
+                console.log('[PRINT] State not updated, will use provided device (printTextToPrinter may use state)');
+            }
+        }
+        
+        // Check if printer is connected and print function is available
+        if (!printerDevice) {
+            console.error('[PRINT] No printer connected');
+            // If no device provided and state is not set, wait a bit and retry (React state update delay)
+            if (!deviceOverride && !connectedPrinterDevice) {
+                console.log('[PRINT] Waiting for state update (500ms)...');
+                await new Promise<void>(resolve => setTimeout(() => resolve(), 500));
+                // Retry once with updated state
+                if (connectedPrinterDevice) {
+                    console.log('[PRINT] Retrying with updated state...');
+                    return printReceipt(receiptText, connectedPrinterDevice);
+                }
+            }
+            // Show alert instead of silently failing
+            try {
+                Alert.alert("Printer Not Available", "No printer connected. Please connect a printer to print the receipt.");
+            } catch (alertErr) {
+                console.error('[PRINT] Error showing alert:', alertErr);
+            }
+            return false;
+        }
+        
+        if (!printTextToPrinter) {
+            console.error('[PRINT] Print function not available');
+            // Show alert instead of silently failing
+            try {
+                Alert.alert("Printer Not Available", "Print function is not available. Please check printer connection.");
+            } catch (alertErr) {
+                console.error('[PRINT] Error showing alert:', alertErr);
+            }
+            return false;
+        }
+        
+        // Verify the hook's state has the device (printTextToPrinter uses hook's state)
+        if (!connectedPrinterDevice && deviceOverride) {
+            console.warn('[PRINT] Warning: Hook state not updated, but device provided. Print may fail if hook state is required.');
+            console.log('[PRINT] Waiting additional 500ms for hook state update...');
+            await new Promise<void>(resolve => setTimeout(() => resolve(), 500));
+            if (!connectedPrinterDevice) {
+                console.error('[PRINT] Hook state still not updated after wait. This may cause print to fail.');
+            }
+        }
+
+        // Double-check device is still connected before printing
+        try {
+            let isStillConnected = false;
+            if (printerDevice.type === 'ble' && printerDevice.bleDevice) {
+                isStillConnected = (printerDevice.bleDevice as any).isConnected === true;
+            } else if (printerDevice.type === 'classic' && printerDevice.classicDevice) {
+                try {
+                    isStillConnected = await printerDevice.classicDevice.isConnected();
+                } catch (checkErr) {
+                    console.warn('[PRINT] Error checking connection status:', checkErr);
+                    isStillConnected = false;
+                }
+            }
+            
+            if (!isStillConnected) {
+                console.error('[PRINT] Printer device is not connected');
+                // Show alert instead of silently failing
+                try {
+                    Alert.alert("Printer Not Connected", "The printer is not connected. Please check the connection and try again.");
+                } catch (alertErr) {
+                    console.error('[PRINT] Error showing alert:', alertErr);
+                }
+                return false;
+            }
+        } catch (checkErr) {
+            console.error('[PRINT] Error verifying printer connection:', checkErr);
+            // Show alert for connection verification error
+            try {
+                Alert.alert("Printer Connection Error", "Unable to verify printer connection. Please check the printer and try again.");
+            } catch (alertErr) {
+                console.error('[PRINT] Error showing alert:', alertErr);
+            }
+            return false;
+        }
+
+        try {
+            console.log('[PRINT] Starting print operation...');
+            
+            // Wrap printTextToPrinter in a try-catch to handle any synchronous errors
+            let printPromise: Promise<void>;
+            try {
+                printPromise = printTextToPrinter(receiptText);
+                if (!printPromise || typeof printPromise.then !== 'function') {
+                    console.error('[PRINT] Print function did not return a promise');
+                    // Show alert
+                    try {
+                        Alert.alert("Print Error", "Print function error. Please try again.");
+                    } catch (alertErr) {
+                        console.error('[PRINT] Error showing alert:', alertErr);
+                    }
+                    return false;
+                }
+            } catch (syncErr) {
+                console.error('[PRINT] Synchronous error calling print function:', syncErr);
+                // Show alert
+                try {
+                    Alert.alert("Print Error", "Failed to start printing. Please check the printer connection.");
+                } catch (alertErr) {
+                    console.error('[PRINT] Error showing alert:', alertErr);
+                }
+                return false;
+            }
+            
+            // Add timeout to prevent hanging
+            try {
+                await Promise.race([
+                    printPromise,
+                    new Promise<never>((_, reject) =>
+                        setTimeout(() => reject(new Error('Print timeout')), 30000)
+                    )
+                ]);
+                
+                console.log('[PRINT] ✅ Receipt printed successfully');
+                return true;
+            } catch (timeoutErr) {
+                const errorMsg = (timeoutErr as any)?.message || String(timeoutErr);
+                console.error('[PRINT] Print timeout or error:', errorMsg);
+                // Show alert for timeout or print error
+                try {
+                    if (errorMsg.includes('timeout')) {
+                        Alert.alert("Print Timeout", "Printing took too long. Please check the printer and try again.");
+                    } else {
+                        Alert.alert("Print Error", "Failed to print receipt. Please check the printer connection and try again.");
+                    }
+                } catch (alertErr) {
+                    console.error('[PRINT] Error showing alert:', alertErr);
+                }
+                return false;
+            }
+        } catch (error) {
+            const errorMsg = (error as any)?.message || String(error);
+            console.error('[PRINT] Print error:', errorMsg);
+            
+            // Show alert for any unexpected errors
+            try {
+                Alert.alert("Print Error", "An error occurred while printing. Please check the printer and try again.");
+            } catch (alertErr) {
+                console.error('[PRINT] Error showing alert:', alertErr);
+            }
+            return false;
+        }
+    }, [connectedPrinterDevice, printTextToPrinter]);
+    
+    // Helper: Connect to printer and return the connected device
+    const connectToPrinterAndGetDevice = useCallback(async (): Promise<any | null> => {
+        try {
+            console.log('[PRINT] Connecting to printer and getting device...');
+            
+            // Check AsyncStorage for last printer
+            try {
+                const lastPrinter = await AsyncStorage.getItem('last_device_printer');
+                if (lastPrinter) {
+                    try {
+                        const printerData = JSON.parse(lastPrinter);
+                        const deviceId = printerData.id || printerData.address || printerData.address_or_id;
+
+                        if (deviceId) {
+                            console.log('[PRINT] Found saved printer:', printerData.name || deviceId);
+                            const result = await Promise.race([
+                                connectToPrinterDevice(deviceId),
+                                new Promise<null>((_, reject) =>
+                                    setTimeout(() => reject(new Error('Connection timeout')), 10000)
+                                )
+                            ]);
+
+                            if (result) {
+                                console.log('[PRINT] ✅ Connected to saved printer');
+                                return result;
+                            }
+                        }
+                    } catch (parseErr) {
+                        console.warn('[PRINT] Error parsing saved printer:', parseErr);
+                    }
+                }
+            } catch (storageErr) {
+                console.warn('[PRINT] Error reading AsyncStorage:', storageErr);
+            }
+
+            // If saved printer not found or connection failed, scan for InnerPrinter
+            try {
+                console.log('[PRINT] Scanning for InnerPrinter devices...');
+                await scanForPrinterDevices();
+                await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
+
+                const innerPrinters = printerDevices.filter(device => {
+                    const deviceName = (device.name || '').toLowerCase();
+                    return deviceName.includes('innerprinter') || deviceName.includes('inner');
+                });
+
+                if (innerPrinters.length > 0) {
+                    const firstInnerPrinter = innerPrinters[0];
+                    const deviceId = firstInnerPrinter.id || firstInnerPrinter.address;
+
+                    console.log('[PRINT] Found InnerPrinter:', firstInnerPrinter.name || deviceId);
+                    const result = await Promise.race([
+                        connectToPrinterDevice(deviceId),
+                        new Promise<null>((_, reject) =>
+                            setTimeout(() => reject(new Error('Connection timeout')), 10000)
+                        )
+                    ]);
+
+                    if (result) {
+                        // Save printer to AsyncStorage
+                        try {
+                            const printerInfo = {
+                                id: firstInnerPrinter.id,
+                                address: firstInnerPrinter.id,
+                                name: firstInnerPrinter.name || 'InnerPrinter',
+                                type: 'classic',
+                                address_or_id: firstInnerPrinter.id,
+                                saved_at: new Date().toISOString()
+                            };
+                            await AsyncStorage.setItem('last_device_printer', JSON.stringify(printerInfo));
+                            console.log('[PRINT] ✅ Connected to InnerPrinter and saved to AsyncStorage');
+                        } catch (saveErr) {
+                            console.warn('[PRINT] ⚠️ Error saving printer (but connected):', saveErr);
+                        }
+                        return result;
+                    }
+                }
+            } catch (scanErr) {
+                console.error('[PRINT] ⚠️ Error scanning for printers:', scanErr);
+            }
+
+            return null;
+        } catch (error) {
+            console.error('[PRINT] Error connecting to printer:', error);
+            return null;
+        }
+    }, [connectToPrinterDevice, scanForPrinterDevices, printerDevices]);
+
+    // Helper: Reconnect to scale from AsyncStorage
+    const reconnectToScale = useCallback(async (): Promise<void> => {
+        try {
+            console.log('[SCALE] Reconnecting to scale from AsyncStorage...');
+
+            try {
+                const lastScale = await AsyncStorage.getItem('last_device_scale');
+                if (!lastScale) {
+                    console.log('[SCALE] No saved scale found');
+                    return;
+                }
+
+                const scaleData = JSON.parse(lastScale);
+                const deviceId = scaleData.id || scaleData.address || scaleData.address_or_id;
+
+                if (deviceId) {
+                    console.log('[SCALE] Found saved scale:', scaleData.name || deviceId);
+
+                    // Add timeout to prevent hanging
+                    try {
+                        await Promise.race([
+                            connectToScaleDevice(deviceId),
+                            new Promise<never>((_, reject) =>
+                                setTimeout(() => reject(new Error('Reconnection timeout')), 15000)
+                            )
+                        ]);
+                        console.log('[SCALE] ✅ Reconnected to scale');
+                    } catch (connectErr) {
+                        console.error('[SCALE] ⚠️ Error connecting to scale (timeout or error):', connectErr);
+                        // Don't throw - just log the error
+                    }
+                }
+            } catch (parseErr) {
+                console.error('[SCALE] ⚠️ Error parsing scale data:', parseErr);
+            }
+        } catch (error) {
+            console.error('[SCALE] Error reconnecting to scale:', error);
+            // Don't throw - just log the error
+        }
+    }, [connectToScaleDevice]);
+
     // --- sendMemberKilos: post entries, basic error handling ---
     const sendMemberKilos = async () => {
-        if (!memberValue) { Alert.alert("Validation", "Please select a member."); return; }
-        if (entries.length === 0) { Alert.alert("Nothing to send", "No recorded cans to send."); return; }
+        // List of required fields
+        const requiredFields = [
+            { field: 'member', value: memberValue, label: 'Member' },
+            { field: 'route', value: routeValue, label: 'Route' },
+            { field: 'center', value: centerValue, label: 'Center' },
+        ];
+
+        // Check for missing required fields
+        const missingFields = requiredFields.filter(field => !field.value);
+        if (missingFields.length > 0) {
+            const missingLabels = missingFields.map(f => f.label).join(', ');
+            Alert.alert(
+                "Required Fields Missing",
+                `Please fill in the following required fields: ${missingLabels}`,
+                [{ text: "OK" }]
+            );
+            return;
+        }
+
+        if (entries.length === 0) {
+            Alert.alert("Nothing to send", "No recorded cans to send.");
+            return;
+        }
 
         // Check if any entry has negative net weight
         const hasNegativeNet = entries.some((entry) => {
@@ -480,62 +1129,92 @@ const MemberKilosScreen = () => {
                 setSuccessModalVisible(true);
                 setIsPrinting(true);
 
-                // Print receipt in the background
+                // Print receipt following the specified flow
                 try {
-                    console.log('🔌 Starting print process...');
-
-                    // Print receipt (this will handle connect, print, disconnect)
-                    const printSuccess = await printReceiptWithPrinter(receiptText);
-
-                    if (printSuccess) {
-                        console.log('✅ Receipt printed successfully');
-                    } else {
-                        console.warn('⚠️ Printing failed or no printer configured');
-                    }
-
-                    // Reconnect to scale if there was one connected prior
-                    try {
-                        const lastScale = AsyncStorage.getItem('last_device_scale');
-                        if (lastScale) {
-                            try {
-                                const scaleData = typeof lastScale === 'string' ? JSON.parse(lastScale) : lastScale;
-
-                                if (scaleData && (scaleData.id || scaleData.address || scaleData.address_or_id)) {
-                                    console.log('🔄 Reconnecting to scale...');
-                                    console.log('🔄 Scale data:', scaleData);
-                                    console.log('🔄 Scale type:', scaleData.type || 'unknown');
-
-                                    // Use id as primary identifier (fallback to address for backward compatibility)
-                                    const deviceId = scaleData.id || scaleData.address || scaleData.address_or_id;
-
-                                    if (deviceId) {
-                                        // Check device type and reconnect accordingly
-                                        const storedType = scaleData.type || 'ble';
-                                        if (storedType === 'ble') {
-                                            // Try to reconnect - will only connect if device is available
-                                            await connectToScaleDevice(deviceId);
-                                            console.log('✅ Reconnected to scale');
-                                        } else {
-                                            console.log('⚠️ Stored device type is', storedType, '- BLE only mode, skipping reconnection');
-                                        }
-                                    }
-                                } else {
-                                    console.warn('⚠️ Invalid scale data structure');
-                                }
-                            } catch (parseErr) {
-                                console.warn('⚠️ Failed to parse stored scale data:', parseErr);
-                                // Don't crash, just log the error
+                    // Step 1: Check if printer is already connected, if not try to connect
+                    let connectedPrinter: any = null;
+                    
+                    // First check if already connected
+                    if (connectedPrinterDevice) {
+                        try {
+                            let isStillConnected = false;
+                            if (connectedPrinterDevice.type === 'ble' && connectedPrinterDevice.bleDevice) {
+                                isStillConnected = (connectedPrinterDevice.bleDevice as any).isConnected === true;
+                            } else if (connectedPrinterDevice.type === 'classic' && connectedPrinterDevice.classicDevice) {
+                                isStillConnected = await connectedPrinterDevice.classicDevice.isConnected();
                             }
-                        } else {
-                            console.log('ℹ️ No last scale device found in storage');
+                            if (isStillConnected) {
+                                console.log('[PRINT] Printer already connected, using existing connection');
+                                connectedPrinter = connectedPrinterDevice;
+                            }
+                        } catch (checkErr) {
+                            console.warn('[PRINT] Error checking existing connection:', checkErr);
                         }
-                    } catch (storageErr) {
-                        console.warn('⚠️ Error retrieving last scale device:', storageErr);
-                        // Don't crash, just log the error
                     }
+
+                    // If not connected, try to connect using the auto-connect logic
+                    if (!connectedPrinter) {
+                        try {
+                            console.log('[PRINT] Printer not connected, attempting auto-connect...');
+                            const connected = await attemptAutoConnectPrinter();
+                            if (connected && connectedPrinterDevice) {
+                                connectedPrinter = connectedPrinterDevice;
+                                console.log('[PRINT] ✅ Printer connected via auto-connect');
+                            }
+                        } catch (connectErr) {
+                            console.error('[PRINT] ⚠️ Error connecting to printer:', connectErr);
+                        }
+                    }
+
+                    if (!connectedPrinter) {
+                        // Step 3: If no InnerPrinter found, show modal with scanned printers
+                        console.log('[PRINT] No InnerPrinter found, showing printer selection modal');
+                        setIsPrinting(false);
+                        setPrinterModalVisible(true);
+                        // Store receipt text for printing after user selects printer
+                        try {
+                            await AsyncStorage.setItem('pending_receipt', receiptText);
+                        } catch (storageErr) {
+                            console.error('[PRINT] Error storing pending receipt:', storageErr);
+                        }
+                        return; // Exit early, printing will happen when user selects printer
+                    }
+
+                    // Wait for connection to be fully established before printing
+                    console.log('[PRINT] Waiting for printer connection to stabilize before printing...');
+                    await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
+
+                    // Step 2: Print receipt - with error handling
+                    // Pass the connected device directly to avoid state timing issues
+                    let printSuccess = false;
+                    try {
+                        printSuccess = await printReceipt(receiptText, connectedPrinter);
+                        if (printSuccess) {
+                            console.log('[PRINT] ✅ Receipt printed successfully');
+                        } else {
+                            console.warn('[PRINT] ⚠️ Printing failed');
+                            // Alert is already shown in printReceipt function, just log here
+                        }
+                    } catch (printErr) {
+                        console.error('[PRINT] ⚠️ Error during printing:', printErr);
+                        printSuccess = false;
+                        // Show alert for unexpected errors
+                        try {
+                            Alert.alert("Print Error", "An unexpected error occurred while printing. Please check the printer and try again.");
+                        } catch (alertErr) {
+                            console.error('[PRINT] Error showing alert:', alertErr);
+                        }
+                    }
+
                 } catch (printerError) {
-                    console.error("❌ Printer error:", printerError);
-                    // Don't show error to user - just log it
+                    console.error("[PRINT] ❌ Unexpected printer error:", printerError);
+                    // Show alert for unexpected errors
+                    try {
+                        const errorMsg = (printerError as any)?.message || String(printerError);
+                        Alert.alert("Print Error", `An error occurred: ${errorMsg}. Please check the printer and try again.`);
+                    } catch (alertErr) {
+                        console.error('[PRINT] Error showing alert:', alertErr);
+                    }
                 } finally {
                     setIsPrinting(false);
                 }
@@ -787,17 +1466,27 @@ const MemberKilosScreen = () => {
                                 <TextInput
                                     style={styles.input}
                                     placeholder="Scale Wt"
-                                    value={scaleWeight !== null && scaleWeight !== undefined ? String(scaleWeight) : ""}
+                                    value={connectedScaleDevice 
+                                        ? (scaleWeight !== null && scaleWeight !== undefined ? String(scaleWeight) : "")
+                                        : scaleWeightText
+                                    }
                                     keyboardType="decimal-pad"
                                     editable={!connectedScaleDevice}
                                     onChangeText={(text) => {
                                         // Only handle onChangeText if scale is NOT connected (manual entry mode)
                                         if (!connectedScaleDevice) {
-                                            // Allow only digits and a single decimal
+                                            // Allow only digits and a single decimal point
                                             const cleaned = text.replace(/[^0-9.]/g, "");
-                                            if ((cleaned.match(/\./g) || []).length > 1) return;
-
-                                            // Convert to number if valid
+                                            
+                                            // Prevent multiple decimal points
+                                            if ((cleaned.match(/\./g) || []).length > 1) {
+                                                return; // Don't update if multiple decimals
+                                            }
+                                            
+                                            // Update the text state to allow typing "." and partial numbers
+                                            setScaleWeightText(cleaned);
+                                            
+                                            // Parse to number for scaleWeight state
                                             if (cleaned === "" || cleaned === ".") {
                                                 setScaleWeight(null);
                                             } else {
@@ -981,6 +1670,89 @@ const MemberKilosScreen = () => {
                 isConnecting={isConnectingScale}
                 connectedDevice={connectedScaleDevice}
                 disconnect={disconnectScale}
+            />
+            <BluetoothConnectionModal
+                visible={printerModalVisible}
+                onClose={() => {
+                    setPrinterModalVisible(false);
+                }}
+                type="device-list"
+                deviceType="printer"
+                title="Select Printer"
+                devices={printerDevices}
+                connectToDevice={async (id: string) => {
+                    try {
+                        const result = await connectToPrinterDevice(id);
+                        if (result) {
+                            // Save printer
+                            try {
+                                // Check if it's InnerPrinter - it uses Classic, not BLE
+                                const isInnerPrinter = (result.name || '').toLowerCase().includes('innerprinter') || 
+                                                      (result.name || '').toLowerCase().includes('inner');
+                                const printerType = isInnerPrinter ? 'classic' : (result.type || 'classic');
+                                
+                                const printerInfo = {
+                                    id: result.id,
+                                    address: result.id,
+                                    name: result.name || 'Printer',
+                                    type: printerType, // Use Classic for InnerPrinter, otherwise use device's actual type
+                                    address_or_id: result.id,
+                                    saved_at: new Date().toISOString()
+                                };
+                                await AsyncStorage.setItem('last_device_printer', JSON.stringify(printerInfo));
+                            } catch (saveErr) {
+                                console.error('[PRINT] Error saving printer:', saveErr);
+                            }
+
+                            // Print pending receipt if exists
+                            try {
+                                const pendingReceipt = await AsyncStorage.getItem('pending_receipt');
+                                if (pendingReceipt) {
+                                    setIsPrinting(true);
+                                    try {
+                                        const printSuccess = await printReceipt(pendingReceipt);
+                                        if (printSuccess) {
+                                            await AsyncStorage.removeItem('pending_receipt');
+                                        } else {
+                                            // Alert already shown in printReceipt function
+                                            console.warn('[PRINT] Failed to print pending receipt');
+                                        }
+                                    } catch (printErr) {
+                                        console.error('[PRINT] Error printing pending receipt:', printErr);
+                                        // Show alert for unexpected errors
+                                        try {
+                                            Alert.alert("Print Error", "Failed to print receipt. Please check the printer and try again.");
+                                        } catch (alertErr) {
+                                            console.error('[PRINT] Error showing alert:', alertErr);
+                                        }
+                                    } finally {
+                                        setIsPrinting(false);
+                                    }
+                                }
+                            } catch (receiptErr) {
+                                console.error('[PRINT] Error handling pending receipt:', receiptErr);
+                                // Show alert for storage errors
+                                try {
+                                    Alert.alert("Error", "Failed to retrieve pending receipt. Please try printing again.");
+                                } catch (alertErr) {
+                                    console.error('[PRINT] Error showing alert:', alertErr);
+                                }
+                            }
+
+                            // Close modal
+                            setPrinterModalVisible(false);
+                        }
+                        return result;
+                    } catch (err) {
+                        console.error('[PRINT] Error in printer modal connect:', err);
+                        return null;
+                    }
+                }}
+                scanForDevices={scanForPrinterDevices}
+                isScanning={isScanningPrinter}
+                isConnecting={isConnectingPrinter}
+                connectedDevice={connectedPrinterDevice}
+                disconnect={disconnectPrinter}
             />
             <SuccessModal
                 visible={successModalVisible}

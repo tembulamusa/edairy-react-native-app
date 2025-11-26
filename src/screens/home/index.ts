@@ -16,3 +16,5 @@ export { default as MemberCashoutListScreen } from './MemberCashoutListScreen';
 export { default as UserBalanceSummaryScreen } from './UserBalanceScreen';
 export { default as WebViewScreen } from './WebViewScreen';
 export { default as ScaleTestScreen } from './ScaleTestScreen';
+export { default as ProfileScreen } from './ProfileScreen';
+export { default as SettingsScreen } from './SettingsScreen';

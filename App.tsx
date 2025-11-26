@@ -31,7 +31,9 @@ import {
   MemberCashoutListScreen,
   WebViewScreen,
   UserBalanceSummaryScreen,
-  ScaleTestScreen
+  ScaleTestScreen,
+  ProfileScreen,
+  SettingsScreen,
 } from "./src/screens";
 import CustomHeader from "./src/components/CustomHeader";
 
@@ -117,8 +119,8 @@ function HomeTabNavigator() {
       <Tab.Screen name="Home" component={DashboardScreen} />
       <Tab.Screen name="Cash" component={DashboardScreen} />
       <Tab.Screen name="Members" component={MembersStackNavigator} />
-      <Tab.Screen name="Settings" component={DashboardScreen} />
-      <Tab.Screen name="Profile" component={DashboardScreen} />
+      <Tab.Screen name="Settings" component={SettingsScreen} />
+      <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
 }

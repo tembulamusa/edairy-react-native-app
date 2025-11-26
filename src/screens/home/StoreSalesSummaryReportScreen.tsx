@@ -30,6 +30,7 @@ const SalesReportScreen = () => {
     const [commonData, setCommonData] = useState<any>({});
     const [storeSalesSummary, setStoreSalesSummary] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
+    const [canCreateSale, setCanCreateSale] = useState(false);
 
     // Dropdowns
     const [storeOpen, setStoreOpen] = useState(false);
@@ -60,6 +61,30 @@ const SalesReportScreen = () => {
         printerDevicesRef.current = printerDevices || [];
     }, [printerDevices]);
 
+
+    // Check user permissions
+    useEffect(() => {
+        const checkUserPermissions = async () => {
+            try {
+                const userDataString = await AsyncStorage.getItem('user');
+                if (userDataString) {
+                    const userData = JSON.parse(userDataString);
+                    const userGroups = userData?.user_groups || [];
+                    
+                    // User can create sale if they are employee or transporter
+                    const canCreate = userGroups.includes('employee') || userGroups.includes('transporter');
+                    setCanCreateSale(canCreate);
+                } else {
+                    setCanCreateSale(false);
+                }
+            } catch (error) {
+                console.error('Error checking user permissions:', error);
+                setCanCreateSale(false);
+            }
+        };
+
+        checkUserPermissions();
+    }, []);
 
     // Load static common data once
     useEffect(() => {
@@ -340,13 +365,15 @@ const SalesReportScreen = () => {
             {/* Header row */}
             <View style={styles.headerRow}>
                 <Text style={styles.headerTitle}>Store Sales</Text>
-                <TouchableOpacity
-                    style={styles.newSaleButton}
-                    onPress={() => setModalVisible(true)}
-                >
-                    <Icon name="add-circle-outline" size={22} color="#fff" />
-                    <Text style={styles.newSaleText}>New Sale</Text>
-                </TouchableOpacity>
+                {canCreateSale && (
+                    <TouchableOpacity
+                        style={styles.newSaleButton}
+                        onPress={() => setModalVisible(true)}
+                    >
+                        <Icon name="add-circle-outline" size={22} color="#fff" />
+                        <Text style={styles.newSaleText}>New Sale</Text>
+                    </TouchableOpacity>
+                )}
             </View>
 
             <ScrollView contentContainerStyle={styles.contentContainer}>
@@ -420,12 +447,14 @@ const SalesReportScreen = () => {
                             setValue={setStoreValue}
                             setItems={setStoreItems}
                             placeholder="Select Store"
+                            listMode="SCROLLVIEW"
                             zIndex={2500}
                             zIndexInverse={2000}
                             style={styles.dropdown}
                             dropDownContainerStyle={styles.dropdownBox}
                             searchable={true}   // ✅ Added searchable
                             searchPlaceholder="Search store..." // optional
+                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
 
@@ -438,12 +467,14 @@ const SalesReportScreen = () => {
                             setOpen={setMemberOpen}
                             setValue={setMemberValue}
                             setItems={setMemberItems}
+                            listMode="SCROLLVIEW"
                             searchable={true}
                             placeholder="Select Member"
                             style={styles.dropdown}
                             dropDownContainerStyle={styles.dropdownBox}
                             zIndex={2000}
                             zIndexInverse={2500}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                 </View>

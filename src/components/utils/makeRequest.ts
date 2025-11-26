@@ -2,7 +2,7 @@ import { Alert } from "react-native";
 import { getItem } from "./local-storage";
 import NetInfo from '@react-native-community/netinfo';
 
-const BASE_URL = "http://192.168.100.2:8000/api/" //"https://dev.edairy.africa/api/"  //"http://10.0.2.2:8000/api/"; // "http://10.0.2.2:8000/api/" //
+const BASE_URL = "https://dev.edairy.africa/api/" // //"http://192.168.100.2:8000/api/" //  //; // "http://10.0.2.2:8000/api/" //
 
 const makeRequest = async ({
     url,
@@ -62,7 +62,6 @@ const makeRequest = async ({
         }
 
         const response = await fetch(url, request);
-
         let result;
         try {
             result =
@@ -107,3 +106,26 @@ const makeRequest = async ({
 };
 
 export default makeRequest;
+
+/**
+ * Fetches user profile data from the API
+ * @returns Promise with profile data or null if error
+ */
+export const fetchUserProfile = async () => {
+    try {
+        const [status, response] = await makeRequest({
+            url: 'user-profile',
+            method: 'GET',
+        });
+
+        if ([200, 201].includes(status)) {
+            return response?.data || response || null;
+        } else {
+            console.error('Failed to fetch profile:', response?.message || 'Unknown error');
+            return null;
+        }
+    } catch (error) {
+        console.error('Error fetching user profile:', error);
+        return null;
+    }
+};

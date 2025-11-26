@@ -8,6 +8,9 @@ import {
     TextInput,
     ActivityIndicator,
     Alert,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import makeRequest from "../utils/makeRequest";
@@ -187,8 +190,17 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
 
     return (
         <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+            >
+                <View style={styles.modalOverlay}>
+                    <ScrollView
+                        contentContainerStyle={{ flexGrow: 1, justifyContent: "center" }}
+                        keyboardShouldPersistTaps="handled"
+                    >
+                        <View style={styles.modalContent}>
                     <Text style={styles.modalTitle}>Confirm Cashout</Text>
                     <Text>Amount: {amount} KES</Text>
                     <Text>Transfer type: {transferType}</Text>
@@ -317,8 +329,10 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
                         )}
 
                     </View>
+                        </View>
+                    </ScrollView>
                 </View>
-            </View>
+            </KeyboardAvoidingView>
         </Modal>
     );
 };

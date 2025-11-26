@@ -84,7 +84,7 @@ const DashboardScreen = () => {
     }, []);
 
     return (
-        <ScrollView style={styles.container}>
+        <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
             {/* --- Stats Card --- */}
             <View style={styles.statsCard}>
                 <Text style={styles.statsTitle}>Milk Delivery Stats 2025</Text>
@@ -99,7 +99,7 @@ const DashboardScreen = () => {
                     yAxisThickness={1}
                     yAxisTextStyle={{ color: '#555' }}
                     xAxisLabelTextStyle={{ color: '#333' }}
-                    height={180}
+                    height={140}
                     animateOnDataChange
                 />
 
@@ -149,11 +149,17 @@ const styles = StyleSheet.create({
         backgroundColor: '#f4f6f8',
         padding: 16,
     },
+    contentContainer: {
+        flexGrow: 1,
+        paddingBottom: 120,
+        justifyContent: 'flex-start',
+    },
     statsCard: {
         backgroundColor: '#fff',
         borderRadius: 16,
-        padding: 16,
-        marginBottom: 20,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        marginBottom: 16,
         elevation: 2,
     },
     statsTitle: {

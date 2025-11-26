@@ -7,6 +7,9 @@ import {
     StyleSheet,
     TextInput,
     ActivityIndicator,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
 } from "react-native";
 import SmsRetriever from "react-native-sms-retriever";
 import makeRequest from "../utils/makeRequest";
@@ -131,49 +134,60 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
 
     return (
         <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>Confirm Cashout</Text>
-                    <Text>Cashout amount: {amount} KES</Text>
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+            >
+                <View style={styles.modalOverlay}>
+                    <ScrollView
+                        contentContainerStyle={{ flexGrow: 1, justifyContent: "center" }}
+                        keyboardShouldPersistTaps="handled"
+                    >
+                        <View style={styles.modalContent}>
+                            <Text style={styles.modalTitle}>Confirm Cashout</Text>
+                            <Text>Cashout amount: {amount} KES</Text>
 
-                    {loading && <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 10 }} />}
-                    {message ? <Text style={styles.message}>{message}</Text> : null}
+                            {loading && <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 10 }} />}
+                            {message ? <Text style={styles.message}>{message}</Text> : null}
 
-                    {errors?.map((err, idx) => (
-                        <Text key={idx} style={{ color: "red", marginBottom: 2 }}>{err}</Text>
-                    ))}
+                            {errors?.map((err, idx) => (
+                                <Text key={idx} style={{ color: "red", marginBottom: 2 }}>{err}</Text>
+                            ))}
 
-                    <TextInput
-                        style={styles.input}
-                        placeholder="Enter OTP"
-                        value={otp}
-                        onChangeText={setOtp}
-                        keyboardType="numeric"
-                        maxLength={6}
-                    />
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Enter OTP"
+                                value={otp}
+                                onChangeText={setOtp}
+                                keyboardType="numeric"
+                                maxLength={6}
+                            />
 
-                    <TouchableOpacity onPress={handleRequestOtp}>
-                        <Text style={styles.resendLink}>Resend OTP</Text>
-                    </TouchableOpacity>
+                            <TouchableOpacity onPress={handleRequestOtp}>
+                                <Text style={styles.resendLink}>Resend OTP</Text>
+                            </TouchableOpacity>
 
-                    <View style={styles.modalActions}>
-                        <TouchableOpacity
-                            style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
-                            onPress={handleConfirmOtp}
-                            disabled={!otp}
-                        >
-                            <Text style={styles.modalButtonText}>Confirm OTP</Text>
-                        </TouchableOpacity>
+                            <View style={styles.modalActions}>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
+                                    onPress={handleConfirmOtp}
+                                    disabled={!otp}
+                                >
+                                    <Text style={styles.modalButtonText}>Confirm OTP</Text>
+                                </TouchableOpacity>
 
-                        <TouchableOpacity
-                            style={[styles.modalButton, { backgroundColor: "gray" }]}
-                            onPress={onClose}
-                        >
-                            <Text style={styles.modalButtonText}>Cancel</Text>
-                        </TouchableOpacity>
-                    </View>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, { backgroundColor: "gray" }]}
+                                    onPress={onClose}
+                                >
+                                    <Text style={styles.modalButtonText}>Cancel</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </ScrollView>
                 </View>
-            </View>
+            </KeyboardAvoidingView>
         </Modal>
     );
 };

@@ -8,6 +8,7 @@ import {
     ScrollView,
     Alert,
     Platform,
+    KeyboardAvoidingView,
 } from "react-native";
 import Icon from "react-native-vector-icons/MaterialIcons";
 import DateTimePicker, { Event } from "@react-native-community/datetimepicker";
@@ -122,7 +123,17 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
     };
 
     return (
-        <ScrollView nestedScrollEnabled contentContainerStyle={styles.container}>
+        <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === "ios" ? "padding" : "padding"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+        >
+            <ScrollView
+                nestedScrollEnabled
+                contentContainerStyle={styles.container}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+            >
             <Text style={globalStyles.pageTitle}>Member Registration</Text>
             <Text style={globalStyles.pageSubTitle}>Personal Info</Text>
 
@@ -268,12 +279,16 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                 <Text style={globalStyles.nextButtonText}>Next</Text>
                 <Icon name="arrow-forward" size={16} color="#fff" />
             </TouchableOpacity>
-        </ScrollView>
+            </ScrollView>
+        </KeyboardAvoidingView>
     );
 };
 
 const styles = StyleSheet.create({
-    container: { padding: 20 },
+    container: { 
+        padding: 20,
+        paddingBottom: 100, // Extra padding for bottom tab bar (60px) + keyboard clearance
+    },
 
 });
 

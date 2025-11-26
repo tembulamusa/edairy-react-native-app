@@ -11,6 +11,7 @@ import {
     ActivityIndicator,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+// @ts-ignore - library lacks TypeScript declarations in current setup
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import DropDownPicker from 'react-native-dropdown-picker';
 import fetchCommonData from '../../components/utils/fetchCommonData';
@@ -32,13 +33,8 @@ const ShiftSummaryReportScreen = () => {
 
     // Shift filter state
     const [shiftOpen, setShiftOpen] = useState(false);
-    const [shiftValue, setShiftValue] = useState<string>('all');
-    const [shiftItems, setShiftItems] = useState([
-        { label: 'All', value: 'all' },
-        { label: 'AM', value: 'am' },
-        { label: 'Noon', value: 'noon' },
-        { label: 'PM', value: 'pm' },
-    ]);
+    const [shiftValue, setShiftValue] = useState<number | 'all'>('all');
+    const [shiftItems, setShiftItems] = useState<{ label: string; value: number | 'all' }[]>([]);
 
     // Route filter state
     const [routeOpen, setRouteOpen] = useState(false);
@@ -48,18 +44,25 @@ const ShiftSummaryReportScreen = () => {
     useEffect(() => {
         const loadCommonData = async () => {
             try {
-                const [transporters, routes] = await Promise.all([
+                const [transporters, routes, shifts] = await Promise.all([
                     fetchCommonData({ name: 'transporters' }),
                     fetchCommonData({ name: 'routes' }),
+                    fetchCommonData({ name: 'shifts' }),
                 ]);
 
-                const allData = { transporters, routes };
+                const allData = { transporters, routes, shifts };
                 setCommonData(allData);
 
                 setTransporterItems(
-                    (transporters || []).map((t: any) => ({
-                        label: `${t?.first_name + ' ' + t?.last_name || 'Unnamed Transporter'}`,
-                        value: t.id,
+                    (transporters || []).map((transporter: any) => ({
+                        label:
+                            transporter?.full_names ||
+                            `${transporter?.first_name || ''} ${transporter?.last_name || ''}`.trim() ||
+                            transporter?.company_name ||
+                            transporter?.name ||
+                            transporter?.registration_number ||
+                            `Transporter ${transporter?.id}`,
+                        value: transporter?.id,
                     }))
                 );
 
@@ -69,6 +72,14 @@ const ShiftSummaryReportScreen = () => {
                         value: r.id,
                     }))
                 );
+
+                setShiftItems([
+                    { label: 'All Shifts', value: 'all' },
+                    ...(shifts || []).map((shift: any) => ({
+                        label: shift?.description || shift?.name || `Shift ${shift?.id}`,
+                        value: shift?.id,
+                    })),
+                ]);
             } catch (error: any) {
                 Alert.alert('Error', `Failed to load common data: ${error.message || error}`);
             }
@@ -174,7 +185,7 @@ const ShiftSummaryReportScreen = () => {
                                 style={styles.iconInside}
                                 onPress={() => setShowFromPicker(true)}
                             >
-                                <I name="calendar-today" size={20} color="#666" />
+                                <Icon name="calendar-today" size={20} color="#666" />
                             </TouchableOpacity>
                         </View>
                         {showFromPicker && (
@@ -248,6 +259,8 @@ const ShiftSummaryReportScreen = () => {
                             setValue={setShiftValue}
                             setItems={setShiftItems}
                             placeholder="Select shift"
+                            searchable
+                            listMode="SCROLLVIEW"
                             style={styles.dropdown}
                             dropDownContainerStyle={styles.dropdownBox}
                             zIndex={1800}
@@ -318,7 +331,9 @@ const ShiftSummaryReportScreen = () => {
                                 from_date: fromDate.toDateString(),
                                 to_date: toDate.toDateString(),
                                 transporter: transporterItems.find(item => item.value === transporterValue)?.label || 'All Transporters',
-                                shift: shiftValue === 'all' ? 'All Shifts' : shiftValue.toUpperCase(),
+                                shift: shiftValue === 'all'
+                                    ? 'All Shifts'
+                                    : shiftItems.find(item => item.value === shiftValue)?.label || `Shift ${shiftValue}`,
                                 route: routeItems.find(item => item.value === routeValue)?.label || 'All Routes',
                                 summary_data: userSummary,
                                 total_amount: userSummary.reduce((sum, item) => sum + (item.total_amount || 0), 0),

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
     Modal,
     View,
@@ -10,6 +10,8 @@ import {
     Alert,
     FlatList,
     ScrollView,
+    KeyboardAvoidingView,
+    Platform,
 } from "react-native";
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 // @ts-ignore - library lacks TypeScript declarations in current setup
@@ -18,7 +20,7 @@ import DropDownPicker from "react-native-dropdown-picker";
 import { renderDropdownItem } from "../../assets/styles/all";
 import makeRequest from "../utils/makeRequest";
 import BluetoothConnectionModal from "./BluetoothConnectionModal";
-import useBluetoothClassic from "../../hooks/useBluetoothService";
+import useBluetoothService from "../../hooks/useBluetoothService";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 type StoreSaleModalProps = {
@@ -104,7 +106,12 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         isConnecting: isConnectingPrinter,
         printText,
         printRaw
-    } = useBluetoothClassic({ deviceType: 'printer' });
+    } = useBluetoothService({ deviceType: 'printer' });
+
+    const printerDevicesRef = useRef<any[]>(printerDevices || []);
+    useEffect(() => {
+        printerDevicesRef.current = printerDevices || [];
+    }, [printerDevices]);
 
     const persistLastPrinter = useCallback(async (device: any) => {
         if (!device) return;
@@ -129,35 +136,47 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         }
     }, []);
 
-    const attemptAutoConnectPrinter = useCallback(async (): Promise<boolean> => {
-        if (connectedPrinter || isConnectingPrinter) {
-            return true;
-        }
-
+    const connectToAnyAvailablePrinter = useCallback(async (): Promise<boolean> => {
         try {
-            const stored = await AsyncStorage.getItem("last_device_printer");
-            if (!stored) {
-                console.log("[StoreSale] AUTO-CONNECT: No stored printer found");
-                return false;
-            }
-
-            let data: any = null;
-            try {
-                data = JSON.parse(stored);
-            } catch (parseError) {
-                console.error("[StoreSale] AUTO-CONNECT: Failed to parse stored printer:", parseError);
-                return false;
-            }
-
-            const deviceId = data?.id || data?.address || data?.address_or_id;
-            if (!deviceId) {
-                console.log("[StoreSale] AUTO-CONNECT: Stored printer missing device id");
-                return false;
-            }
-
-            console.log("[StoreSale] AUTO-CONNECT: Scanning for saved printer...");
+            console.log("[StoreSale] AUTO-CONNECT: Scanning for InnerPrinter...");
             await scanForPrinters();
-            console.log("[StoreSale] AUTO-CONNECT: Attempting connection to", deviceId);
+            
+            // Wait a bit for scan to complete
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Get the latest devices from the ref (updated by useEffect)
+            const devices = printerDevicesRef.current || [];
+            console.log("[StoreSale] AUTO-CONNECT: Found", devices.length, "printer devices");
+            
+            if (devices.length === 0) {
+                console.log("[StoreSale] AUTO-CONNECT: No printers found in scan");
+                return false;
+            }
+            
+            // Filter for InnerPrinter devices first (case-insensitive)
+            const innerPrinters = devices.filter(device => {
+                const deviceName = (device.name || '').toLowerCase();
+                return deviceName.includes('innerprinter') || deviceName.includes('inner');
+            });
+            
+            let targetPrinter;
+            if (innerPrinters.length > 0) {
+                targetPrinter = innerPrinters[0];
+                console.log("[StoreSale] AUTO-CONNECT: Found InnerPrinter device:", targetPrinter.name || targetPrinter.id);
+            } else {
+                // Fallback to first available printer if no InnerPrinter found
+                targetPrinter = devices[0];
+                console.log("[StoreSale] AUTO-CONNECT: No InnerPrinter found, using first available printer:", targetPrinter.name || targetPrinter.id);
+            }
+            
+            const deviceId = targetPrinter?.id || targetPrinter?.address || targetPrinter?.address_or_id;
+            
+            if (!deviceId) {
+                console.log("[StoreSale] AUTO-CONNECT: Target printer missing device id");
+                return false;
+            }
+            
+            console.log("[StoreSale] AUTO-CONNECT: Attempting connection to", targetPrinter.name || deviceId);
             const result = await connectToPrinter(deviceId);
             const success = !!result;
             console.log("[StoreSale] AUTO-CONNECT:", success ? "✓ Connected" : "✗ Connection failed");
@@ -168,10 +187,54 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
             return success;
         } catch (error) {
+            console.error("[StoreSale] AUTO-CONNECT: Error connecting to printer:", error);
+            return false;
+        }
+    }, [scanForPrinters, connectToPrinter, persistLastPrinter]);
+
+    const attemptAutoConnectPrinter = useCallback(async (): Promise<boolean> => {
+        if (connectedPrinter || isConnectingPrinter) {
+            return true;
+        }
+
+        try {
+            // First, try stored printer
+            const stored = await AsyncStorage.getItem("last_device_printer");
+            if (stored) {
+                let data: any = null;
+                try {
+                    data = JSON.parse(stored);
+                } catch (parseError) {
+                    console.error("[StoreSale] AUTO-CONNECT: Failed to parse stored printer:", parseError);
+                }
+
+                if (data) {
+                    const deviceId = data?.id || data?.address || data?.address_or_id;
+                    if (deviceId) {
+                        console.log("[StoreSale] AUTO-CONNECT: Scanning for saved printer...");
+                        await scanForPrinters();
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        console.log("[StoreSale] AUTO-CONNECT: Attempting connection to stored printer", deviceId);
+                        const result = await connectToPrinter(deviceId);
+                        const success = !!result;
+                        console.log("[StoreSale] AUTO-CONNECT:", success ? "✓ Connected to stored printer" : "✗ Stored printer connection failed");
+
+                        if (success) {
+                            await persistLastPrinter(result);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // If stored printer failed or doesn't exist, try any available printer
+            console.log("[StoreSale] AUTO-CONNECT: Trying to connect to any available printer...");
+            return await connectToAnyAvailablePrinter();
+        } catch (error) {
             console.error("[StoreSale] AUTO-CONNECT: Unexpected error:", error);
             return false;
         }
-    }, [connectToPrinter, scanForPrinters, connectedPrinter, isConnectingPrinter, persistLastPrinter]);
+    }, [connectToPrinter, scanForPrinters, connectedPrinter, isConnectingPrinter, persistLastPrinter, connectToAnyAvailablePrinter]);
 
     // Load dropdowns whenever commonData changes
     useEffect(() => {
@@ -331,7 +394,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         if (!autoConnected) {
             Alert.alert(
                 "Printer Not Connected",
-                "Unable to auto-connect to InnerPrinter. Please select a printer to complete printing.",
+                "Unable to auto-connect to a printer. Please select a printer manually to complete printing.",
                 [
                     {
                         text: "OK",
@@ -356,6 +419,125 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             persistLastPrinter(connectedPrinter);
         }
     }, [connectedPrinter, persistLastPrinter]);
+
+    // Auto-connect printer when modal opens: Check AsyncStorage and connect to InnerPrinter
+    useEffect(() => {
+        if (!visible) {
+            // Don't auto-connect if modal is not visible
+            return;
+        }
+
+        const autoConnectToLastPrinter = async () => {
+            try {
+                // Skip if already connected
+                if (connectedPrinter) {
+                    try {
+                        let stillConnected = false;
+                        if (connectedPrinter.type === 'ble' && connectedPrinter.bleDevice) {
+                            stillConnected = (connectedPrinter.bleDevice as any).isConnected === true;
+                        } else if (connectedPrinter.type === 'classic' && connectedPrinter.classicDevice) {
+                            stillConnected = await connectedPrinter.classicDevice.isConnected();
+                        }
+                        if (stillConnected) {
+                            console.log('[StoreSale] AUTO-CONNECT PRINTER: Already connected, skipping');
+                            return;
+                        }
+                    } catch { }
+                }
+
+                // Retrieve last printer from AsyncStorage
+                const lastPrinter = await AsyncStorage.getItem('last_device_printer');
+                if (!lastPrinter) {
+                    console.log('[StoreSale] AUTO-CONNECT PRINTER: No last printer found in storage, will scan for InnerPrinter');
+                    // If no saved printer, try to connect to any InnerPrinter
+                    try {
+                        console.log('[StoreSale] AUTO-CONNECT PRINTER: Scanning for InnerPrinter...');
+                        await scanForPrinters();
+                        await new Promise<void>(r => setTimeout(() => r(), 2000));
+                        
+                        const innerPrinters = printerDevicesRef.current.filter(device => {
+                            const deviceName = (device.name || '').toLowerCase();
+                            return deviceName.includes('innerprinter') || deviceName.includes('inner');
+                        });
+
+                        if (innerPrinters.length > 0) {
+                            const firstInnerPrinter = innerPrinters[0];
+                            const innerPrinterId = firstInnerPrinter.id || firstInnerPrinter.address;
+                            console.log('[StoreSale] AUTO-CONNECT PRINTER: Trying to connect to first InnerPrinter found:', innerPrinterId);
+                            await connectToPrinter(innerPrinterId);
+                            console.log('[StoreSale] AUTO-CONNECT PRINTER: ✓ Connected to InnerPrinter');
+                        }
+                    } catch (innerPrinterErr) {
+                        console.error('[StoreSale] AUTO-CONNECT PRINTER: Error connecting to InnerPrinter:', innerPrinterErr);
+                    }
+                    return;
+                }
+
+                let printerData: any = null;
+                try {
+                    printerData = typeof lastPrinter === 'string' ? JSON.parse(lastPrinter) : lastPrinter;
+                    console.log('[StoreSale] AUTO-CONNECT PRINTER: Last printer found:', printerData);
+                } catch (parseError) {
+                    console.error('[StoreSale] AUTO-CONNECT PRINTER: Error parsing stored printer:', parseError);
+                    return;
+                }
+
+                const deviceId = printerData.id || printerData.address || printerData.address_or_id;
+                if (!deviceId) {
+                    console.log('[StoreSale] AUTO-CONNECT PRINTER: No valid printer ID found');
+                    return;
+                }
+
+                // First, trigger a scan to discover devices
+                console.log('[StoreSale] AUTO-CONNECT PRINTER: Starting device scan to find saved printer...');
+                scanForPrinters(); // Don't await - let it run in background
+
+                // Wait for scan to complete (18 seconds for full scan)
+                console.log('[StoreSale] AUTO-CONNECT PRINTER: Waiting for scan to complete (18 seconds)...');
+                await new Promise<void>(r => setTimeout(() => r(), 18000)); // Wait 18 seconds for scan to finish
+
+                // Re-check printerDevices after waiting
+                await new Promise<void>(r => setTimeout(() => r(), 500));
+
+                console.log('[StoreSale] AUTO-CONNECT PRINTER: Checking for printer after scan...');
+                console.log('[StoreSale] AUTO-CONNECT PRINTER: Looking for printer ID:', deviceId);
+
+                try {
+                    await connectToPrinter(deviceId);
+                    console.log('[StoreSale] AUTO-CONNECT PRINTER: ✓ Connection attempt completed');
+                } catch (connectError) {
+                    console.error('[StoreSale] AUTO-CONNECT PRINTER: Connection error:', connectError);
+                    // If saved printer fails, try to find any InnerPrinter
+                    try {
+                        const innerPrinters = printerDevicesRef.current.filter(device => {
+                            const deviceName = (device.name || '').toLowerCase();
+                            return deviceName.includes('innerprinter') || deviceName.includes('inner');
+                        });
+
+                        if (innerPrinters.length > 0) {
+                            const firstInnerPrinter = innerPrinters[0];
+                            const innerPrinterId = firstInnerPrinter.id || firstInnerPrinter.address;
+                            console.log('[StoreSale] AUTO-CONNECT PRINTER: Trying to connect to first InnerPrinter found:', innerPrinterId);
+                            await connectToPrinter(innerPrinterId);
+                            console.log('[StoreSale] AUTO-CONNECT PRINTER: ✓ Connected to InnerPrinter');
+                        }
+                    } catch (innerPrinterErr) {
+                        console.error('[StoreSale] AUTO-CONNECT PRINTER: Error connecting to InnerPrinter:', innerPrinterErr);
+                    }
+                }
+            } catch (error) {
+                console.error('[StoreSale] AUTO-CONNECT PRINTER: Failed:', error);
+                // Don't show alert - just log the error
+            }
+        };
+
+        // Run auto-connect after a short delay to allow modal to mount
+        const timeout = setTimeout(() => {
+            autoConnectToLastPrinter();
+        }, 2000); // Delay 2 seconds to allow modal to fully mount
+
+        return () => clearTimeout(timeout);
+    }, [visible, connectedPrinter, scanForPrinters, connectToPrinter]); // Run when modal becomes visible
 
     const handleSave = async () => {
         if (!storeValue || !transactionDate || entries.length === 0) {
@@ -420,21 +602,27 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
     return (
         <Modal visible={visible} animationType="slide" transparent={false}>
-            <View style={styles.fullModal}>
-                {/* Header with close button */}
-                <View style={styles.headerWrapper}>
-                    <View style={styles.header}>
-                        <Text style={styles.title}>New Store Sale</Text>
-                        <TouchableOpacity onPress={onClose}>
-                            <Icon name="close" size={28} color="#fff" />
-                        </TouchableOpacity>
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+            >
+                <View style={styles.fullModal}>
+                    {/* Header with close button */}
+                    <View style={styles.headerWrapper}>
+                        <View style={styles.header}>
+                            <Text style={styles.title}>New Store Sale</Text>
+                            <TouchableOpacity onPress={onClose}>
+                                <Icon name="close" size={28} color="#fff" />
+                            </TouchableOpacity>
+                        </View>
                     </View>
-                </View>
 
-                <ScrollView
-                    style={styles.contentScroll}
-                    contentContainerStyle={styles.contentContainer}
-                    keyboardShouldPersistTaps="handled"
+                    <ScrollView
+                        style={styles.contentScroll}
+                        contentContainerStyle={styles.contentContainer}
+                        keyboardShouldPersistTaps="handled"
+                        showsVerticalScrollIndicator={false}
                 >
                     {/* Member */}
                     <Text style={styles.label}>Member</Text>
@@ -453,6 +641,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         searchPlaceholder="Search members..."
                         style={styles.dropdown}
                         dropDownContainerStyle={styles.dropdownBox}
+                        scrollViewProps={{ nestedScrollEnabled: true }}
                     />
 
                     {/* Pair: Store + Date */}
@@ -474,6 +663,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                 searchPlaceholder="Search stores..."
                                 style={styles.dropdown}
                                 dropDownContainerStyle={styles.dropdownBox}
+                                scrollViewProps={{ nestedScrollEnabled: true }}
                             />
                         </View>
 
@@ -525,6 +715,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         zIndexInverse={2000}
                         style={styles.dropdown}
                         dropDownContainerStyle={styles.dropdownBox}
+                        scrollViewProps={{ nestedScrollEnabled: true }}
                     />
 
                     {/* Entries list */}
@@ -698,7 +889,8 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                     isConnecting={isConnectingPrinter}
                     connectedDevice={connectedPrinter}
                 />
-            </View>
+                </View>
+            </KeyboardAvoidingView>
         </Modal>
     );
 };

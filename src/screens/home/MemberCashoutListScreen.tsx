@@ -29,7 +29,7 @@ const MemberCashoutListScreen: React.FC = () => {
                 const [members] = await Promise.all([
                     fetchCommonData({ name: "cashout_members", cachable: false }),
                 ]);
-
+                Alert.alert("members", JSON.stringify(members));
                 const formattedMembers = members.map((item: any) => ({
                     id: item?.id,
                     uuid: item?.uuid,
@@ -97,7 +97,7 @@ const MemberCashoutListScreen: React.FC = () => {
             const [members] = await Promise.all([
                 fetchCommonData({ name: "cashout_members", cachable: false }),
             ]);
-
+            Alert.alert("members", JSON.stringify(members));
             const formattedMembers = members.map((item: any) => ({
                 id: item?.id,
                 uuid: item?.uuid,
@@ -165,16 +165,20 @@ const MemberCashoutListScreen: React.FC = () => {
                         </Text>
                     </View>
                 ) : (
-                    <>
-                        <MemberCashoutActions
-                            memberId={memberValue}
-                            selectedMember={selectedMember}
-                            setSelectedmember={setSelectedMember}
-                            onRefresh={handleRefresh}
-                            customer_type={customer_type}
-                        />
-                        <CashoutsListComponent memberId={memberValue} />
-                    </>
+                    <View style={styles.contentArea}>
+                        <View style={styles.actionsWrapper}>
+                            <MemberCashoutActions
+                                memberId={memberValue}
+                                selectedMember={selectedMember}
+                                setSelectedmember={setSelectedMember}
+                                onRefresh={handleRefresh}
+                                customer_type={customer_type}
+                            />
+                        </View>
+                        <View style={styles.listWrapper}>
+                            <CashoutsListComponent memberId={memberValue} />
+                        </View>
+                    </View>
                 )}
             </View>
         </View>
@@ -204,5 +208,15 @@ const styles = StyleSheet.create({
         color: "#6b7280",
         textAlign: "center",
         fontWeight: "500",
+    },
+    contentArea: {
+        flex: 1,
+        marginTop: 12,
+    },
+    actionsWrapper: {
+        paddingBottom: 16,
+    },
+    listWrapper: {
+        flex: 1,
     },
 });
