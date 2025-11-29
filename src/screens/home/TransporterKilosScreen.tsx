@@ -331,6 +331,7 @@ const TransporterKilosScreen = () => {
                             setValue={(val: any) => setSelectedTransporterForView(val as number)}
                             setItems={setTransporterItems}
                             placeholder="Select transporter to view kilos"
+                            listMode="SCROLLVIEW"
                             searchable
                             renderListItem={renderDropdownItem}
                             zIndex={3000}
@@ -343,6 +344,7 @@ const TransporterKilosScreen = () => {
                                 borderWidth: 1,
                                 borderColor: "#ddd",
                             }}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
 
@@ -420,6 +422,7 @@ const TransporterKilosScreen = () => {
                                 setValue={setTransporterValue}
                                 setItems={setTransporterItems}
                                 placeholder="Select transporter"
+                                listMode="SCROLLVIEW"
                                 searchable
                                 renderListItem={renderDropdownItem}
                                 zIndex={5000}
@@ -433,6 +436,7 @@ const TransporterKilosScreen = () => {
                                     borderWidth: 1,
                                     borderColor: "#ddd",
                                 }}
+                                scrollViewProps={{ nestedScrollEnabled: true }}
                             />
                         </View>
                         <View style={styles.col}>
@@ -472,6 +476,7 @@ const TransporterKilosScreen = () => {
                                 setValue={setRouteValue}
                                 setItems={setRouteItems}
                                 placeholder="Select route"
+                                listMode="SCROLLVIEW"
                                 searchable
                                 renderListItem={renderDropdownItem}
                                 zIndex={4000}
@@ -485,6 +490,7 @@ const TransporterKilosScreen = () => {
                                     borderWidth: 1,
                                     borderColor: "#ddd",
                                 }}
+                                scrollViewProps={{ nestedScrollEnabled: true }}
                             />
                         </View>
                         <View style={styles.col}>
@@ -496,6 +502,7 @@ const TransporterKilosScreen = () => {
                                 setValue={setShiftValue}
                                 setItems={setShiftItems}
                                 placeholder="Select shift"
+                                listMode="SCROLLVIEW"
                                 searchable
                                 renderListItem={renderDropdownItem}
                                 zIndex={2500}
@@ -509,6 +516,7 @@ const TransporterKilosScreen = () => {
                                     borderWidth: 1,
                                     borderColor: "#ddd",
                                 }}
+                                scrollViewProps={{ nestedScrollEnabled: true }}
                             />
                         </View>
                     </View>
@@ -524,6 +532,7 @@ const TransporterKilosScreen = () => {
                                 setValue={setVehicleValue}
                                 setItems={setVehicleItems}
                                 placeholder="Select vehicle"
+                                listMode="SCROLLVIEW"
                                 searchable
                                 renderListItem={renderDropdownItem}
                                 zIndex={1500}
@@ -537,6 +546,7 @@ const TransporterKilosScreen = () => {
                                     borderWidth: 1,
                                     borderColor: "#ddd",
                                 }}
+                                scrollViewProps={{ nestedScrollEnabled: true }}
                             />
                         </View>
                         <View style={styles.col}>

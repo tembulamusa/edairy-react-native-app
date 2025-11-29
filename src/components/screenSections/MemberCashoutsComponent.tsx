@@ -104,8 +104,8 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
 
     /*
     * --------------------------
-    * Render Cashout Item
-    -------------------------- 
+        * Render Cashout Item
+        -------------------------- 
     */
     const renderCashoutItem = ({ item }: { item: Cashout }) => {
         const isAwaitingAcceptance =

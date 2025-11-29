@@ -26,7 +26,7 @@ const makeRequest = async ({
                         // Retry the request after user confirms
                         setTimeout(() => {
                             makeRequest({ url, method, data, use_jwt, responseType, isFormData });
-                        }, 1000);
+                        }, 10000);
                     },
                 },
             ]

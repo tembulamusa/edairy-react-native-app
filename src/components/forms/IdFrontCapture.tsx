@@ -30,19 +30,50 @@ const IdFrontCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
     const requestGalleryPermission = async (): Promise<boolean> => {
         if (Platform.OS !== "android") return true;
         try {
-            // Android 13+
-            const hasReadMedia = await PermissionsAndroid.request(
-                // @ts-ignore older TS defs may miss READ_MEDIA_IMAGES
-                (PermissionsAndroid as any).PERMISSIONS.READ_MEDIA_IMAGES || PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-                {
-                    title: "Photos Permission",
-                    message: "We need access to your photos to pick ID images.",
-                    buttonPositive: "OK",
+            // Check Android version
+            const androidVersion = Platform.Version;
+            
+            // Android 13+ (API 33+) uses READ_MEDIA_IMAGES
+            if (androidVersion >= 33) {
+                const READ_MEDIA_IMAGES = (PermissionsAndroid as any).PERMISSIONS.READ_MEDIA_IMAGES;
+                if (READ_MEDIA_IMAGES) {
+                    // Check if already granted
+                    const checkResult = await PermissionsAndroid.check(READ_MEDIA_IMAGES);
+                    if (checkResult) return true;
+                    
+                    // Request permission
+                    const result = await PermissionsAndroid.request(READ_MEDIA_IMAGES, {
+                        title: "Photos Permission",
+                        message: "We need access to your photos to pick ID images.",
+                        buttonPositive: "OK",
+                    });
+                    return result === PermissionsAndroid.RESULTS.GRANTED;
                 }
-            );
-            return hasReadMedia === PermissionsAndroid.RESULTS.GRANTED;
+                // If READ_MEDIA_IMAGES is not available, try without permission (Android 13+ may not need it)
+                return true;
+            } else {
+                // Android 12 and below use READ_EXTERNAL_STORAGE
+                // Check if already granted
+                const checkResult = await PermissionsAndroid.check(
+                    PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE
+                );
+                if (checkResult) return true;
+                
+                // Request permission
+                const result = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+                    {
+                        title: "Photos Permission",
+                        message: "We need access to your photos to pick ID images.",
+                        buttonPositive: "OK",
+                    }
+                );
+                return result === PermissionsAndroid.RESULTS.GRANTED;
+            }
         } catch (e) {
-            return false;
+            console.error("Permission request error:", e);
+            // On error, try to proceed anyway (some devices may not need explicit permission)
+            return true;
         }
     };
 

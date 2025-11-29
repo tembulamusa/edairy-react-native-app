@@ -435,12 +435,14 @@ const MilkSalesScreen = () => {
                         setValue={setTransporterValue}
                         setItems={setTransporterItems}
                         placeholder="Select Transporter"
+                        listMode="SCROLLVIEW"
                         zIndex={2500}
                         zIndexInverse={2000}
                         style={styles.dropdown}
                         dropDownContainerStyle={styles.dropdownBox}
                         searchable={true}   // ✅ Added searchable
                         searchPlaceholder="Search transporter..." // optional
+                        scrollViewProps={{ nestedScrollEnabled: true }}
                     />
                 </View>
 
@@ -455,10 +457,12 @@ const MilkSalesScreen = () => {
                         setItems={setCustomerItems}
                         searchable={true}
                         placeholder="Select customer"
+                        listMode="SCROLLVIEW"
                         style={styles.dropdown}
                         dropDownContainerStyle={styles.dropdownBox}
                         zIndex={2000}
                         zIndexInverse={2500}
+                        scrollViewProps={{ nestedScrollEnabled: true }}
                     />
                 </View>
             </View>
@@ -472,9 +476,11 @@ const MilkSalesScreen = () => {
                         setValue={setShiftValue}
                         setItems={setShiftItems}
                         searchable={true}
-                        placeholder="Select Shift"  // ✅ Fix this
+                        placeholder="Select Shift"
+                        listMode="SCROLLVIEW"
                         style={styles.dropdown}
                         dropDownContainerStyle={styles.dropdownBox}
+                        scrollViewProps={{ nestedScrollEnabled: true }}
                         zIndex={1000}
                         zIndexInverse={500}
                     />

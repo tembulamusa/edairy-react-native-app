@@ -196,10 +196,12 @@ const UserBalanceSummaryScreen = () => {
                     setItems={setCustomerItems}
                     searchable={true}
                     placeholder="Select customer"
+                    listMode="SCROLLVIEW"
                     style={styles.dropdown}
                     dropDownContainerStyle={styles.dropdownBox}
                     zIndex={2000}
                     zIndexInverse={2500}
+                    scrollViewProps={{ nestedScrollEnabled: true }}
                 />
             </View>
             {/* </View> */}

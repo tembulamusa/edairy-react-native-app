@@ -21,6 +21,8 @@ type Member = {
     next_level: string;
     uuid: string;
     cashout_enrolled: boolean | number; // ✅ added
+    created?: string;
+    created_at?: string;
 };
 
 const MembersListScreen: React.FC = () => {
@@ -46,9 +48,36 @@ const MembersListScreen: React.FC = () => {
                     last_name: item?.last_name || "",
                     primary_phone: item?.primary_phone || "",
                     cashout_enrolled: !!item?.cashout_enrolled, // ✅ convert to boolean
+                    created: item?.created || item?.created_at || "",
+                    created_at: item?.created_at || item?.created || "",
                 }));
 
-                setMembers(formattedMembers);
+                // Sort by first_name, last_name, and created (ascending for names, descending for created)
+                const sortedMembers = formattedMembers.sort((a, b) => {
+                    // First, sort by first_name
+                    const firstNameCompare = (a.first_name || "").localeCompare(b.first_name || "", undefined, { sensitivity: 'base' });
+                    if (firstNameCompare !== 0) {
+                        return firstNameCompare;
+                    }
+
+                    // Then, sort by last_name
+                    const lastNameCompare = (a.last_name || "").localeCompare(b.last_name || "", undefined, { sensitivity: 'base' });
+                    if (lastNameCompare !== 0) {
+                        return lastNameCompare;
+                    }
+
+                    // Finally, sort by created (most recent first - descending)
+                    const aCreated = a.created_at || a.created || "";
+                    const bCreated = b.created_at || b.created || "";
+                    if (aCreated && bCreated) {
+                        return new Date(bCreated).getTime() - new Date(aCreated).getTime();
+                    }
+                    if (aCreated) return -1;
+                    if (bCreated) return 1;
+                    return 0;
+                });
+
+                setMembers(sortedMembers);
             } catch (error: any) {
                 Alert.alert("Error", JSON.stringify(error) || "Failed to load members");
             } finally {
@@ -121,24 +150,19 @@ const MembersListScreen: React.FC = () => {
                 <Text style={styles.status}>{item.status}</Text>
 
                 {!item.cashout_enrolled ? (
-                    <TouchableOpacity onPress={() => handleRegisterCashout(item)}>
-                        <Text
-                            style={[
-                                styles.nextLevel,
-                                {
-                                    color: "blue",
-                                    // textDecorationLine: "underline",
-                                    marginTop: 5,
-                                },
-                            ]}
-                        >
-                            Register Cashout
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        <Text style={[styles.nextLevel, { marginRight: 5, color: "Gray", fontWeight: "700", fontSize: 10 }]}>
+                            Cashout Status:
                         </Text>
-                    </TouchableOpacity>
+                        <Text>not Enrolled</Text>
+                    </View>
                 ) : (
-                    <Text style={[styles.nextLevel, { color: "green" }]}>
-                        {item.next_level || "Active"}
-                    </Text>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        <Text style={[styles.nextLevel, { marginRight: 5, color: "Gray", fontWeight: "700", fontSize: 10 }]}>
+                            Cashout Status:
+                        </Text>
+                        <Text>Active</Text>
+                    </View>
                 )}
             </View>
         </TouchableOpacity>

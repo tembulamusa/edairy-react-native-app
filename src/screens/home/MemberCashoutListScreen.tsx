@@ -29,7 +29,6 @@ const MemberCashoutListScreen: React.FC = () => {
                 const [members] = await Promise.all([
                     fetchCommonData({ name: "cashout_members", cachable: false }),
                 ]);
-                Alert.alert("members", JSON.stringify(members));
                 const formattedMembers = members.map((item: any) => ({
                     id: item?.id,
                     uuid: item?.uuid,
@@ -97,7 +96,7 @@ const MemberCashoutListScreen: React.FC = () => {
             const [members] = await Promise.all([
                 fetchCommonData({ name: "cashout_members", cachable: false }),
             ]);
-            Alert.alert("members", JSON.stringify(members));
+
             const formattedMembers = members.map((item: any) => ({
                 id: item?.id,
                 uuid: item?.uuid,
@@ -137,7 +136,7 @@ const MemberCashoutListScreen: React.FC = () => {
             </View>
 
             {/* Member Dropdown */}
-            <View style={{ zIndex: 1000 }}>
+            <View style={styles.dropdownWrapper}>
                 <DropDownPicker
                     open={memberOpen}
                     value={memberValue}
@@ -149,10 +148,15 @@ const MemberCashoutListScreen: React.FC = () => {
                     searchable
                     disabled={dropdownDisabled} // ✅ Disable when member-only
                     searchPlaceholder="Search member..."
-                    zIndex={2000}
+                    zIndex={5000}
                     zIndexInverse={1000}
                     style={styles.dropdown}
-                    dropDownContainerStyle={{ borderColor: "#ccc" }}
+                    dropDownContainerStyle={styles.dropdownContainer}
+                    listMode="SCROLLVIEW"
+                    maxHeight={300}
+                    scrollViewProps={{
+                        nestedScrollEnabled: true,
+                    }}
                 />
             </View>
 
@@ -188,7 +192,12 @@ const MemberCashoutListScreen: React.FC = () => {
 export default MemberCashoutListScreen;
 
 const styles = StyleSheet.create({
-    container: { flex: 1, padding: 20, backgroundColor: "#f7fafc" },
+    container: { 
+        flex: 1, 
+        padding: 20, 
+        backgroundColor: "#f7fafc",
+        overflow: "visible",
+    },
     headerRow: {
         flexDirection: "row",
         justifyContent: "space-between",
@@ -196,7 +205,23 @@ const styles = StyleSheet.create({
         marginBottom: 16,
     },
     header: { fontSize: 22, fontWeight: "700", color: "#0f766e" },
-    dropdown: { marginBottom: 16, borderColor: "#ccc" },
+    dropdownWrapper: {
+        zIndex: 5000,
+        marginBottom: 16,
+        overflow: "visible",
+    },
+    dropdown: { 
+        borderColor: "#ccc",
+    },
+    dropdownContainer: {
+        borderColor: "#ccc",
+        maxHeight: 300,
+        elevation: 10,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 3.84,
+    },
     emptyState: {
         flex: 1,
         justifyContent: "center",

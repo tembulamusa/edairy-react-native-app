@@ -239,10 +239,12 @@ const ShiftSummaryReportScreen = () => {
                             setItems={setTransporterItems}
                             searchable={true}
                             placeholder="Select transporter"
+                            listMode="SCROLLVIEW"
                             style={styles.dropdown}
                             dropDownContainerStyle={styles.dropdownBox}
                             zIndex={2000}
                             zIndexInverse={2500}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                 </View>
@@ -279,10 +281,12 @@ const ShiftSummaryReportScreen = () => {
                             setItems={setRouteItems}
                             searchable={true}
                             placeholder="Select route"
+                            listMode="SCROLLVIEW"
                             style={styles.dropdown}
                             dropDownContainerStyle={styles.dropdownBox}
                             zIndex={1700}
                             zIndexInverse={2900}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                 </View>

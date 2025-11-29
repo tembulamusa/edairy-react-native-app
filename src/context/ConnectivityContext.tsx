@@ -56,12 +56,12 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
       wimax: 'WiMAX',
       other: 'Other',
     };
-    
+
     setConnectionType(connectionMap[state.type] || 'Unknown');
 
     // Determine connection quality based on type and details
     let quality: 'excellent' | 'good' | 'poor' | 'none' = 'none';
-    
+
     if (state.isConnected && state.isInternetReachable) {
       if (state.type === 'wifi') {
         quality = 'excellent';
@@ -78,7 +78,7 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
         quality = 'good';
       }
     }
-    
+
     setConnectionQuality(quality);
 
     // Update last connected timestamp
@@ -90,14 +90,14 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
     // Show offline banner and alert when connection is lost
     if (!state.isConnected || !state.isInternetReachable) {
       setShowOfflineBanner(true);
-      
+
       // Always show alert when going offline (except on very first app load)
-      const shouldShowAlert = wasConnected || wasInternetReachable || 
-                            (!hasShownInitialAlert && !state.isConnected);
-      
+      const shouldShowAlert = wasConnected || wasInternetReachable ||
+        (!hasShownInitialAlert && !state.isConnected);
+
       if (shouldShowAlert) {
         setHasShownInitialAlert(true);
-        
+
         // Use setTimeout to ensure alert shows after state updates
         setTimeout(() => {
           Alert.alert(
@@ -106,7 +106,7 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
             [
               {
                 text: 'OK',
-                onPress: () => {},
+                onPress: () => { },
               },
               {
                 text: 'Retry',
@@ -116,14 +116,14 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
               },
             ]
           );
-        }, 100);
+        }, 1000);
       }
     } else {
       // Connection restored - show "back online" notification
       const wasOffline = !wasConnected || !wasInternetReachable;
       setShowOfflineBanner(false);
       setHasShownInitialAlert(true);
-      
+
       // Show "back online" notification if we were previously offline
       if (wasOffline && hasShownInitialAlert) {
         setTimeout(() => {
@@ -133,7 +133,7 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
             [
               {
                 text: 'OK',
-                onPress: () => {},
+                onPress: () => { },
               },
             ]
           );
@@ -169,8 +169,8 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
 
   // Periodic connectivity check (every 10 seconds when offline, 60 seconds when online)
   useEffect(() => {
-    const checkInterval = isConnected && isInternetReachable ? 60000 : 10000;
-    
+    const checkInterval = isConnected && isInternetReachable ? 60000 : 100000;
+
     const interval = setInterval(() => {
       console.log('Periodic connectivity check...');
       checkConnectivity();

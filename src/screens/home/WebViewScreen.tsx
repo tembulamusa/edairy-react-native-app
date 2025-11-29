@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState } from "react";
-import { View, StyleSheet, Alert, Platform, PermissionsAndroid } from "react-native";
+import { View, StyleSheet, Alert, Platform, PermissionsAndroid, TouchableOpacity, Text } from "react-native";
 import { WebView } from "react-native-webview";
 import { WebViewMessageEvent } from "react-native-webview/lib/WebViewTypes";
+import Icon from "react-native-vector-icons/MaterialIcons";
 
 export default function WebViewScreen({ route, navigation }: any) {
     const { url } = route.params;
@@ -67,12 +68,28 @@ export default function WebViewScreen({ route, navigation }: any) {
         }
     };
 
+    const handleExitToCashouts = () => {
+        // Navigate to Cashouts tab in the Home stack
+        navigation.navigate("Cashouts", {
+        });
+    };
+
     if (!permissionGranted) {
         return <View style={styles.container} />;
     }
 
     return (
         <View style={styles.container}>
+            {/* Exit Button */}
+            <TouchableOpacity
+                style={styles.exitButton}
+                onPress={handleExitToCashouts}
+                activeOpacity={0.7}
+            >
+                <Icon name="close" size={24} color="#fff" />
+                <Text style={styles.exitButtonText}>Exit to Cashouts</Text>
+            </TouchableOpacity>
+
             <WebView
                 ref={webviewRef}
                 source={{ uri: url }}
@@ -116,5 +133,25 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: "#000",
+    },
+    exitButton: {
+        position: "absolute",
+        top: Platform.OS === "ios" ? 50 : 20,
+        right: 20,
+        zIndex: 1000,
+        backgroundColor: "rgba(0, 0, 0, 0.7)",
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 25,
+        borderWidth: 1,
+        borderColor: "rgba(255, 255, 255, 0.3)",
+    },
+    exitButtonText: {
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: "600",
+        marginLeft: 8,
     },
 });

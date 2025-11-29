@@ -131,7 +131,7 @@ const MemberKilosScreen = () => {
             }
         }
     }, [lastMessage, connectedScaleDevice]);
-    
+
     // Clear scaleWeightText when scale connects to allow fresh input
     useEffect(() => {
         if (connectedScaleDevice) {
@@ -253,25 +253,25 @@ const MemberKilosScreen = () => {
         try {
             console.log("[MemberKilos] AUTO-CONNECT: Scanning for InnerPrinter...");
             await scanForPrinterDevices();
-            
+
             // Wait a bit for scan to complete
             await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
-            
+
             // Get the latest devices from the ref (updated by useEffect)
             const devices = printerDevicesRef.current || [];
             console.log("[MemberKilos] AUTO-CONNECT: Found", devices.length, "printer devices");
-            
+
             if (devices.length === 0) {
                 console.log("[MemberKilos] AUTO-CONNECT: No printers found in scan");
                 return false;
             }
-            
+
             // Filter for InnerPrinter devices first (case-insensitive)
             const innerPrinters = devices.filter(device => {
                 const deviceName = (device.name || '').toLowerCase();
                 return deviceName.includes('innerprinter') || deviceName.includes('inner');
             });
-            
+
             let targetPrinter;
             if (innerPrinters.length > 0) {
                 targetPrinter = innerPrinters[0];
@@ -281,14 +281,14 @@ const MemberKilosScreen = () => {
                 targetPrinter = devices[0];
                 console.log("[MemberKilos] AUTO-CONNECT: No InnerPrinter found, using first available printer:", targetPrinter.name || targetPrinter.id);
             }
-            
+
             const deviceId = targetPrinter?.id || targetPrinter?.address || targetPrinter?.address_or_id;
-            
+
             if (!deviceId) {
                 console.log("[MemberKilos] AUTO-CONNECT: Target printer missing device id");
                 return false;
             }
-            
+
             console.log("[MemberKilos] AUTO-CONNECT: Attempting connection to", targetPrinter.name || deviceId);
             const result = await connectToPrinterDevice(deviceId);
             const success = !!result;
@@ -410,7 +410,7 @@ const MemberKilosScreen = () => {
     useEffect(() => {
         const loadCommonData = async () => {
             try {
-                const [transporters, routes, shifts, members, cans, centers, measuringCans] =
+                const [transporters, routes, shifts, members, cans, centers] =
                     await Promise.all([
                         fetchCommonData({ name: "transporters" }),
                         fetchCommonData({ name: "routes" }),
@@ -418,19 +418,70 @@ const MemberKilosScreen = () => {
                         fetchCommonData({ name: "members", cachable: false }),
                         fetchCommonData({ name: "cans" }),
                         fetchCommonData({ name: "centers" }),
-                        fetchCommonData({ name: "measuring_cans", cachable: false }),
                     ]);
-                const allData = { transporters, routes, shifts, members, cans, centers, measuring_can: measuringCans };
+                const allData = { transporters, routes, shifts, members, cans, centers, measuring_cans: [] };
                 setCommonData(allData);
-
                 // populate dropdown items
                 setTransporterItems((transporters || []).map((t: any) => ({ label: t.full_names, value: t.id })));
                 setShiftItems((shifts || []).map((s: any) => ({ label: s.name, value: s.id })));
                 setRouteItems((routes || []).map((r: any) => ({ label: `${r.route_name} (${r.route_code})`, value: r.id })));
                 setMemberItems((members || []).map((m: any) => ({ label: `${m.first_name} ${m.last_name}`, value: m.id })));
                 setCanItems((cans || []).map((c: any) => ({ label: c.can_id || `Can ${c.id}`, value: c.id })));
-                setMeasuringCanItems((measuringCans || []).map((c: any) => ({ label: c.can_id || `Can ${c.id}`, value: c.id })));
+                // Measuring cans will be loaded when transporter is selected
+                setMeasuringCanItems([]);
                 setCenterItems((centers || []).map((c: any) => ({ label: c.centre, value: c.id })));
+
+                // Auto-select shift based on current time period (morning, afternoon, evening)
+                if (shifts && shifts.length > 0) {
+                    const currentTime = new Date();
+                    const currentHours = currentTime.getHours();
+
+                    // Determine current time period
+                    let currentPeriod: string;
+                    if (currentHours >= 6 && currentHours < 12) {
+                        currentPeriod = "morning";
+                    } else if (currentHours >= 12 && currentHours < 18) {
+                        currentPeriod = "afternoon";
+                    } else {
+                        // Evening: 18:00 (6 PM) to 06:00 (6 AM next day)
+                        currentPeriod = "evening";
+                    }
+
+                    console.log(`[MemberKilos] Current time: ${currentHours}:${currentTime.getMinutes()} - Period: ${currentPeriod}`);
+                    console.log(`[MemberKilos] Available shifts:`, shifts.map((s: any) => ({ id: s.id, name: s.name, time: s.time })));
+
+                    // Find shift that matches current time period
+                    const matchingShift = shifts?.find((s: any) => {
+                        if (!s.time) {
+                            console.log(`[MemberKilos] Shift ${s.id} (${s.name}) has no time field`);
+                            return false;
+                        }
+
+                        // Normalize the time field to lowercase and remove any extra whitespace
+                        const shiftTime = s.time.toString().trim().toLowerCase();
+
+                        // More flexible matching - check if the time field contains the period
+                        // This handles cases like "Morning Shift", "morning", "MORNING", etc.
+                        const matches = shiftTime === currentPeriod ||
+                            shiftTime.includes(currentPeriod) ||
+                            currentPeriod.includes(shiftTime);
+
+                        console.log(`[MemberKilos] Shift ${s.id} (${s.name}): time="${s.time}" -> normalized="${shiftTime}", currentPeriod="${currentPeriod}", matches=${matches}`);
+
+                        return matches;
+                    });
+
+                    if (matchingShift) {
+                        setShiftValue(matchingShift?.id);
+                        setShift(matchingShift);
+                        console.log(`[MemberKilos] ✅ Auto-selected shift: ${matchingShift.name} (ID: ${matchingShift.id}) - Time period: ${currentPeriod}`);
+                    } else {
+                        console.log(`[MemberKilos] ❌ No shift found matching current time period: ${currentPeriod}`);
+                        console.log(`[MemberKilos] Available shift times:`, shifts.map((s: any) => s.time).filter(Boolean));
+                    }
+                } else {
+                    console.log(`[MemberKilos] No shifts available for auto-selection`);
+                }
                 // Load user info
                 const userDataString = await AsyncStorage.getItem("user");
                 if (userDataString) {
@@ -501,14 +552,76 @@ const MemberKilosScreen = () => {
         }
     }, [memberValue, commonData.members]);
 
+    // Fetch measuring cans when transporter is selected
+    useEffect(() => {
+        const fetchMeasuringCans = async () => {
+            if (!transporterValue) {
+                // Clear measuring cans if no transporter is selected
+                setCommonData((prev: any) => ({ ...prev, measuring_cans: [] }));
+                setMeasuringCanItems([]);
+                setMeasuringCanValue(null);
+                setMeasuringCan(null);
+                return;
+            }
+
+            try {
+                console.log(`[MemberKilos] Fetching measuring cans for transporter_id: ${transporterValue}`);
+                const measuringCans = await fetchCommonData({
+                    name: "measuring_cans",
+                    cachable: false,
+                    params: { transporter_id: transporterValue }
+                });
+
+                // Update commonData with fetched measuring cans
+                setCommonData((prev: any) => ({
+                    ...prev,
+                    measuring_cans: measuringCans || []
+                }));
+
+                // Update measuring can items
+                const canItems = (measuringCans || []).map((c: any) => ({
+                    label: c.can_id || `Can ${c.id}`,
+                    value: c.id
+                }));
+                setMeasuringCanItems(canItems);
+
+                // Clear measuring can selection if current selection is not in new list
+                if (measuringCanValue) {
+                    const isStillAvailable = (measuringCans || []).some((c: any) => c.id === measuringCanValue);
+                    if (!isStillAvailable) {
+                        setMeasuringCanValue(null);
+                        setMeasuringCan(null);
+                    }
+                }
+            } catch (error: any) {
+                console.error('[MemberKilos] Error fetching measuring cans:', error);
+                Alert.alert("Error", `Failed to load measuring cans: ${error.message || 'Unknown error'}`);
+                // Clear on error
+                setCommonData((prev: any) => ({ ...prev, measuring_cans: [] }));
+                setMeasuringCanItems([]);
+            }
+        };
+
+        fetchMeasuringCans();
+    }, [transporterValue]);
+
     // Keep selected measuring can details fully loaded
     const [measuringCan, setMeasuringCan] = useState<any | null>(null);
     useEffect(() => {
-        if (measuringCanValue && Array.isArray(commonData.measuring_can)) {
-            const found = commonData.measuring_can.find((c: any) => c.id === measuringCanValue);
-            if (found) setMeasuringCan(found);
+        if (measuringCanValue && Array.isArray(commonData?.measuring_cans)) {
+            const found = (commonData?.measuring_cans || []).find((c: any) => c.id === measuringCanValue);
+            if (found) {
+                setMeasuringCan(found);
+                console.log(`[MemberKilos] Measuring can loaded:`, found);
+                console.log(`[MemberKilos] Measuring can tare_weight:`, found?.tare_weight);
+            } else {
+                console.log(`[MemberKilos] Measuring can not found for ID: ${measuringCanValue}`);
+                console.log(`[MemberKilos] Available measuring cans:`, commonData?.measuring_cans);
+            }
+        } else if (!measuringCanValue) {
+            setMeasuringCan(null);
         }
-    }, [measuringCanValue, commonData.measuring_can]);
+    }, [measuringCanValue, commonData?.measuring_cans]);
 
     // --- takeWeight: push current scale weight into entries and update totals ---
     const takeWeight = () => {
@@ -547,6 +660,7 @@ const MemberKilosScreen = () => {
         setTotalCans(prev => prev + 1);
         setTotalQuantity(prev => (prev ?? 0) + net);
         setScaleWeight(null);
+        setScaleWeightText("");
         setCanValue(null);
     };
 
@@ -621,7 +735,7 @@ const MemberKilosScreen = () => {
                         if (deviceId) {
                             console.log('[PRINT] Found saved printer:', printerData.name || deviceId);
                             console.log('[PRINT] Saved printer type:', savedType);
-                            
+
                             // If it's InnerPrinter or saved as Classic, ensure we use Classic connection
                             if (isInnerPrinter || savedType === 'classic') {
                                 console.log('[PRINT] InnerPrinter or Classic printer detected - will use Classic connection');
@@ -732,10 +846,10 @@ const MemberKilosScreen = () => {
     // Helper: Print receipt using connected printer
     const printReceipt = useCallback(async (receiptText: string, deviceOverride?: any): Promise<boolean> => {
         console.log('[PRINTER] Printing receipt...');
-        
+
         // Use provided device or fall back to state
         let printerDevice = deviceOverride || connectedPrinterDevice;
-        
+
         // If device was provided but state might not be updated yet, wait and verify
         if (deviceOverride && !connectedPrinterDevice) {
             console.log('[PRINT] Device provided but state not updated yet, waiting for state sync...');
@@ -753,7 +867,7 @@ const MemberKilosScreen = () => {
                 console.log('[PRINT] State not updated, will use provided device (printTextToPrinter may use state)');
             }
         }
-        
+
         // Check if printer is connected and print function is available
         if (!printerDevice) {
             console.error('[PRINT] No printer connected');
@@ -775,7 +889,7 @@ const MemberKilosScreen = () => {
             }
             return false;
         }
-        
+
         if (!printTextToPrinter) {
             console.error('[PRINT] Print function not available');
             // Show alert instead of silently failing
@@ -786,7 +900,7 @@ const MemberKilosScreen = () => {
             }
             return false;
         }
-        
+
         // Verify the hook's state has the device (printTextToPrinter uses hook's state)
         if (!connectedPrinterDevice && deviceOverride) {
             console.warn('[PRINT] Warning: Hook state not updated, but device provided. Print may fail if hook state is required.');
@@ -810,7 +924,7 @@ const MemberKilosScreen = () => {
                     isStillConnected = false;
                 }
             }
-            
+
             if (!isStillConnected) {
                 console.error('[PRINT] Printer device is not connected');
                 // Show alert instead of silently failing
@@ -834,7 +948,7 @@ const MemberKilosScreen = () => {
 
         try {
             console.log('[PRINT] Starting print operation...');
-            
+
             // Wrap printTextToPrinter in a try-catch to handle any synchronous errors
             let printPromise: Promise<void>;
             try {
@@ -859,7 +973,7 @@ const MemberKilosScreen = () => {
                 }
                 return false;
             }
-            
+
             // Add timeout to prevent hanging
             try {
                 await Promise.race([
@@ -868,7 +982,7 @@ const MemberKilosScreen = () => {
                         setTimeout(() => reject(new Error('Print timeout')), 30000)
                     )
                 ]);
-                
+
                 console.log('[PRINT] ✅ Receipt printed successfully');
                 return true;
             } catch (timeoutErr) {
@@ -889,7 +1003,7 @@ const MemberKilosScreen = () => {
         } catch (error) {
             const errorMsg = (error as any)?.message || String(error);
             console.error('[PRINT] Print error:', errorMsg);
-            
+
             // Show alert for any unexpected errors
             try {
                 Alert.alert("Print Error", "An error occurred while printing. Please check the printer and try again.");
@@ -899,12 +1013,12 @@ const MemberKilosScreen = () => {
             return false;
         }
     }, [connectedPrinterDevice, printTextToPrinter]);
-    
+
     // Helper: Connect to printer and return the connected device
     const connectToPrinterAndGetDevice = useCallback(async (): Promise<any | null> => {
         try {
             console.log('[PRINT] Connecting to printer and getting device...');
-            
+
             // Check AsyncStorage for last printer
             try {
                 const lastPrinter = await AsyncStorage.getItem('last_device_printer');
@@ -1133,7 +1247,7 @@ const MemberKilosScreen = () => {
                 try {
                     // Step 1: Check if printer is already connected, if not try to connect
                     let connectedPrinter: any = null;
-                    
+
                     // First check if already connected
                     if (connectedPrinterDevice) {
                         try {
@@ -1438,7 +1552,7 @@ const MemberKilosScreen = () => {
                                     setOpen={setMeasuringCanOpen}
                                     setValue={(val: any) => {
                                         setMeasuringCanValue(val as number);
-                                        const sel = (commonData.measuring_can || []).find((c: any) => c.id === val);
+                                        const sel = (commonData?.measuring_cans || []).find((c: any) => c.id === val);
                                         if (sel) setMeasuringCan(sel);
                                     }}
                                     setItems={setMeasuringCanItems}
@@ -1466,7 +1580,7 @@ const MemberKilosScreen = () => {
                                 <TextInput
                                     style={styles.input}
                                     placeholder="Scale Wt"
-                                    value={connectedScaleDevice 
+                                    value={connectedScaleDevice
                                         ? (scaleWeight !== null && scaleWeight !== undefined ? String(scaleWeight) : "")
                                         : scaleWeightText
                                     }
@@ -1477,15 +1591,15 @@ const MemberKilosScreen = () => {
                                         if (!connectedScaleDevice) {
                                             // Allow only digits and a single decimal point
                                             const cleaned = text.replace(/[^0-9.]/g, "");
-                                            
+
                                             // Prevent multiple decimal points
                                             if ((cleaned.match(/\./g) || []).length > 1) {
                                                 return; // Don't update if multiple decimals
                                             }
-                                            
+
                                             // Update the text state to allow typing "." and partial numbers
                                             setScaleWeightText(cleaned);
-                                            
+
                                             // Parse to number for scaleWeight state
                                             if (cleaned === "" || cleaned === ".") {
                                                 setScaleWeight(null);
@@ -1687,10 +1801,10 @@ const MemberKilosScreen = () => {
                             // Save printer
                             try {
                                 // Check if it's InnerPrinter - it uses Classic, not BLE
-                                const isInnerPrinter = (result.name || '').toLowerCase().includes('innerprinter') || 
-                                                      (result.name || '').toLowerCase().includes('inner');
+                                const isInnerPrinter = (result.name || '').toLowerCase().includes('innerprinter') ||
+                                    (result.name || '').toLowerCase().includes('inner');
                                 const printerType = isInnerPrinter ? 'classic' : (result.type || 'classic');
-                                
+
                                 const printerInfo = {
                                     id: result.id,
                                     address: result.id,

@@ -2,6 +2,7 @@ import React, { useRef, useContext, useEffect } from "react";
 import { NavigationContainer, NavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { getFocusedRouteNameFromRoute } from "@react-navigation/native";
 import Icon from "react-native-vector-icons/FontAwesome";
 
 import Store from "./src/context/store";
@@ -74,7 +75,10 @@ function AuthStack() {
 
 function MembersStackNavigator() {
   return (
-    <MembersStack.Navigator screenOptions={{ headerShown: false }} initialRouteName="MembersList">
+    <MembersStack.Navigator 
+      screenOptions={{ headerShown: false }} 
+      initialRouteName="MembersList"
+    >
       <MembersStack.Screen name="MembersList" component={MembersListScreen} />
       <MembersStack.Screen name="MemberRegistration" component={RegistrationWizard} />
       <MembersStack.Screen name="MemberKilos" component={MemberKilosScreen} />
@@ -103,7 +107,7 @@ function HomeTabNavigator() {
         tabBarIcon: ({ color, size }) => {
           const icons: Record<string, string> = {
             Home: "home",
-            Cash: "money",
+            Cashouts: "money",
             Members: "users",
             Settings: "cog",
             Profile: "user",
@@ -117,8 +121,25 @@ function HomeTabNavigator() {
       })}
     >
       <Tab.Screen name="Home" component={DashboardScreen} />
-      <Tab.Screen name="Cash" component={DashboardScreen} />
-      <Tab.Screen name="Members" component={MembersStackNavigator} />
+      <Tab.Screen name="Cashouts" component={MemberCashoutListScreen} />
+      <Tab.Screen 
+        name="Members" 
+        component={MembersStackNavigator}
+        listeners={({ navigation, route }) => ({
+          tabPress: (e) => {
+            // Get the current route name in the Members stack
+            const routeName = getFocusedRouteNameFromRoute(route) ?? 'MembersList';
+            
+            // If we're not on MembersList, navigate to it (this will pop all screens above it)
+            if (routeName !== 'MembersList') {
+              // Navigate to MembersList, which will pop all screens above it
+              navigation.navigate('Members', {
+                screen: 'MembersList',
+              });
+            }
+          },
+        })}
+      />
       <Tab.Screen name="Settings" component={SettingsScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>

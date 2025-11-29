@@ -13,6 +13,7 @@ import {
     ScrollView,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Icon from "react-native-vector-icons/MaterialIcons";
 import { globalStyles } from "../../styles";
 import makeRequest from "../../components/utils/makeRequest";
 import { AuthContext } from "../../AuthContext";
@@ -20,6 +21,7 @@ import { AuthContext } from "../../AuthContext";
 export default function LoginScreen({ navigation }: any) {
     const [phoneNumber, setPhoneNumber] = useState("");
     const [password, setPassword] = useState("");
+    const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const { login } = useContext(AuthContext);
 
@@ -89,14 +91,27 @@ export default function LoginScreen({ navigation }: any) {
                 />
 
                 <Text style={[globalStyles.label, { color: "#fff" }]}>Password</Text>
-                <TextInput
-                    placeholder="password"
-                    placeholderTextColor="#d1d5db"
-                    secureTextEntry
-                    style={globalStyles.input}
-                    value={password}
-                    onChangeText={setPassword}
-                />
+                <View style={styles.passwordContainer}>
+                    <TextInput
+                        placeholder="password"
+                        placeholderTextColor="#d1d5db"
+                        secureTextEntry={!showPassword}
+                        style={[globalStyles.input, styles.passwordInput]}
+                        value={password}
+                        onChangeText={setPassword}
+                    />
+                    <TouchableOpacity
+                        style={styles.eyeIcon}
+                        onPress={() => setShowPassword(!showPassword)}
+                        activeOpacity={0.7}
+                    >
+                        <Icon
+                            name={showPassword ? "visibility" : "visibility-off"}
+                            size={24}
+                            color="#6b7280"
+                        />
+                    </TouchableOpacity>
+                </View>
 
                 <TouchableOpacity
                     style={globalStyles.button}
@@ -113,4 +128,20 @@ export default function LoginScreen({ navigation }: any) {
         </KeyboardAvoidingView>
     );
 }
+
+const styles = StyleSheet.create({
+    passwordContainer: {
+        position: "relative",
+        marginBottom: 16,
+    },
+    passwordInput: {
+        paddingRight: 50, // Make room for the eye icon
+    },
+    eyeIcon: {
+        position: "absolute",
+        right: 16,
+        top: 12,
+        padding: 4,
+    },
+});
 

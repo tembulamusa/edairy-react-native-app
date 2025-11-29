@@ -19,10 +19,17 @@ type PersonalInfo = {
     idNo: string;
     gender: string;
     dob: string;
+    dateRegistered?: string;
+    idDateOfIssue?: string;
     route: string;
+    routeId?: string;
+    routeName?: string;
     phone: string;
     bank: string;
     accountNo: string;
+    numberOfCows?: string;
+    taxNumber?: string;
+    birthCity?: string;
 };
 
 type NextOfKin = {
@@ -111,10 +118,13 @@ export default function ConfirmationScreen({
                 {renderRow("ID No", personalInfo.idNo)}
                 {renderRow("Gender", personalInfo.gender)}
                 {renderRow("Date of Birth", personalInfo.dob)}
-                {renderRow("Route", personalInfo.route)}
+                {renderRow("ID Date Registered", personalInfo.dateRegistered)}
+                {renderRow("ID Date of Issue", personalInfo.idDateOfIssue)}
+                {renderRow("Route", personalInfo.routeName || personalInfo.routeId || "-")}
                 {renderRow("Phone", personalInfo.phone)}
-                {renderRow("Bank", personalInfo.bank)}
-                {renderRow("Account No", personalInfo.accountNo)}
+                {renderRow("Number of Cows", personalInfo.numberOfCows)}
+                {renderRow("Tax Number", personalInfo.taxNumber)}
+                {renderRow("Birth City", personalInfo.birthCity)}
             </View>
 
             {/* Next of Kin Card */}
@@ -130,9 +140,9 @@ export default function ConfirmationScreen({
                     </TouchableOpacity>
                 </View>
 
-                {renderRow("Full Name", nextOfKin.fullName)}
-                {renderRow("Phone", nextOfKin.phone)}
-                {renderRow("Relationship", nextOfKin.relationship)}
+                {renderRow("Full Name", nextOfKin.nextOfKinFullName)}
+                {renderRow("Phone", nextOfKin.nextOfKinPhone)}
+                {renderRow("Relationship", nextOfKin.nextOfKinRelationship)}
             </View>
 
             {/* ID Uploads Card */}

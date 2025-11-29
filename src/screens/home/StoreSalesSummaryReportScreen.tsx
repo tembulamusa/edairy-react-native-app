@@ -376,191 +376,193 @@ const SalesReportScreen = () => {
                 )}
             </View>
 
-            <ScrollView contentContainerStyle={styles.contentContainer}>
-                {/* From & To in same row */}
-                <View style={styles.row}>
-                    <View style={styles.col}>
-                        <Text style={styles.label}>From</Text>
-                        <View style={styles.inputWithIcon}>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Select From Date"
-                                value={fromDate.toDateString()}
-                                editable={false}
-                            />
-                            <TouchableOpacity
-                                style={styles.iconInside}
-                                onPress={() => setShowFromPicker(true)}
-                            >
-                                <Icon name="calendar-today" size={20} color="#666" />
-                            </TouchableOpacity>
+            <View style={styles.mainContainer}>
+                {/* Fixed Filters Section - Not Scrollable */}
+                <View style={styles.filtersContainer}>
+                    {/* From & To in same row */}
+                    <View style={styles.row}>
+                        <View style={styles.col}>
+                            <Text style={styles.label}>From</Text>
+                            <View style={styles.inputWithIcon}>
+                                <TextInput
+                                    style={styles.input}
+                                    placeholder="Select From Date"
+                                    value={fromDate.toDateString()}
+                                    editable={false}
+                                />
+                                <TouchableOpacity
+                                    style={styles.iconInside}
+                                    onPress={() => setShowFromPicker(true)}
+                                >
+                                    <Icon name="calendar-today" size={20} color="#666" />
+                                </TouchableOpacity>
+                            </View>
+                            {showFromPicker && (
+                                <DateTimePicker
+                                    value={fromDate}
+                                    mode="date"
+                                    maximumDate={new Date()}
+                                    display="default"
+                                    onChange={onChangeFromDate}
+                                />
+                            )}
                         </View>
-                        {showFromPicker && (
-                            <DateTimePicker
-                                value={fromDate}
-                                mode="date"
-                                maximumDate={new Date()}
-                                display="default"
-                                onChange={onChangeFromDate}
-                            />
-                        )}
-                    </View>
 
-                    <View style={styles.col}>
-                        <Text style={styles.label}>To</Text>
-                        <View style={styles.inputWithIcon}>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Select To Date"
-                                value={toDate.toDateString()}
-                                editable={false}
-                            />
-                            <TouchableOpacity
-                                style={styles.iconInside}
-                                onPress={() => setShowToPicker(true)}
-                            >
-                                <Icon name="calendar-today" size={20} color="#666" />
-                            </TouchableOpacity>
+                        <View style={styles.col}>
+                            <Text style={styles.label}>To</Text>
+                            <View style={styles.inputWithIcon}>
+                                <TextInput
+                                    style={styles.input}
+                                    placeholder="Select To Date"
+                                    value={toDate.toDateString()}
+                                    editable={false}
+                                />
+                                <TouchableOpacity
+                                    style={styles.iconInside}
+                                    onPress={() => setShowToPicker(true)}
+                                >
+                                    <Icon name="calendar-today" size={20} color="#666" />
+                                </TouchableOpacity>
+                            </View>
+                            {showToPicker && (
+                                <DateTimePicker
+                                    value={toDate}
+                                    mode="date"
+                                    minimumDate={fromDate}
+                                    maximumDate={new Date()}
+                                    display="default"
+                                    onChange={onChangeToDate}
+                                />
+                            )}
                         </View>
-                        {showToPicker && (
-                            <DateTimePicker
-                                value={toDate}
-                                mode="date"
-                                minimumDate={fromDate}
-                                maximumDate={new Date()}
-                                display="default"
-                                onChange={onChangeToDate}
+                    </View>
+
+                    {/* Store & Member in same row */}
+                    <View style={styles.row}>
+                        <View style={styles.col}>
+                            <Text style={styles.label}>Store</Text>
+                            <DropDownPicker
+                                open={storeOpen}
+                                value={storeValue}
+                                items={storeItems}
+                                setOpen={setStoreOpen}
+                                setValue={setStoreValue}
+                                setItems={setStoreItems}
+                                placeholder="Select Store"
+                                listMode="SCROLLVIEW"
+                                zIndex={2500}
+                                zIndexInverse={2000}
+                                style={styles.dropdown}
+                                dropDownContainerStyle={styles.dropdownBox}
+                                searchable={true}
+                                searchPlaceholder="Search store..."
+                                scrollViewProps={{ nestedScrollEnabled: true }}
                             />
-                        )}
-                    </View>
-                </View>
+                        </View>
 
-                {/* Store & Member in same row */}
-                <View style={styles.row}>
-                    <View style={styles.col}>
-                        <Text style={styles.label}>Store</Text>
-                        <DropDownPicker
-                            open={storeOpen}
-                            value={storeValue}
-                            items={storeItems}
-                            setOpen={setStoreOpen}
-                            setValue={setStoreValue}
-                            setItems={setStoreItems}
-                            placeholder="Select Store"
-                            listMode="SCROLLVIEW"
-                            zIndex={2500}
-                            zIndexInverse={2000}
-                            style={styles.dropdown}
-                            dropDownContainerStyle={styles.dropdownBox}
-                            searchable={true}   // ✅ Added searchable
-                            searchPlaceholder="Search store..." // optional
-                            scrollViewProps={{ nestedScrollEnabled: true }}
-                        />
-                    </View>
-
-                    <View style={styles.col}>
-                        <Text style={styles.label}>Member</Text>
-                        <DropDownPicker
-                            open={memberOpen}
-                            value={memberValue}
-                            items={memberItems}
-                            setOpen={setMemberOpen}
-                            setValue={setMemberValue}
-                            setItems={setMemberItems}
-                            listMode="SCROLLVIEW"
-                            searchable={true}
-                            placeholder="Select Member"
-                            style={styles.dropdown}
-                            dropDownContainerStyle={styles.dropdownBox}
-                            zIndex={2000}
-                            zIndexInverse={2500}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
-                        />
-                    </View>
-                </View>
-
-                {/* Sale Type */}
-                <Text style={styles.label}>Sale Type</Text>
-                <View style={styles.radioContainer}>
-                    {['all', 'cash', 'credit'].map((type) => (
-                        <TouchableOpacity
-                            key={type}
-                            style={styles.radioOption}
-                            onPress={() => setSaleType(type)}
-                        >
-                            <View
-                                style={[
-                                    styles.radioCircle,
-                                    saleType === type && styles.radioCircleSelected,
-                                ]}
+                        <View style={styles.col}>
+                            <Text style={styles.label}>Member</Text>
+                            <DropDownPicker
+                                open={memberOpen}
+                                value={memberValue}
+                                items={memberItems}
+                                setOpen={setMemberOpen}
+                                setValue={setMemberValue}
+                                setItems={setMemberItems}
+                                listMode="SCROLLVIEW"
+                                searchable={true}
+                                placeholder="Select Member"
+                                style={styles.dropdown}
+                                dropDownContainerStyle={styles.dropdownBox}
+                                zIndex={2000}
+                                zIndexInverse={2500}
+                                scrollViewProps={{ nestedScrollEnabled: true }}
                             />
-                            <Text style={styles.radioLabel}>
-                                {type.charAt(0).toUpperCase() + type.slice(1)}
-                            </Text>
-                        </TouchableOpacity>
-                    ))}
+                        </View>
+                    </View>
+
+                    {/* Sale Type */}
+                    <Text style={styles.label}>Sale Type</Text>
+                    <View style={styles.radioContainer}>
+                        {['all', 'cash', 'credit'].map((type) => (
+                            <TouchableOpacity
+                                key={type}
+                                style={styles.radioOption}
+                                onPress={() => setSaleType(type)}
+                            >
+                                <View
+                                    style={[
+                                        styles.radioCircle,
+                                        saleType === type && styles.radioCircleSelected,
+                                    ]}
+                                />
+                                <Text style={styles.radioLabel}>
+                                    {type.charAt(0).toUpperCase() + type.slice(1)}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+
+                    {/* Summary List Header */}
+                    <Text style={[styles.label, { marginTop: 20 }]}>Sales Summary</Text>
+                    {loading && (
+                        <ActivityIndicator size="large" color="#1b7f74" style={{ marginTop: 20 }} />
+                    )}
                 </View>
 
-                {/* Summary List */}
-                <Text style={[styles.label, { marginTop: 20 }]}>Sales Summary</Text>
-                {loading ? (
-                    <ActivityIndicator size="large" color="#1b7f74" style={{ marginTop: 20 }} />
-                ) : null}
-
+                {/* Scrollable List Section */}
                 {!loading && (
-                    <View style={styles.summarySection}>
-                        <View style={styles.summaryListWrapper}>
-                            {storeSalesSummary?.length === 0 ? (
-                                <View style={styles.summaryEmptyState}>
-                                    <Text style={styles.emptySummaryText}>
-                                        No sales records found
-                                    </Text>
-                                </View>
-                            ) : (
-                                <FlatList
-                                    style={styles.summaryList}
-                                    data={storeSalesSummary}
-                                    keyExtractor={(item, idx) => idx.toString()}
-                                    renderItem={({ item }) => (
-                                        <View style={styles.summaryRow}>
-                                            <Text style={styles.summaryText}>
-                                                {new Date(item?.created_at).toISOString().split("T")[0]}
-                                            </Text>
-                                            <Text style={styles.summaryAmount}>
-                                                {isNaN(item?.total_amount) ? '0.00' : parseFloat(item.total_amount).toFixed(2)}
-                                            </Text>
-                                        </View>
-                                    )}
-                                    contentContainerStyle={styles.summaryContent}
-                                    showsVerticalScrollIndicator={false}
-                                    ListFooterComponent={() => (
+                    <View style={styles.listContainer}>
+                        {storeSalesSummary?.length === 0 ? (
+                            <View style={styles.summaryEmptyState}>
+                                <Text style={styles.emptySummaryText}>
+                                    No sales records found
+                                </Text>
+                            </View>
+                        ) : (
+                            <FlatList
+                                data={storeSalesSummary}
+                                keyExtractor={(item, idx) => idx.toString()}
+                                renderItem={({ item }) => (
+                                    <View style={styles.summaryRow}>
+                                        <Text style={styles.summaryText}>
+                                            {new Date(item?.created_at).toISOString().split("T")[0]}
+                                        </Text>
+                                        <Text style={styles.summaryAmount}>
+                                            {isNaN(item?.total_amount) ? '0.00' : parseFloat(item.total_amount).toFixed(2)}
+                                        </Text>
+                                    </View>
+                                )}
+                                contentContainerStyle={styles.summaryContent}
+                                showsVerticalScrollIndicator={false}
+                                ListFooterComponent={() => (
+                                    <View style={styles.footerContainer}>
                                         <View style={styles.totalRow}>
                                             <Text style={styles.totalLabel}>Total:</Text>
                                             <Text style={styles.totalValue}>
                                                 {totalAmount.toFixed(2)}
                                             </Text>
                                         </View>
-                                    )}
-                                />
-                            )}
-                        </View>
-
-                        {/* Print Report Button */}
-                        <TouchableOpacity
-                            style={[
-                                styles.generateButton,
-                                (printing || isConnectingPrinter || !storeSalesSummary?.length) && { opacity: 0.6 },
-                            ]}
-                            onPress={handlePrintReport}
-                            disabled={printing || isConnectingPrinter || !storeSalesSummary?.length}
-                        >
-                            <Text style={styles.generateButtonText}>
-                                {printing || isConnectingPrinter ? 'Printing…' : 'Print Report'}
-                            </Text>
-                        </TouchableOpacity>
+                                        {/* Print Report Button */}
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.generateButton,
+                                                (printing || isConnectingPrinter || !storeSalesSummary?.length) && { opacity: 0.6 },
+                                            ]}
+                                            onPress={handlePrintReport}
+                                            disabled={printing || isConnectingPrinter || !storeSalesSummary?.length}
+                                        >
+                                            <Text style={styles.generateButtonText}>
+                                                {printing || isConnectingPrinter ? 'Printing…' : 'Print Report'}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+                            />
+                        )}
                     </View>
                 )}
-            </ScrollView>
+            </View>
 
             {/* Modal */}
             <StoreSaleModal
@@ -585,6 +587,24 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: '#f2f2f2',
         padding: 20,
+    },
+    mainContainer: {
+        flex: 1,
+    },
+    filtersContainer: {
+        paddingBottom: 12,
+    },
+    listContainer: {
+        flex: 1,
+        borderRadius: 12,
+        backgroundColor: '#fff',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        shadowColor: '#000',
+        shadowOpacity: 0.04,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 1,
     },
     contentContainer: {
         paddingBottom: 32,
@@ -679,29 +699,12 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#444',
     },
-    summarySection: {
-        flex: 1,
-        marginTop: 20,
-        minHeight: 280,
-    },
-    summaryListWrapper: {
-        flex: 1,
-        borderRadius: 12,
-        backgroundColor: '#fff',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        shadowColor: '#000',
-        shadowOpacity: 0.04,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
-        elevation: 1,
-    },
-    summaryList: {
-        flex: 1,
-    },
     summaryContent: {
         flexGrow: 1,
         paddingBottom: 24,
+    },
+    footerContainer: {
+        paddingTop: 12,
     },
     summaryRow: {
         flexDirection: 'row',

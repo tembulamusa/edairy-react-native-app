@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { View, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform } from "react-native";
+import { View, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Alert } from "react-native";
 import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
 import type { Asset } from "react-native-image-picker";
 
@@ -36,15 +36,18 @@ export default function RegistrationWizard() {
             idNo: "",
             gender: "",
             dob: "",
-            route: "",
+            dateRegistered: "",
+            idDateOfIssue: "",
+            routeId: "",
             phone: "",
-            bank: "",
-            accountNo: "",
+            numberOfCows: "",
+            birthCity: "",
+            taxNumber: "",
         },
         nextOfKin: {
-            fullName: "",
-            phone: "",
-            relationship: "",
+            nextOfKinFullName: "",
+            nextOfKinPhone: "",
+            nextOfKinRelationship: "",
         },
         idUploads: {
             idFront: null,
@@ -81,19 +84,32 @@ export default function RegistrationWizard() {
     const goBack = () => setStep((prev) => Math.max(0, prev - 1));
 
     const registerMember = async (payload: ConfirmationData) => {
+
         try {
             setLoading(true);
 
             const formData = new FormData();
 
-            // personalInfo
+            // personalInfo - exclude routeName as we only submit routeId
+            // Map dateRegistered to dateRegistred for backend
+            // Ensure all fields are included even if empty (including idDateOfIssue)
             Object.entries(payload.personalInfo).forEach(([key, value]) => {
-                formData.append(key, value ?? "");
+                if (key !== "routeName") {
+                    // Map dateRegistered to dateRegistred for backend
+                    const formKey = key === "dateRegistered" ? "dateRegistred" : key;
+                    // Always append, even if value is empty string
+                    formData.append(formKey, value !== undefined && value !== null ? value : "");
+                }
             });
+
+            // Explicitly ensure dateRegistred is included if it exists in personalInfo
+            if (payload.personalInfo.dateRegistered !== undefined) {
+                formData.append("dateRegistered", payload.personalInfo.dateRegistered || "");
+            }
 
             // nextOfKin
             Object.entries(payload.nextOfKin).forEach(([key, value]) => {
-                formData.append(`nextOfKin[${key}]`, value ?? "");
+                formData.append(`${key}`, value ?? "");
             });
 
             // images
@@ -112,7 +128,6 @@ export default function RegistrationWizard() {
                     name: payload.idUploads.idBack.fileName ?? "id_back.jpg",
                 } as any);
             }
-
             const [status, response] = await makeRequest({
                 url: "register-member",
                 method: "POST",

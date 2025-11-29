@@ -125,7 +125,7 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
 
                 <TouchableOpacity
                     onPress={() => {
-                        const url = `http://192.168.100.18:8000/liveness-check/${selectedMember?.uuid}`;
+                        const url = `https://dev.edairy.africa/registration/liveness-check/${selectedMember?.uuid}`;
                         navigation.navigate("Members" as never, {
                             screen: "LivenessCheck",
                             params: { url },

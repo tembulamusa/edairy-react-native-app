@@ -9,9 +9,9 @@ interface NextOfKinProps {
 
 const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
     const [form, setForm] = React.useState({
-        fullName: '',
-        phone: '',
-        relationship: '',
+        nextOfKinFullName: '',
+        nextOfKinPhone: '',
+        nextOfKinRelationship: ''
     });
 
     // Update form state dynamically
@@ -20,7 +20,7 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
     };
 
     const handleNext = () => {
-        if (!form.fullName || !form.phone || !form.relationship) {
+        if (!form.nextOfKinFullName || !form.nextOfKinPhone || !form.nextOfKinRelationship) {
             alert("Please fill in all fields");
             return;
         }
@@ -47,8 +47,8 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
                     <TextInput
                         style={globalStyles.input}
                         placeholder="Enter Full Name"
-                        value={form.fullName}
-                        onChangeText={(v) => handleChange("fullName", v)}
+                        value={form.nextOfKinFullName}
+                        onChangeText={(v) => handleChange("nextOfKinFullName", v)}
                     />
                 </View>
 
@@ -59,8 +59,8 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
                     <TextInput
                         style={globalStyles.input}
                         placeholder="Enter Phone Number"
-                        value={form.phone}
-                        onChangeText={(v) => handleChange("phone", v)}
+                        value={form.nextOfKinPhone}
+                        onChangeText={(v) => handleChange("nextOfKinPhone", v)}
                         keyboardType="numeric"
                     />
                 </View>
@@ -72,8 +72,8 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
                     <TextInput
                         style={globalStyles.input}
                         placeholder="Enter Relationship"
-                        value={form.relationship}
-                        onChangeText={(v) => handleChange("relationship", v)}
+                        value={form.nextOfKinRelationship}
+                        onChangeText={(v) => handleChange("nextOfKinRelationship", v)}
                     />
                 </View>
 
@@ -95,8 +95,8 @@ const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
 export default NextOfKin;
 
 const styles = StyleSheet.create({
-    container: { 
-        padding: 20, 
+    container: {
+        padding: 20,
         paddingBottom: 200, // Extra padding for bottom tab bar (60px) + keyboard clearance + navigation buttons
     },
 
