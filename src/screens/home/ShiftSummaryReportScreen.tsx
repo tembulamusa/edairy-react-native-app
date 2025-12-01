@@ -11,11 +11,9 @@ import {
     ActivityIndicator,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-// @ts-ignore - library lacks TypeScript declarations in current setup
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import DropDownPicker from 'react-native-dropdown-picker';
 import fetchCommonData from '../../components/utils/fetchCommonData';
-import ReceiptPrinter from '../../components/utils/ReceiptPrinter';
 
 const ShiftSummaryReportScreen = () => {
     const [fromDate, setFromDate] = useState(new Date());
@@ -33,8 +31,13 @@ const ShiftSummaryReportScreen = () => {
 
     // Shift filter state
     const [shiftOpen, setShiftOpen] = useState(false);
-    const [shiftValue, setShiftValue] = useState<number | 'all'>('all');
-    const [shiftItems, setShiftItems] = useState<{ label: string; value: number | 'all' }[]>([]);
+    const [shiftValue, setShiftValue] = useState<string>('all');
+    const [shiftItems, setShiftItems] = useState([
+        { label: 'All', value: 'all' },
+        { label: 'AM', value: 'am' },
+        { label: 'Noon', value: 'noon' },
+        { label: 'PM', value: 'pm' },
+    ]);
 
     // Route filter state
     const [routeOpen, setRouteOpen] = useState(false);
@@ -44,25 +47,18 @@ const ShiftSummaryReportScreen = () => {
     useEffect(() => {
         const loadCommonData = async () => {
             try {
-                const [transporters, routes, shifts] = await Promise.all([
+                const [transporters, routes] = await Promise.all([
                     fetchCommonData({ name: 'transporters' }),
                     fetchCommonData({ name: 'routes' }),
-                    fetchCommonData({ name: 'shifts' }),
                 ]);
 
-                const allData = { transporters, routes, shifts };
+                const allData = { transporters, routes };
                 setCommonData(allData);
 
                 setTransporterItems(
-                    (transporters || []).map((transporter: any) => ({
-                        label:
-                            transporter?.full_names ||
-                            `${transporter?.first_name || ''} ${transporter?.last_name || ''}`.trim() ||
-                            transporter?.company_name ||
-                            transporter?.name ||
-                            transporter?.registration_number ||
-                            `Transporter ${transporter?.id}`,
-                        value: transporter?.id,
+                    (transporters || []).map((t: any) => ({
+                        label: `${t?.first_name + ' ' + t?.last_name || 'Unnamed Transporter'}`,
+                        value: t.id,
                     }))
                 );
 
@@ -72,14 +68,6 @@ const ShiftSummaryReportScreen = () => {
                         value: r.id,
                     }))
                 );
-
-                setShiftItems([
-                    { label: 'All Shifts', value: 'all' },
-                    ...(shifts || []).map((shift: any) => ({
-                        label: shift?.description || shift?.name || `Shift ${shift?.id}`,
-                        value: shift?.id,
-                    })),
-                ]);
             } catch (error: any) {
                 Alert.alert('Error', `Failed to load common data: ${error.message || error}`);
             }
@@ -131,7 +119,7 @@ const ShiftSummaryReportScreen = () => {
 
                     const shifts = await fetchCommonData({
                         name: "transporter_shift_summary",
-                        params: filters,
+                        filters,
                     });
 
                     if (shifts['error']) {
@@ -159,18 +147,18 @@ const ShiftSummaryReportScreen = () => {
             shift: shiftValue,
             route: routeValue,
         };
-        Alert.alert('Success', 'Report Generated!');
+        alert('Report Generated!');
     };
 
     return (
         <SafeAreaView style={styles.container}>
             <View>
-                <Text style={[{ marginBottom: 10, marginTop: 5, fontWeight: 'bold', fontSize: 18 }]}>
+                <Text style={[styles.header, { marginBottom: 10, marginTop: 5, fontWeight: 'bold' }]}>
                     Transporter Balance Statements
                 </Text>
             </View>
 
-            <View style={{ flex: 1 }}>
+            <View style={styles.content}>
                 <View style={styles.row}>
                     <View style={styles.col}>
                         <Text style={styles.label}>From</Text>
@@ -239,12 +227,10 @@ const ShiftSummaryReportScreen = () => {
                             setItems={setTransporterItems}
                             searchable={true}
                             placeholder="Select transporter"
-                            listMode="SCROLLVIEW"
                             style={styles.dropdown}
                             dropDownContainerStyle={styles.dropdownBox}
                             zIndex={2000}
                             zIndexInverse={2500}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                 </View>
@@ -261,8 +247,6 @@ const ShiftSummaryReportScreen = () => {
                             setValue={setShiftValue}
                             setItems={setShiftItems}
                             placeholder="Select shift"
-                            searchable
-                            listMode="SCROLLVIEW"
                             style={styles.dropdown}
                             dropDownContainerStyle={styles.dropdownBox}
                             zIndex={1800}
@@ -281,12 +265,10 @@ const ShiftSummaryReportScreen = () => {
                             setItems={setRouteItems}
                             searchable={true}
                             placeholder="Select route"
-                            listMode="SCROLLVIEW"
                             style={styles.dropdown}
                             dropDownContainerStyle={styles.dropdownBox}
                             zIndex={1700}
                             zIndexInverse={2900}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                 </View>
@@ -316,35 +298,16 @@ const ShiftSummaryReportScreen = () => {
                         ListFooterComponent={() => (
                             <View style={styles.totalRow}>
                                 <Text style={styles.totalLabel}>Total</Text>
-                                <Text style={styles.totalValue}>
-                                    {userSummary.reduce((sum, item) => sum + (item.total_amount || 0), 0).toFixed(2)}
-                                </Text>
+                                <Text style={styles.totalValue}>1000.00</Text>
                             </View>
                         )}
                     />
                 )}
 
-                <View style={{ marginTop: 20 }}>
+                <View style={styles.footer}>
                     <TouchableOpacity style={styles.generateButton} onPress={handleGenerate}>
                         <Text style={styles.generateButtonText}>Print Report</Text>
                     </TouchableOpacity>
-                    {userSummary.length > 0 && (
-                        <ReceiptPrinter 
-                            data={{
-                                type: 'shift_summary',
-                                from_date: fromDate.toDateString(),
-                                to_date: toDate.toDateString(),
-                                transporter: transporterItems.find(item => item.value === transporterValue)?.label || 'All Transporters',
-                                shift: shiftValue === 'all'
-                                    ? 'All Shifts'
-                                    : shiftItems.find(item => item.value === shiftValue)?.label || `Shift ${shiftValue}`,
-                                route: routeItems.find(item => item.value === routeValue)?.label || 'All Routes',
-                                summary_data: userSummary,
-                                total_amount: userSummary.reduce((sum, item) => sum + (item.total_amount || 0), 0),
-                                generated_at: new Date().toISOString()
-                            }}
-                        />
-                    )}
                 </View>
             </View>
         </SafeAreaView>
@@ -393,12 +356,12 @@ const styles = StyleSheet.create({
     },
     dropdown: {
         borderRadius: 12,
-        borderColor: '#d1d5db',
+        borderColor: '#ddd',
         height: 45,
         paddingHorizontal: 12,
     },
     dropdownBox: {
-        borderColor: '#d1d5db',
+        borderColor: '#ddd',
     },
     generateButton: {
         backgroundColor: '#1b7f74',

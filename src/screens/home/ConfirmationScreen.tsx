@@ -19,8 +19,6 @@ type PersonalInfo = {
     idNo: string;
     gender: string;
     dob: string;
-    dateRegistered?: string;
-    idDateOfIssue?: string;
     route: string;
     routeId?: string;
     routeName?: string;
@@ -118,8 +116,6 @@ export default function ConfirmationScreen({
                 {renderRow("ID No", personalInfo.idNo)}
                 {renderRow("Gender", personalInfo.gender)}
                 {renderRow("Date of Birth", personalInfo.dob)}
-                {renderRow("ID Date Registered", personalInfo.dateRegistered)}
-                {renderRow("ID Date of Issue", personalInfo.idDateOfIssue)}
                 {renderRow("Route", personalInfo.routeName || personalInfo.routeId || "-")}
                 {renderRow("Phone", personalInfo.phone)}
                 {renderRow("Number of Cows", personalInfo.numberOfCows)}

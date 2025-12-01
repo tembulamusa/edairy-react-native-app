@@ -247,7 +247,7 @@ export default MemberCashoutActions;
 
 // ---- Styles ----
 const styles = StyleSheet.create({
-    emptyState: { flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 60 },
+    emptyState: { justifyContent: "center", alignItems: "center", paddingVertical: 20, minHeight: 80 },
     emptyText: { fontSize: 16, color: "#6b7280", textAlign: "center", fontWeight: "500" },
     livenessButton: {
         flexDirection: "row",
