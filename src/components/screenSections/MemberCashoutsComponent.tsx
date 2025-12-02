@@ -227,6 +227,8 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                     keyExtractor={(item) => item.id}
                     renderItem={renderCashoutItem}
                     contentContainerStyle={{ paddingBottom: 20 }}
+                    scrollEnabled={false}
+                    nestedScrollEnabled={true}
                 />
             );
         }
@@ -242,6 +244,8 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                 keyExtractor={(item) => item.id}
                 renderItem={renderTransactionItem}
                 contentContainerStyle={{ paddingBottom: 20 }}
+                scrollEnabled={false}
+                nestedScrollEnabled={true}
             />
         );
     };

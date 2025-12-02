@@ -51,6 +51,7 @@ const MemberKilosScreen = () => {
 
     const [memberValue, setMemberValue] = useState<number | null>(null);
     const [memberItems, setMemberItems] = useState<any[]>([]); // initialize as empty
+    const [transporterDisabled, setTransporterDisabled] = useState(false);
 
     // --- Dropdown data states ---
     const [transporterItems, setTransporterItems] = useState<any[]>([]);
@@ -412,7 +413,7 @@ const MemberKilosScreen = () => {
             try {
                 const [transporters, routes, shifts, members, cans, centers] =
                     await Promise.all([
-                        fetchCommonData({ name: "transporters" }),
+                        fetchCommonData({ name: "transporters", cachable: false }),
                         fetchCommonData({ name: "routes" }),
                         fetchCommonData({ name: "shifts" }),
                         fetchCommonData({ name: "members", cachable: false }),
@@ -429,7 +430,7 @@ const MemberKilosScreen = () => {
                 setCanItems((cans || []).map((c: any) => ({ label: c.can_id || `Can ${c.id}`, value: c.id })));
                 // Measuring cans will be loaded when transporter is selected
                 setMeasuringCanItems([]);
-                setCenterItems((centers || []).map((c: any) => ({ label: c.centre, value: c.id })));
+                setCenterItems((centers || []).map((c: any) => ({ label: c.center, value: c.id })));
 
                 // Auto-select shift based on current time period (morning, afternoon, evening)
                 if (shifts && shifts.length > 0) {
@@ -500,6 +501,24 @@ const MemberKilosScreen = () => {
                         if (matched) {
                             setMemberValue(matched.id);
                             setSelectedMember(matched);
+                        }
+                    }
+
+                    // Auto-select transporter if user is in transporter group
+                    if (userGroups.includes("transporter") && userData?.member_id) {
+                        const matchedTransporter = (transporters || []).find((t: any) => t.member_id === userData.member_id);
+                        if (matchedTransporter) {
+                            setTransporterValue(matchedTransporter.id);
+                            setTransporter(matchedTransporter);
+                            console.log(`[MemberKilos] ✅ Auto-selected transporter: ${matchedTransporter.full_names} (ID: ${matchedTransporter.id})`);
+
+                            // Disable transporter dropdown if user is NOT an employee
+                            if (!userGroups.includes("employee")) {
+                                setTransporterDisabled(true);
+                                console.log(`[MemberKilos] ✅ Disabled transporter dropdown (user is not an employee)`);
+                            }
+                        } else {
+                            console.log(`[MemberKilos] ❌ No transporter found matching user member_id: ${userData.member_id}`);
                         }
                     }
                 }
@@ -689,12 +708,15 @@ const MemberKilosScreen = () => {
         receipt += "\n\n";
         receipt += "      MEMBER KILOS RECEIPT\n";
         receipt += "================================\n";
-        receipt += `Date: ${new Date().toISOString().split("T")[0]}\n`;
+        const now = new Date();
+        const dateStr = now.toISOString().split("T")[0];
+        const timeStr = now.toTimeString().split(" ")[0];
+        receipt += `Date: ${dateStr} ${timeStr}\n`;
         receipt += `Member: ${selectedMember ? `${selectedMember.first_name} ${selectedMember.last_name}` : 'N/A'}\n`;
         receipt += `Transporter: ${selectedTransporter?.full_names || 'N/A'}\n`;
         receipt += `Shift: ${selectedShift?.name || 'N/A'}\n`;
         receipt += `Route: ${selectedRoute?.route_name || 'N/A'}\n`;
-        receipt += `Center: ${selectedCenter?.centre || 'N/A'}\n`;
+        receipt += `Center: ${selectedCenter?.center || 'N/A'}\n`;
         receipt += "--------------------------------\n";
         receipt += `Total Cans: ${capturedTotalCans}\n`;
         receipt += `Total Quantity: ${(capturedTotalQuantity || 0).toFixed(2)} KG\n`;
@@ -1419,6 +1441,7 @@ const MemberKilosScreen = () => {
                                     placeholder="Select transporter"
                                     searchable={true}
                                     searchPlaceholder="Search transporter"
+                                    disabled={transporterDisabled}
                                     renderListItem={renderDropdownItem}
                                     zIndex={5000}
                                     style={globalStyles.basedropdown}
@@ -1477,7 +1500,7 @@ const MemberKilosScreen = () => {
                                     value={centerValue}
                                     items={centerItems}
                                     setOpen={setCenterOpen}
-                                    setValue={(val: any) => { setCenterValue(val as number); const sel = centerItems.find((c: any) => c.value === val); if (sel) setCenter({ id: sel.value, centre: sel.label }); }}
+                                    setValue={(val: any) => { setCenterValue(val as number); const sel = centerItems.find((c: any) => c.value === val); if (sel) setCenter({ id: sel.value, center: sel.label }); }}
                                     setItems={setCenterItems}
                                     placeholder="Select center"
                                     searchable={true}

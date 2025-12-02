@@ -4,7 +4,9 @@ import {
     Text,
     StyleSheet,
     Alert,
+    ScrollView,
 } from "react-native";
+import { useRoute } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import DropDownPicker from "react-native-dropdown-picker";
 import fetchCommonData from "../../components/utils/fetchCommonData";
@@ -12,6 +14,8 @@ import CashoutsListComponent from "../../components/screenSections/MemberCashout
 import MemberCashoutActions from "../../components/modals/MemberCashoutActions";
 
 const MemberCashoutListScreen: React.FC = () => {
+    const route = useRoute();
+    const routeParams = route.params as { memberId?: number } | undefined;
     const [loading, setLoading] = useState(false);
     const [customer_type, setCustomerType] = useState<string>("member");
     const [commonData, setCommonData] = useState<{ members?: any[] }>({});
@@ -69,6 +73,15 @@ const MemberCashoutListScreen: React.FC = () => {
                             setMemberValue(matched.id); // select the corresponding dropdown value
                             setDropdownDisabled(true); // disable dropdown for member-only users
                         }
+                    } else if (routeParams?.memberId) {
+                        // ✅ Auto-select member from route params (e.g., after cashout submission)
+                        const matched = formattedMembers.find(
+                            (m) => m.member_id === routeParams.memberId || m.id === routeParams.memberId
+                        );
+                        if (matched) {
+                            setMemberValue(matched.id);
+                            console.log("✅ Auto-selected member from route params:", matched.id);
+                        }
                     }
                 }
             } catch (error) {
@@ -78,7 +91,7 @@ const MemberCashoutListScreen: React.FC = () => {
         };
 
         loadCommonData();
-    }, []);
+    }, [routeParams?.memberId]);
 
     // ✅ Update selectedMember when memberValue changes
     useEffect(() => {
@@ -169,7 +182,12 @@ const MemberCashoutListScreen: React.FC = () => {
                         </Text>
                     </View>
                 ) : (
-                    <View style={styles.contentArea}>
+                    <ScrollView 
+                        style={styles.contentArea}
+                        contentContainerStyle={styles.contentAreaContainer}
+                        showsVerticalScrollIndicator={true}
+                        nestedScrollEnabled={true}
+                    >
                         <View style={styles.actionsWrapper}>
                             <MemberCashoutActions
                                 memberId={memberValue}
@@ -182,7 +200,7 @@ const MemberCashoutListScreen: React.FC = () => {
                         <View style={styles.listWrapper}>
                             <CashoutsListComponent memberId={memberValue} />
                         </View>
-                    </View>
+                    </ScrollView>
                 )}
             </View>
         </View>
@@ -238,10 +256,14 @@ const styles = StyleSheet.create({
         flex: 1,
         marginTop: 12,
     },
+    contentAreaContainer: {
+        flexGrow: 1,
+        paddingBottom: 20,
+    },
     actionsWrapper: {
-        paddingBottom: 16,
+        marginBottom: 16,
     },
     listWrapper: {
-        flex: 1,
+        minHeight: 400,
     },
 });
