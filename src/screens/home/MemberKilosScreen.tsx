@@ -113,8 +113,14 @@ const MemberKilosScreen = () => {
         printText: printTextToPrinter,
     } = printerBluetooth;
 
-    // Ref to track printer devices for auto-connect (similar to StoreSaleModal)
     const printerDevicesRef = useRef<any[]>(printerDevices || []);
+    const isMountedRef = useRef(true);
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
     useEffect(() => {
         printerDevicesRef.current = printerDevices || [];
     }, [printerDevices]);
@@ -141,8 +147,10 @@ const MemberKilosScreen = () => {
     }, [connectedScaleDevice]);
 
     // Auto-connect scale on load: Check AsyncStorage and connect based on stored type
+    // --- Update auto-connect scales to include cleanup and mounted check ---
     useEffect(() => {
         const autoConnectToLastScale = async () => {
+            if (!isMountedRef.current) return;
             try {
                 // Skip if already connected
                 if (connectedScaleDevice) {
@@ -160,7 +168,6 @@ const MemberKilosScreen = () => {
                     } catch { }
                 }
 
-                // Retrieve last device from AsyncStorage
                 const lastScale = await AsyncStorage.getItem('last_device_scale');
                 if (!lastScale) {
                     console.log('[MemberKilos] AUTO-CONNECT SCALE: No last device found in storage');
@@ -170,8 +177,6 @@ const MemberKilosScreen = () => {
                 let deviceData: any = null;
                 try {
                     deviceData = typeof lastScale === 'string' ? JSON.parse(lastScale) : lastScale;
-                    console.log('[MemberKilos] AUTO-CONNECT SCALE: Last device found:', deviceData);
-                    console.log('[MemberKilos] AUTO-CONNECT SCALE: Device type:', deviceData.type || 'unknown');
                 } catch (parseError) {
                     console.error('[MemberKilos] AUTO-CONNECT SCALE: Error parsing stored device:', parseError);
                     return;
@@ -183,28 +188,22 @@ const MemberKilosScreen = () => {
                     return;
                 }
 
-                // First, trigger a scan to discover devices
-                console.log('[MemberKilos] AUTO-CONNECT SCALE: Starting device scan to find saved device...');
-                scanForScaleDevices(); // Don't await - let it run in background
+                console.log('[MemberKilos] AUTO-CONNECT SCALE: Starting device scan...');
+                scanForScaleDevices();
 
-                // Wait for scan to complete (15 seconds for BLE scan + buffer)
-                console.log('[MemberKilos] AUTO-CONNECT SCALE: Waiting for scan to complete (18 seconds)...');
-                await new Promise<void>(r => setTimeout(() => r(), 18000)); // Wait 18 seconds for scan to finish
+                // Use AbortController to cancel if component unmounts
+                const abortController = new AbortController();
+                const timeoutId = setTimeout(() => {
+                    if (!isMountedRef.current) abortController.abort();
+                }, 18000);
+                await new Promise<void>(r => setTimeout(() => r(), 18000));
 
-                // Re-check scaleDevices after waiting (state should be updated by now)
-                // Use a small delay to ensure state is updated
-                await new Promise<void>(r => setTimeout(() => r(), 500));
-
-                console.log('[MemberKilos] AUTO-CONNECT SCALE: Checking for device after scan...');
-                console.log('[MemberKilos] AUTO-CONNECT SCALE: Looking for device ID:', deviceId);
-
-                // The connectToDevice function in the hook will handle finding and connecting
-                // It will try BLE first, then Classic as fallback
-                // So we can just call it with the device ID and let the hook handle the rest
-                const storedType = deviceData.type || 'ble';
-                console.log('[MemberKilos] AUTO-CONNECT SCALE: Stored type is', storedType, '- attempting connection to:', deviceId);
-                console.log('[MemberKilos] AUTO-CONNECT SCALE: connectToDevice will try BLE first, then Classic if needed...');
-
+                if (!isMountedRef.current) {
+                    clearTimeout(timeoutId);
+                    return;
+                }
+                clearTimeout(timeoutId);
+                console.log('[MemberKilos] AUTO-CONNECT SCALE: Attempting connection...');
                 try {
                     await connectToScaleDevice(deviceId);
                     console.log('[MemberKilos] AUTO-CONNECT SCALE: ✓ Connection attempt completed');
@@ -213,17 +212,15 @@ const MemberKilosScreen = () => {
                 }
             } catch (error) {
                 console.error('[MemberKilos] AUTO-CONNECT SCALE: Failed:', error);
-                // Don't show alert - just log the error to avoid annoying the user
             }
         };
 
-        // Run auto-connect after a short delay to allow component to mount
         const timeout = setTimeout(() => {
             autoConnectToLastScale();
-        }, 2000); // Slightly longer delay to ensure hook is initialized
+        }, 2000);
 
         return () => clearTimeout(timeout);
-    }, []); // Run once on mount
+    }, []);
 
     // Helper: Persist printer to AsyncStorage (similar to StoreSaleModal)
     const persistLastPrinter = useCallback(async (device: any) => {
@@ -420,7 +417,7 @@ const MemberKilosScreen = () => {
                         fetchCommonData({ name: "cans" }),
                         fetchCommonData({ name: "centers" }),
                     ]);
-                const allData = { transporters, routes, shifts, members, cans, centers, measuring_cans: [] };
+                const allData = { transporters, routes, shifts, members, cans, centers };
                 setCommonData(allData);
                 // populate dropdown items
                 setTransporterItems((transporters || []).map((t: any) => ({ label: t.full_names, value: t.id })));
@@ -428,7 +425,6 @@ const MemberKilosScreen = () => {
                 setRouteItems((routes || []).map((r: any) => ({ label: `${r.route_name} (${r.route_code})`, value: r.id })));
                 setMemberItems((members || []).map((m: any) => ({ label: `${m.first_name} ${m.last_name}`, value: m.id })));
                 setCanItems((cans || []).map((c: any) => ({ label: c.can_id || `Can ${c.id}`, value: c.id })));
-                // Measuring cans will be loaded when transporter is selected
                 setMeasuringCanItems([]);
                 setCenterItems((centers || []).map((c: any) => ({ label: c.center, value: c.id })));
 
@@ -1166,15 +1162,20 @@ const MemberKilosScreen = () => {
     }, [connectToScaleDevice]);
 
     // --- sendMemberKilos: post entries, basic error handling ---
+    const sendMemberKilosDebounced = useRef<NodeJS.Timeout | null>(null);
+
     const sendMemberKilos = async () => {
-        // List of required fields
+        // Prevent rapid successive calls
+        if (sendMemberKilosDebounced.current) {
+            console.warn('[MemberKilos] Send already in progress');
+            return;
+        }
         const requiredFields = [
             { field: 'member', value: memberValue, label: 'Member' },
             { field: 'route', value: routeValue, label: 'Route' },
             { field: 'center', value: centerValue, label: 'Center' },
         ];
 
-        // Check for missing required fields
         const missingFields = requiredFields.filter(field => !field.value);
         if (missingFields.length > 0) {
             const missingLabels = missingFields.map(f => f.label).join(', ');
@@ -1191,7 +1192,6 @@ const MemberKilosScreen = () => {
             return;
         }
 
-        // Check if any entry has negative net weight
         const hasNegativeNet = entries.some((entry) => {
             const net = entry?.net ?? 0;
             return net < 0;
@@ -1207,10 +1207,15 @@ const MemberKilosScreen = () => {
         }
 
         setLoading(true);
+        sendMemberKilosDebounced.current = setTimeout(() => {
+            sendMemberKilosDebounced.current = null;
+        }, 3000); // Prevent duplicate sends within 3 seconds
+
         try {
-            // Capture ALL state values before async operations to avoid closure issues
+            if (!isMountedRef.current) return;
+
             const currentConnectedDevice = connectedScaleDevice;
-            const capturedEntries = [...entries]; // Create a copy
+            const capturedEntries = [...entries];
             const capturedTotalCans = totalCans;
             const capturedTotalQuantity = totalQuantity;
             const capturedMemberValue = memberValue;
@@ -1229,18 +1234,19 @@ const MemberKilosScreen = () => {
                 cans: entries,
                 total_cans: totalCans,
                 total_quantity: totalQuantity,
-                is_manual_entry: !currentConnectedDevice, // 👈 use captured value
-                device_uid: currentConnectedDevice?.id || currentConnectedDevice?.address || null, // 👈 use captured value
+                is_manual_entry: !currentConnectedDevice,
+                device_uid: currentConnectedDevice?.id || currentConnectedDevice?.address || null,
             };
 
             const [status, response] = await makeRequest({
-                url: "member-kilos", // adjust to your real endpoint
+                url: "member-kilos",
                 method: "POST",
                 data: payload as any,
             });
 
+            if (!isMountedRef.current) return;
+
             if ([200, 201].includes(status)) {
-                // Prepare receipt text first using captured values
                 let receiptText = "";
                 try {
                     receiptText = formatMemberKilosReceipt(
@@ -1257,20 +1263,16 @@ const MemberKilosScreen = () => {
                     );
                 } catch (formatError) {
                     console.error("Error formatting receipt:", formatError);
-                    // Create a simple receipt if formatting fails
                     receiptText = `MEMBER KILOS RECEIPT\nDate: ${new Date().toISOString().split("T")[0]}\nTotal Quantity: ${(capturedTotalQuantity || 0).toFixed(2)} KG\n`;
                 }
 
-                // Show success modal with loading state
+                if (!isMountedRef.current) return;
                 setSuccessModalVisible(true);
                 setIsPrinting(true);
 
-                // Print receipt following the specified flow
                 try {
-                    // Step 1: Check if printer is already connected, if not try to connect
                     let connectedPrinter: any = null;
 
-                    // First check if already connected
                     if (connectedPrinterDevice) {
                         try {
                             let isStillConnected = false;
@@ -1280,7 +1282,7 @@ const MemberKilosScreen = () => {
                                 isStillConnected = await connectedPrinterDevice.classicDevice.isConnected();
                             }
                             if (isStillConnected) {
-                                console.log('[PRINT] Printer already connected, using existing connection');
+                                console.log('[PRINT] Printer already connected');
                                 connectedPrinter = connectedPrinterDevice;
                             }
                         } catch (checkErr) {
@@ -1288,77 +1290,52 @@ const MemberKilosScreen = () => {
                         }
                     }
 
-                    // If not connected, try to connect using the auto-connect logic
                     if (!connectedPrinter) {
                         try {
-                            console.log('[PRINT] Printer not connected, attempting auto-connect...');
+                            console.log('[PRINT] Attempting auto-connect...');
                             const connected = await attemptAutoConnectPrinter();
                             if (connected && connectedPrinterDevice) {
                                 connectedPrinter = connectedPrinterDevice;
-                                console.log('[PRINT] ✅ Printer connected via auto-connect');
                             }
                         } catch (connectErr) {
-                            console.error('[PRINT] ⚠️ Error connecting to printer:', connectErr);
+                            console.error('[PRINT] Error connecting:', connectErr);
                         }
                     }
 
                     if (!connectedPrinter) {
-                        // Step 3: If no InnerPrinter found, show modal with scanned printers
-                        console.log('[PRINT] No InnerPrinter found, showing printer selection modal');
+                        console.log('[PRINT] No printer, showing modal');
+                        if (!isMountedRef.current) return;
                         setIsPrinting(false);
                         setPrinterModalVisible(true);
-                        // Store receipt text for printing after user selects printer
                         try {
                             await AsyncStorage.setItem('pending_receipt', receiptText);
                         } catch (storageErr) {
-                            console.error('[PRINT] Error storing pending receipt:', storageErr);
+                            console.error('[PRINT] Storage error:', storageErr);
                         }
-                        return; // Exit early, printing will happen when user selects printer
+                        return;
                     }
 
-                    // Wait for connection to be fully established before printing
-                    console.log('[PRINT] Waiting for printer connection to stabilize before printing...');
                     await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
 
-                    // Step 2: Print receipt - with error handling
-                    // Pass the connected device directly to avoid state timing issues
+                    if (!isMountedRef.current) return;
+
                     let printSuccess = false;
                     try {
                         printSuccess = await printReceipt(receiptText, connectedPrinter);
-                        if (printSuccess) {
-                            console.log('[PRINT] ✅ Receipt printed successfully');
-                        } else {
-                            console.warn('[PRINT] ⚠️ Printing failed');
-                            // Alert is already shown in printReceipt function, just log here
-                        }
                     } catch (printErr) {
-                        console.error('[PRINT] ⚠️ Error during printing:', printErr);
+                        console.error('[PRINT] Error during printing:', printErr);
                         printSuccess = false;
-                        // Show alert for unexpected errors
-                        try {
-                            Alert.alert("Print Error", "An unexpected error occurred while printing. Please check the printer and try again.");
-                        } catch (alertErr) {
-                            console.error('[PRINT] Error showing alert:', alertErr);
-                        }
                     }
 
                 } catch (printerError) {
-                    console.error("[PRINT] ❌ Unexpected printer error:", printerError);
-                    // Show alert for unexpected errors
-                    try {
-                        const errorMsg = (printerError as any)?.message || String(printerError);
-                        Alert.alert("Print Error", `An error occurred: ${errorMsg}. Please check the printer and try again.`);
-                    } catch (alertErr) {
-                        console.error('[PRINT] Error showing alert:', alertErr);
-                    }
+                    console.error("[PRINT] Unexpected error:", printerError);
                 } finally {
+                    if (!isMountedRef.current) return;
                     setIsPrinting(false);
                 }
 
-                // Clear local records AFTER printing/reconnection is complete
-                // Use setTimeout to ensure state updates happen after current render cycle
-                // Also wrap in try-catch to prevent crashes during state updates
                 setTimeout(() => {
+                    if (!isMountedRef.current) return;
                     try {
                         setEntries([]);
                         setTotalCans(0);
@@ -1366,7 +1343,6 @@ const MemberKilosScreen = () => {
                         setScaleWeight(null);
                         setCanValue(null);
                         setCan(null);
-                        // Note: Don't clear memberValue here - let user decide or handle elsewhere if needed
                     } catch (clearError) {
                         console.error("Error clearing state:", clearError);
                     }
@@ -1379,7 +1355,13 @@ const MemberKilosScreen = () => {
             console.error(err);
             Alert.alert("Error", err?.message || "An error occurred while sending kilos.");
         } finally {
-            setLoading(false);
+            if (isMountedRef.current) {
+                setLoading(false);
+            }
+            if (sendMemberKilosDebounced.current) {
+                clearTimeout(sendMemberKilosDebounced.current);
+                sendMemberKilosDebounced.current = null;
+            }
         }
     };
 
