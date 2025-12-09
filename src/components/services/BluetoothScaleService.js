@@ -94,7 +94,7 @@ class BluetoothScaleService {
       // Update device info when connected
       if (status === 'connected' && this.connectedDevice) {
         if (setScaleDevice) {
-          setScaleDevice(this.connectedDevice.name || 'Unknown Scale', this.connectedDevice.address);
+          setScaleDevice(this.connectedDevice.name || 'Unknown Scale', this.connectedDevice?.address);
         }
       } else if (status === 'disconnected' && setScaleDevice) {
         // Clear device info on disconnect
@@ -125,7 +125,7 @@ class BluetoothScaleService {
       }
 
       // Check if Bluetooth is enabled
-      const isEnabled = await BluetoothClassic.isBluetoothEnabled();
+      const isEnabled = await BluetoothClassic?.isBluetoothEnabled();
       console.log('Bluetooth enabled:', isEnabled);
 
       if (!isEnabled) {

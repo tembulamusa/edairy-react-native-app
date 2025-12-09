@@ -13,18 +13,21 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // @ts-ignore - library lacks TypeScript declarations in current setup
 import Icon from "react-native-vector-icons/MaterialIcons";
 import { useNavigation } from "@react-navigation/native";
+import DropDownPicker from "react-native-dropdown-picker";
 
 type PreferenceKey =
     | "notifications_enabled"
     | "biometrics_enabled"
     | "dark_mode_enabled"
-    | "auto_print_enabled";
+    | "auto_print_enabled"
+    | "scale_connection_type";
 
-const preferenceDefaults: Record<PreferenceKey, boolean> = {
+const preferenceDefaults: Record<PreferenceKey, boolean | string> = {
     notifications_enabled: true,
     biometrics_enabled: false,
     dark_mode_enabled: false,
     auto_print_enabled: true,
+    scale_connection_type: "ble", // Default to BLE
 };
 
 const SettingsScreen: React.FC = () => {
@@ -32,7 +35,14 @@ const SettingsScreen: React.FC = () => {
     const [user, setUser] = useState<any | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [preferences, setPreferences] = useState<Record<PreferenceKey, boolean>>(preferenceDefaults);
+    const [preferences, setPreferences] = useState<Record<PreferenceKey, boolean | string>>(preferenceDefaults);
+
+    // Scale connection type dropdown state
+    const [scaleTypeOpen, setScaleTypeOpen] = useState(false);
+    const [scaleTypeItems, setScaleTypeItems] = useState([
+        { label: "Bluetooth Low Energy (BLE)", value: "ble" },
+        { label: "Classic Bluetooth", value: "classic" },
+    ]);
 
     const preferenceStorageKey = "@edairyApp:user_preferences";
 
@@ -190,6 +200,41 @@ const SettingsScreen: React.FC = () => {
                             value={preferences.dark_mode_enabled}
                             onValueChange={(val) => handleToggle("dark_mode_enabled", val)}
                         />
+                    </View>
+                    <View style={{ marginVertical: 8 }}>
+                        <Text style={styles.listTitle}>🔧 Scale Connection Type</Text>
+                        <Text style={styles.listSubtitle}>Choose how to connect to your scale device (BLE recommended).</Text>
+                        <DropDownPicker
+                            listMode="SCROLLVIEW"
+                            open={scaleTypeOpen}
+                            value={preferences.scale_connection_type || "ble"}
+                            items={scaleTypeItems}
+                            setOpen={setScaleTypeOpen}
+                            setValue={(callback) => {
+                                const value = typeof callback === 'function' ? callback(preferences.scale_connection_type) : callback;
+                                handleToggle("scale_connection_type", value);
+                            }}
+                            setItems={setScaleTypeItems}
+                            placeholder="Select connection type"
+                            style={{
+                                marginTop: 8,
+                                borderColor: '#2563eb',
+                                borderWidth: 2,
+                                borderRadius: 8,
+                                backgroundColor: '#f8fafc'
+                            }}
+                            dropDownContainerStyle={{
+                                borderColor: '#2563eb',
+                                borderWidth: 2,
+                                borderRadius: 8,
+                                backgroundColor: '#ffffff'
+                            }}
+                            zIndex={1000}
+                            zIndexInverse={3000}
+                        />
+                        <Text style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                            Current: {preferences.scale_connection_type === "ble" ? "Bluetooth Low Energy" : "Classic Bluetooth"}
+                        </Text>
                     </View>
                 </View>
             </View>

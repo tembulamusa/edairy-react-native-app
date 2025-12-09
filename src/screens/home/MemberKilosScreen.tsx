@@ -12,7 +12,71 @@ import {
     ScrollView,
 } from "react-native";
 import BluetoothConnectionModal from '../../components/modals/BluetoothConnectionModal';
-import useBluetoothService from "../../hooks/useBluetoothService.ts";
+import useBluetoothService from "../../hooks/useBluetoothService";
+
+// Use require for hooks to avoid import issues
+// const useBLEService = require("../../hooks/useBLEService").default;
+const useClassicService = require("../../hooks/useClassicService").default;
+
+// Bluetooth setup helper
+const checkBluetoothSetup = async () => {
+    const { PermissionsAndroid, Platform, Alert } = require("react-native");
+
+    if (Platform.OS !== 'android') return true;
+
+    try {
+        console.log('[SETUP] Checking Bluetooth setup...');
+
+        // Check location permission (required for Bluetooth scanning)
+        const locationGranted = await PermissionsAndroid.check(
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+        );
+
+        if (!locationGranted) {
+            Alert.alert(
+                'Location Permission Required',
+                'Bluetooth device scanning requires location permission. This is used only for finding nearby Bluetooth devices and is not used for GPS tracking.',
+                [
+                    {
+                        text: 'Grant Permission',
+                        onPress: async () => {
+                            try {
+                                const result = await PermissionsAndroid.request(
+                                    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+                                );
+                                if (result === PermissionsAndroid.RESULTS.GRANTED) {
+                                    console.log('[SETUP] Location permission granted');
+                                    Alert.alert(
+                                        'Permission Granted',
+                                        'Location permission granted. You can now scan for Bluetooth devices.',
+                                        [{ text: 'OK' }]
+                                    );
+                                    return true;
+                                } else {
+                                    Alert.alert(
+                                        'Permission Denied',
+                                        'Location permission is required for Bluetooth scanning. Please enable it in app settings: Settings > Apps > eDairy > Permissions > Location.',
+                                        [{ text: 'OK' }]
+                                    );
+                                }
+                            } catch (e) {
+                                console.error('[SETUP] Error requesting location permission:', e);
+                            }
+                        }
+                    },
+                    { text: 'Cancel', style: 'cancel' }
+                ]
+            );
+            return false;
+        }
+
+        console.log('[SETUP] Bluetooth setup check passed');
+        return true;
+    } catch (error) {
+        console.error('[SETUP] Bluetooth setup check failed:', error);
+        return false;
+    }
+};
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import fetchCommonData from "../../components/utils/fetchCommonData.ts";
 import makeRequest from "../../components/utils/makeRequest.ts";
@@ -21,8 +85,11 @@ import { renderDropdownItem } from "../../assets/styles/all.tsx";
 import CashoutFormModal from "../../components/modals/CashoutFormModal.tsx";
 import SuccessModal from "../../components/modals/SuccessModal.tsx";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { globalStyles } from "../../styles.ts";
+
+// At the top of the file (best effort if multiple import blocks)
+declare module 'react-native-vector-icons/MaterialIcons';
 
 const MemberKilosScreen = () => {
     // --- Toggle state ---
@@ -83,8 +150,51 @@ const MemberKilosScreen = () => {
     const [successModalVisible, setSuccessModalVisible] = useState(false);
     const [isPrinting, setIsPrinting] = useState(false);
 
-    // --- Scale hook for weight operations (BLE only) ---
-    const scaleBluetooth = useBluetoothService({ deviceType: "scale" });
+    // --- Scale connection type state ---
+    const [scaleConnectionType, setScaleConnectionType] = useState<string>("ble"); // Default to BLE
+    const [scaleSettingsLoaded, setScaleSettingsLoaded] = useState<boolean>(false);
+
+    // --- Load scale connection type from settings ---
+    const loadScaleSettings = useCallback(async () => {
+        try {
+            const storedPrefs = await AsyncStorage.getItem("@edairyApp:user_preferences");
+            if (storedPrefs) {
+                const parsed = JSON.parse(storedPrefs);
+                const savedType = parsed.scale_connection_type || "ble";
+                console.log("[MemberKilos] Loaded scale connection type from settings:", savedType);
+                setScaleConnectionType(savedType);
+            } else {
+                console.log("[MemberKilos] No saved preferences found, using default BLE");
+            }
+        } catch (error) {
+            console.error("[MemberKilos] Failed to load scale settings:", error);
+            // Keep default BLE
+        } finally {
+            setScaleSettingsLoaded(true);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadScaleSettings();
+    }, [loadScaleSettings]);
+
+    // Reload settings when screen comes into focus (in case user changed settings)
+    useFocusEffect(
+        useCallback(() => {
+            loadScaleSettings();
+        }, [loadScaleSettings])
+    );
+
+    // --- Scale hook ---
+    const scaleHook = useBluetoothService({ deviceType: "scale" });
+
+    // Log when connection type changes
+    useEffect(() => {
+        if (scaleSettingsLoaded) {
+            console.log(`[MemberKilos] Scale connection type setting: ${scaleConnectionType}`);
+            console.log(`[MemberKilos] Using: useBluetoothService (Unified BLE/Classic)`);
+        }
+    }, [scaleConnectionType, scaleSettingsLoaded]);
 
     // --- Destructure for scale operations ---
     const {
@@ -96,7 +206,7 @@ const MemberKilosScreen = () => {
         isScanning: isScanningScale,
         isConnecting: isConnectingScale,
         disconnect: disconnectScale,
-    } = scaleBluetooth;
+    } = scaleHook;
 
     // --- Printer hook for printing operations (BLE only) ---
     const printerBluetooth = useBluetoothService({ deviceType: "printer" });
@@ -128,14 +238,38 @@ const MemberKilosScreen = () => {
     // Update scale weight when data is received from connected device
     // lastMessage is already weight in kgs (0.01 precision) from useBluetoothService
     useEffect(() => {
-        if (lastMessage && connectedScaleDevice) {
-            // lastMessage is already weight in kgs, just parse and use it
-            const weight = parseFloat(lastMessage);
-            if (!isNaN(weight)) {
-                setScaleWeight(weight);
-                // Clear manual text input when scale is connected
-                setScaleWeightText("");
+        // console.log(`[MEMBER KILOS] ⚖️ WEIGHT UPDATE EFFECT TRIGGERED`);
+        // console.log(`[MEMBER KILOS] ⚖️ lastMessage value:`, lastMessage);
+        // console.log(`[MEMBER KILOS] ⚖️ connectedScaleDevice:`, !!connectedScaleDevice);
+
+        try {
+            if (lastMessage !== null && lastMessage !== undefined && connectedScaleDevice) {
+                // console.log(`[MEMBER KILOS] 📥 WEIGHT RECEIVED FROM SCALE: "${lastMessage}"`);
+
+                // lastMessage is already weight in kgs, just parse and use it
+                const weight = parseFloat(lastMessage);
+                // console.log(`[MEMBER KILOS] 🔄 PARSED WEIGHT VALUE: ${weight}`);
+
+                if (!isNaN(weight) && isFinite(weight) && weight >= 0 && weight <= 1000) {
+                    // console.log(`[MEMBER KILOS] ✅ SETTING scaleWeight TO: ${weight}`);
+                    setScaleWeight(weight);
+                    // Clear manual text input when scale is connected
+                    setScaleWeightText("");
+                    // console.log(`[MEMBER KILOS] ✅ scaleWeight UPDATED SUCCESSFULLY - SHOULD SEE WEIGHT IN UI`);
+                } else {
+                    // console.warn(`[MEMBER KILOS] ❌ INVALID WEIGHT RECEIVED: "${lastMessage}" (parsed as: ${weight})`);
+                    // Don't update scaleWeight for invalid values
+                }
+            } else if (!connectedScaleDevice) {
+                // console.log(`[MEMBER KILOS] ⚠️ SCALE DISCONNECTED - CLEARING WEIGHT`);
+                // Scale disconnected, clear weight
+                setScaleWeight(null);
+            } else {
+                console.log(`[MEMBER KILOS] ⏳ WAITING FOR WEIGHT DATA FROM SCALE...`);
             }
+        } catch (error) {
+            console.error('[MEMBER KILOS] ❌ ERROR PROCESSING SCALE WEIGHT:', error);
+            setScaleWeight(null);
         }
     }, [lastMessage, connectedScaleDevice]);
 
@@ -150,7 +284,7 @@ const MemberKilosScreen = () => {
     // --- Update auto-connect scales to include cleanup and mounted check ---
     useEffect(() => {
         const autoConnectToLastScale = async () => {
-            if (!isMountedRef.current) return;
+            if (!isMountedRef.current || !scaleSettingsLoaded) return;
             try {
                 // Skip if already connected
                 if (connectedScaleDevice) {
@@ -164,8 +298,18 @@ const MemberKilosScreen = () => {
                         if (stillConnected) {
                             console.log('[MemberKilos] AUTO-CONNECT SCALE: Already connected, skipping');
                             return;
+                        } else {
+                            console.log('[MemberKilos] AUTO-CONNECT SCALE: Device appears disconnected, will attempt reconnection');
+                            // Clear the stored device if it's disconnected to prevent repeated failures
+                            await AsyncStorage.removeItem('last_device_scale');
+                            return;
                         }
-                    } catch { }
+                    } catch (error) {
+                        console.log('[MemberKilos] AUTO-CONNECT SCALE: Error checking connection status:', error);
+                        // If we can't check connection, assume disconnected and clear stored device
+                        await AsyncStorage.removeItem('last_device_scale');
+                        return;
+                    }
                 }
 
                 const lastScale = await AsyncStorage.getItem('last_device_scale');
@@ -209,6 +353,14 @@ const MemberKilosScreen = () => {
                     console.log('[MemberKilos] AUTO-CONNECT SCALE: ✓ Connection attempt completed');
                 } catch (connectError) {
                     console.error('[MemberKilos] AUTO-CONNECT SCALE: Connection error:', connectError);
+                    // Clear the stored device if connection fails to prevent repeated failures
+                    try {
+                        await AsyncStorage.removeItem('last_device_scale');
+                        console.log('[MemberKilos] AUTO-CONNECT SCALE: Cleared stored device due to connection failure');
+                    } catch (clearError) {
+                        console.error('[MemberKilos] AUTO-CONNECT SCALE: Error clearing stored device:', clearError);
+                    }
+                    // Don't show alert for auto-connect failures - user can manually connect later
                 }
             } catch (error) {
                 console.error('[MemberKilos] AUTO-CONNECT SCALE: Failed:', error);
@@ -220,7 +372,7 @@ const MemberKilosScreen = () => {
         }, 2000);
 
         return () => clearTimeout(timeout);
-    }, []);
+    }, [scaleSettingsLoaded, scaleConnectionType]); // Depend on settings being loaded and connection type
 
     // Helper: Persist printer to AsyncStorage (similar to StoreSaleModal)
     const persistLastPrinter = useCallback(async (device: any) => {
@@ -392,14 +544,14 @@ const MemberKilosScreen = () => {
 
     // Show alert if connection failed
     useEffect(() => {
-        if (scaleBluetooth.connectionFailed && scaleBluetooth.lastConnectionAttempt) {
+        if (scaleHook.connectionFailed && scaleHook.lastConnectionAttempt) {
             Alert.alert(
                 "Connection Failed",
                 `Failed to connect to the last used scale device. Please check if the device is powered on and try connecting manually.`,
                 [{ text: "OK", style: "default" }]
             );
         }
-    }, [scaleBluetooth.connectionFailed, scaleBluetooth.lastConnectionAttempt]);
+    }, [scaleHook.connectionFailed, scaleHook.lastConnectionAttempt]);
 
     const [isCashoutModalVisible, setIsCashoutModalVisible] = useState(false);
     const [selectedMember, setSelectedMember] = useState<any | null>(null);
@@ -638,45 +790,70 @@ const MemberKilosScreen = () => {
         }
     }, [measuringCanValue, commonData?.measuring_cans]);
 
+
     // --- takeWeight: push current scale weight into entries and update totals ---
     const takeWeight = () => {
-        if (scaleWeight === null || scaleWeight === undefined) {
-            Alert.alert("No weight", "No weight available to record.");
-            return;
-        }
-        if (!measuringCan || typeof measuringCan.tare_weight !== 'number') {
-            Alert.alert("Missing Measuring Can", "Select a measuring can for tare weight before recording.");
-            return;
-        }
-        if (!can || !canValue || !can.id) {
-            Alert.alert("Missing Can", "Please select a can before recording the weight.");
-            return;
-        }
-        const tare = measuringCan.tare_weight; // Always use measuring can's tare
-        const net = parseFloat((scaleWeight - tare).toFixed(2));
+        try {
+            // Validate scale weight
+            if (scaleWeight === null || scaleWeight === undefined || !isFinite(scaleWeight) || scaleWeight < 0) {
+                Alert.alert("No weight", "No valid weight available to record. Please ensure the scale is connected and displaying a valid weight.");
+                return;
+            }
 
-        // Prevent adding entry if net weight is negative
-        if (net < 0) {
-            Alert.alert(
-                "Invalid Weight",
-                `Net weight is negative (${net.toFixed(2)} KG). Please check the scale weight and measuring can tare weight. Entry not added.`
-            );
-            return;
-        }
+            // Validate measuring can and tare weight
+            if (!measuringCan || typeof measuringCan.tare_weight !== 'number' || !isFinite(measuringCan.tare_weight)) {
+                Alert.alert("Missing Measuring Can", "Select a measuring can with valid tare weight before recording.");
+                return;
+            }
 
-        const entry = {
-            can_id: can?.id ?? null,
-            can_label: can?.can_id ?? `Can ${can?.id ?? "N/A"}`,
-            scale_weight: scaleWeight,
-            tare_weight: tare, // Always from measuring can
-            net,
-        };
-        setEntries(prev => [...prev, entry]);
-        setTotalCans(prev => prev + 1);
-        setTotalQuantity(prev => (prev ?? 0) + net);
-        setScaleWeight(null);
-        setScaleWeightText("");
-        setCanValue(null);
+            // Validate can selection
+            if (!can || !canValue || !can.id) {
+                Alert.alert("Missing Can", "Please select a can before recording the weight.");
+                return;
+            }
+
+            const tare = measuringCan.tare_weight; // Always use measuring can's tare
+            const net = parseFloat((scaleWeight - tare).toFixed(2));
+
+            // Prevent adding entry if net weight is negative or invalid
+            if (!isFinite(net) || net < 0) {
+                Alert.alert(
+                    "Invalid Weight",
+                    `Net weight is invalid (${net.toFixed(2)} KG). Please check the scale weight (${scaleWeight.toFixed(2)} KG) and measuring can tare weight (${tare} KG). Entry not added.`
+                );
+                return;
+            }
+
+            // Prevent adding entry if net weight is unreasonably high (likely error)
+            if (net > 1000) {
+                Alert.alert(
+                    "Suspicious Weight",
+                    `Net weight seems unusually high (${net.toFixed(2)} KG). Please verify the scale reading and measuring can tare weight.`
+                );
+                return;
+            }
+
+            const entry = {
+                can_id: can?.id ?? null,
+                can_label: can?.can_id ?? `Can ${can?.id ?? "N/A"}`,
+                scale_weight: scaleWeight,
+                tare_weight: tare, // Always from measuring can
+                net,
+            };
+
+            setEntries(prev => [...prev, entry]);
+            setTotalCans(prev => prev + 1);
+            setTotalQuantity(prev => (prev ?? 0) + net);
+
+            // Clear current selections and weight for next entry
+            setScaleWeight(null);
+            setScaleWeightText("");
+            setCanValue(null);
+
+        } catch (error) {
+            console.error('[MemberKilos] Error in takeWeight:', error);
+            Alert.alert("Error", "An error occurred while recording the weight. Please try again.");
+        }
     };
 
     // Format receipt for member kilos (takes all needed parameters to avoid closure issues)
@@ -1586,7 +1763,7 @@ const MemberKilosScreen = () => {
                                     style={styles.input}
                                     placeholder="Scale Wt"
                                     value={connectedScaleDevice
-                                        ? (scaleWeight !== null && scaleWeight !== undefined ? String(scaleWeight) : "")
+                                        ? (scaleWeight !== null && scaleWeight !== undefined && !isNaN(scaleWeight) ? scaleWeight.toFixed(2) : "")
                                         : scaleWeightText
                                     }
                                     keyboardType="decimal-pad"
@@ -1633,12 +1810,45 @@ const MemberKilosScreen = () => {
                             <View style={styles.col}>
                                 <Text style={styles.label}>Net</Text>
                                 <Text style={styles.value}>
-                                    {scaleWeight !== null && measuringCan?.tare_weight !== undefined && measuringCan?.tare_weight !== null ?
-                                        `${(scaleWeight - (measuringCan?.tare_weight ?? 0)).toFixed(2)} KG` : "--"}
+                                    {(() => {
+                                        try {
+                                            if (scaleWeight !== null && scaleWeight !== undefined &&
+                                                measuringCan?.tare_weight !== undefined && measuringCan?.tare_weight !== null &&
+                                                isFinite(scaleWeight) && isFinite(measuringCan.tare_weight) &&
+                                                scaleWeight >= 0 && measuringCan.tare_weight >= 0) {
+                                                const net = scaleWeight - measuringCan.tare_weight;
+                                                if (isFinite(net) && net >= 0) {
+                                                    return `${net.toFixed(2)} KG`;
+                                                }
+                                            }
+                                            return "--";
+                                        } catch (error) {
+                                            console.error('[MemberKilos] Error calculating net weight in UI:', error);
+                                            return "--";
+                                        }
+                                    })()}
                                 </Text>
                             </View>
                         </View>
 
+                        {/* Bluetooth Enable Reminder */}
+                        {!connectedScaleDevice && (
+                            <View style={{ marginVertical: 6, padding: 8, backgroundColor: '#FEF3C7', borderRadius: 6, borderWidth: 1, borderColor: '#F59E0B', flexDirection: 'row', alignItems: 'center' }}>
+                                <MaterialIcons name="bluetooth" size={16} color="#F59E0B" />
+                                <Text style={{ marginLeft: 6, color: '#92400E', fontSize: 12, flex: 1 }}>
+                                    Ensure Bluetooth is enabled on your device before connecting to a scale.
+                                </Text>
+                            </View>
+                        )}
+
+                        {/* Connection Type Indicator */}
+                        {scaleSettingsLoaded && (
+                            <View style={{ marginVertical: 4, paddingHorizontal: 8, paddingVertical: 4, backgroundColor: scaleConnectionType === 'ble' ? '#EBF4FF' : '#F0FDF4', borderRadius: 4, alignSelf: 'flex-start' }}>
+                                <Text style={{ fontSize: 11, color: scaleConnectionType === 'ble' ? '#1D4ED8' : '#166534', fontWeight: '600' }}>
+                                    {scaleConnectionType === 'ble' ? '🔵 BLE Mode (useBLEService)' : '📱 Classic Mode (useBluetoothService)'}
+                                </Text>
+                            </View>
+                        )}
 
                         {/* Bluetooth Connection Status - Compact */}
                         <View style={{ marginVertical: 6, padding: 8, backgroundColor: '#f8fafc', borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0' }}>
@@ -1665,6 +1875,7 @@ const MemberKilosScreen = () => {
                                 </View>
                             )}
                         </View>
+
 
                         {/* BUTTONS */}
                         <View style={styles.buttonRow}>
@@ -1782,9 +1993,16 @@ const MemberKilosScreen = () => {
                 type="device-list"
                 deviceType="scale"
                 title="Select Scale Device"
+                message="Make sure Bluetooth is enabled and location permissions are granted for device scanning."
                 devices={scaleDevices}
                 connectToDevice={connectToScaleDevice}
-                scanForDevices={scanForScaleDevices}
+                scanForDevices={async () => {
+                    // Check setup before scanning
+                    const setupOk = await checkBluetoothSetup();
+                    if (setupOk) {
+                        scanForScaleDevices();
+                    }
+                }}
                 isScanning={isScanningScale}
                 isConnecting={isConnectingScale}
                 connectedDevice={connectedScaleDevice}

@@ -34,7 +34,7 @@ function decodeUtf8(bytes: number[] | Uint8Array): string {
             // @ts-ignore
             return new TextDecoder('utf-8').decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
         }
-    } catch {}
+    } catch { }
     // Fallback simple ASCII
     try {
         return String.fromCharCode(...(bytes as number[]));
@@ -54,7 +54,7 @@ function base64ToBytes(b64: string): Uint8Array | null {
             for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i) & 0xff;
             return arr;
         }
-    } catch {}
+    } catch { }
     try {
         // Fallback: Buffer if polyfilled
         // @ts-ignore
@@ -62,7 +62,7 @@ function base64ToBytes(b64: string): Uint8Array | null {
             // @ts-ignore
             return Buffer.from(b64, 'base64');
         }
-    } catch {}
+    } catch { }
     return null;
 }
 
@@ -117,7 +117,7 @@ export default function useBluetoothService({
 
     // 🧹 Cleanup BLE
     const cleanupBLE = useCallback(() => {
-        try { notifySubRef.current?.remove?.(); } catch {}
+        try { notifySubRef.current?.remove?.(); } catch { }
         notifySubRef.current = null;
     }, []);
 
@@ -125,7 +125,7 @@ export default function useBluetoothService({
     const cleanupClassic = useCallback(() => {
         try {
             classicSubscriptionRef.current?.remove?.();
-        } catch {}
+        } catch { }
         classicSubscriptionRef.current = null;
 
         if (classicReadIntervalRef.current) {
@@ -139,7 +139,7 @@ export default function useBluetoothService({
         return () => {
             cleanupBLE();
             cleanupClassic();
-            try { ble?.destroy?.(); } catch {}
+            try { ble?.destroy?.(); } catch { }
         };
     }, [ble, cleanupBLE, cleanupClassic]);
 
@@ -147,7 +147,7 @@ export default function useBluetoothService({
     const requestBLEPermissions = useCallback(async (): Promise<boolean> => {
         if (Platform.OS !== 'android') return true;
         try {
-            const result = await PermissionsAndroid.requestMultiple([
+            const result = await PermissionsAndroid?.requestMultiple?.([
                 PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
                 PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
                 PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
@@ -162,10 +162,12 @@ export default function useBluetoothService({
     // 🔒 Ensure Bluetooth is enabled for Classic
     const ensureClassicBluetoothEnabled = useCallback(async (): Promise<boolean> => {
         try {
-            const enabled = await RNBluetoothClassic.isBluetoothEnabled();
+            const enabled = RNBluetoothClassic?.isBluetoothEnabled
+                ? await RNBluetoothClassic.isBluetoothEnabled()
+                : false;
             if (!enabled) {
                 if (Platform.OS === "android") {
-                    const result = await RNBluetoothClassic.requestBluetoothEnabled();
+                    const result = await RNBluetoothClassic?.requestBluetoothEnabled();
                     if (!result) {
                         Alert.alert("Bluetooth Disabled", "Please enable Bluetooth first.");
                         return false;
@@ -182,7 +184,7 @@ export default function useBluetoothService({
     // 🔍 Scan for Classic Bluetooth devices (SEPARATE FUNCTION)
     const scanClassicDevices = useCallback(async (): Promise<void> => {
         console.log('[CLASSIC] ========== CLASSIC SCAN STARTED ==========');
-        
+
         try {
             const enabled = await ensureClassicBluetoothEnabled();
             if (!enabled) {
@@ -191,13 +193,13 @@ export default function useBluetoothService({
             }
 
             console.log('[CLASSIC] SCAN STEP 1: Starting Classic Bluetooth scan...');
-            
+
             let classicDeviceMap: Record<string, ClassicBluetoothDevice> = {};
-            
+
             try {
                 // Get bonded devices
                 const bonded = await RNBluetoothClassic.getBondedDevices();
-                
+
                 // Try to discover devices
                 let discovered: any[] = [];
                 try {
@@ -218,11 +220,11 @@ export default function useBluetoothService({
                 // Filter devices based on deviceType
                 const filtered = await filterBluetoothDevices(Object.values(unique), deviceType);
                 setClassicDevices(filtered);
-                
+
                 filtered.forEach((d) => {
                     classicDeviceMap[(d.address || d.id || "").toLowerCase()] = d;
                 });
-                
+
                 console.log(`[CLASSIC] SCAN: Found ${filtered.length} Classic device(s)`);
             } catch (error) {
                 console.error("[CLASSIC] SCAN: Classic scan error:", error);
@@ -232,7 +234,7 @@ export default function useBluetoothService({
             setDevices(prev => {
                 const existingIds = new Set(prev.map(d => d.id.toLowerCase()));
                 const newClassicDevices: UnifiedDevice[] = [];
-                
+
                 Object.values(classicDeviceMap).forEach((d) => {
                     const deviceId = (d.address || d.id || "").toLowerCase();
                     if (!existingIds.has(deviceId)) {
@@ -246,10 +248,10 @@ export default function useBluetoothService({
                         existingIds.add(deviceId);
                     }
                 });
-                
+
                 return [...prev, ...newClassicDevices];
             });
-            
+
             console.log('[CLASSIC] ========== CLASSIC SCAN COMPLETE ==========');
         } catch (error) {
             console.error('[CLASSIC] SCAN: Error:', error);
@@ -259,27 +261,27 @@ export default function useBluetoothService({
     // Helper function to check if BLE device is a printer (excludes InnerPrinter - it uses Classic)
     const isBLEPrinterDevice = useCallback((device: BLEDevice): boolean => {
         const deviceName = (device.name || '').toLowerCase();
-        
+
         // InnerPrinter uses Classic Bluetooth, NOT BLE - exclude it from BLE scan
         if (deviceName.includes('innerprinter') || deviceName.includes('inner')) {
             console.log(`[BLE] SCAN FILTER: ✗ Excluding InnerPrinter from BLE scan (uses Classic): ${device.name || device.id}`);
             return false;
         }
-        
+
         // Check device name for other printer keywords
         const printerKeywords = [
             'printer', 'print', 'pt', 'zjiang', 'czt', 'gp', 'cenxun',
             'pos', 'thermal', 'xp', 'zt', 'rongta', 'ez', 't9', 'xprinter', 'star',
             'ble', 'bluetooth'
         ];
-        
+
         const nameMatch = printerKeywords.some(keyword => deviceName.includes(keyword));
-        
+
         if (nameMatch) {
             console.log(`[BLE] SCAN FILTER: ✓ Device name matches printer pattern: ${device.name || device.id}`);
             return true;
         }
-        
+
         // Also check for common printer service UUIDs (if available)
         if (device.serviceUUIDs && device.serviceUUIDs.length > 0) {
             // Some BLE printers expose specific services
@@ -287,16 +289,16 @@ export default function useBluetoothService({
                 const normalized = serviceUUID.toLowerCase().replace(/-/g, '');
                 // Common printer service UUIDs (may vary by manufacturer)
                 return normalized.includes('18f0') || // Serial Port Profile
-                       normalized.includes('fff0') || // Common custom service
-                       normalized.includes('ae30');   // Some thermal printers
+                    normalized.includes('fff0') || // Common custom service
+                    normalized.includes('ae30');   // Some thermal printers
             });
-            
+
             if (hasPrinterService) {
                 console.log(`[BLE] SCAN FILTER: ✓ Device has printer service: ${device.name || device.id}`);
                 return true;
             }
         }
-        
+
         return false;
     }, []);
 
@@ -308,43 +310,48 @@ export default function useBluetoothService({
             const normalized = serviceUUID.toLowerCase().replace(/-/g, '');
             return normalized.includes('181d') || WEIGHT_SERVICE_UUIDS.some(wsu => normalized.includes(wsu.toLowerCase().replace(/-/g, '')));
         });
-        
+
         if (hasWeightService) {
             console.log(`[BLE] SCAN FILTER: ✓ Device has Weight Scale Service: ${device.name || device.id}`);
             return true;
         }
-        
+
         // Check device name for scale keywords (only if deviceType is 'scale')
         if (deviceType === 'scale') {
             const scaleKeywords = [
                 'scale', 'weight', 'weigh', 'weighing', 'balance', 'gram', 'kg', 'lb',
                 'digital', 'precision', 'measure',
+                'xh', 'cf', // Added XH and CF as keywords
                 'crane', 'hanging', 'hook', 'ocs', 'ocs-', 'dyna', 'dynamometer', 'kern', 'sf-', 'yh', 'yw',
                 'hc-05', 'hc-06', 'hc05', 'hc06', 'esp32', 'arduino', 'at-', 'linvor', 'jdy', 'zs-040'
             ];
-            
+
             const deviceName = (device.name || '').toLowerCase();
             const nameMatch = scaleKeywords.some(keyword => deviceName.includes(keyword));
-            
-            // Check for XH-series scales (e.g., "xh2507024006")
-            const xhSeriesMatch = /^xh[0-9]+/i.test(device.name || '');
-            
+
+            // Check for XH-series scales (case-insensitive, anywhere in name)
+            const xhSeriesMatch = deviceName.includes('xh');
+
+            // Check for CF model scales (case-insensitive, anywhere in name)
+            const cfModelMatch = deviceName.includes('cf');
+
             // Check for OCS series
             const ocsSeriesMatch = /^(ocs-?|oc-)/i.test(device.name || '');
-            
-            if (nameMatch || xhSeriesMatch || ocsSeriesMatch) {
+
+            if (nameMatch || xhSeriesMatch || cfModelMatch || ocsSeriesMatch) {
                 console.log(`[BLE] SCAN FILTER: ✓ Device name matches scale pattern: ${device.name || device.id}`);
+                console.log(`[BLE] SCAN FILTER:   - Keywords match: ${nameMatch}, XH match: ${xhSeriesMatch}, CF match: ${cfModelMatch}, OCS match: ${ocsSeriesMatch}`);
                 return true;
             }
         }
-        
+
         return false;
     }, [deviceType]);
 
     // 🔍 Scan for BLE devices (PRIMARY - filtered for scale or printer devices)
     const scanBLEDevices = useCallback(async (): Promise<void> => {
         console.log('[BLE] ========== BLE SCAN STARTED ==========');
-        
+
         // Stop any existing scan first
         try {
             await ble.stopDeviceScan();
@@ -353,7 +360,7 @@ export default function useBluetoothService({
             // Ignore errors if no scan is running
             console.log('[BLE] SCAN: No existing scan to stop (or already stopped)');
         }
-        
+
         const ok = await requestBLEPermissions();
         if (!ok) {
             console.log('[BLE] SCAN: Permissions denied, aborting');
@@ -361,14 +368,14 @@ export default function useBluetoothService({
             return;
         }
         console.log('[BLE] SCAN STEP 1: Permissions granted');
-        
+
         console.log('[BLE] SCAN STEP 2: Starting BLE device scan (15 seconds)...');
         console.log(`[BLE] SCAN FILTER: Scanning for ${deviceType} devices...`);
-        
+
         const seen: Record<string, boolean> = {};
         let deviceCount = 0;
         let filteredCount = 0;
-        
+
         ble.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
             try {
                 if (error) {
@@ -376,23 +383,23 @@ export default function useBluetoothService({
                     return;
                 }
                 if (!device) return;
-                
+
                 const key = (device.id || device.name || '').toString();
                 if (!seen[key]) {
                     seen[key] = true;
                     deviceCount++;
-                    
+
                     // Filter: Only include scale or printer devices based on deviceType
                     try {
                         if (deviceType === 'scale' && !isBLEScaleDevice(device)) {
                             console.log(`[BLE] SCAN FILTER: ✗ Excluding non-scale device: ${device.name || 'Unnamed'} (${device.id})`);
                             return;
                         }
-                        
+
                         // For printers, prioritize InnerPrinter and be less restrictive
                         if (deviceType === 'printer') {
                             const deviceName = (device.name || '').toLowerCase();
-                            
+
                             // Always include devices with "innerprinter" or "inner" in name
                             if (deviceName.includes('innerprinter') || deviceName.includes('inner')) {
                                 console.log(`[BLE] SCAN FILTER: ✓✓✓ Including InnerPrinter device: ${device.name || device.id}`);
@@ -412,7 +419,7 @@ export default function useBluetoothService({
                         console.error('[BLE] SCAN FILTER: Error filtering device:', filterErr);
                         // Continue anyway - don't crash on filter error
                     }
-                    
+
                     filteredCount++;
                     const deviceTypeLabel = deviceType === 'printer' ? 'printer' : 'scale';
                     console.log(`[BLE] SCAN STEP 2: Found ${deviceTypeLabel} device #${filteredCount}:`, {
@@ -422,7 +429,7 @@ export default function useBluetoothService({
                         rssi: device.rssi,
                         isConnectable: device.isConnectable
                     });
-                    
+
                     // Add to BLE devices list - with error handling
                     try {
                         setBleDevices(prev => {
@@ -435,7 +442,7 @@ export default function useBluetoothService({
                     } catch (stateErr) {
                         console.error('[BLE] SCAN: Error updating BLE devices state:', stateErr);
                     }
-                    
+
                     // Add to unified devices list - with error handling
                     try {
                         const unifiedDevice: UnifiedDevice = {
@@ -463,7 +470,7 @@ export default function useBluetoothService({
                 // Don't throw - just log and continue
             }
         });
-        
+
         // Stop scan after 15s
         setTimeout(async () => {
             try {
@@ -480,7 +487,7 @@ export default function useBluetoothService({
     // 🔍 Unified scan - scans both BLE (primary) and Classic (secondary)
     const scanForDevices = useCallback(async () => {
         console.log('[UNIFIED] ========== UNIFIED SCAN STARTED ==========');
-        
+
         // Stop any existing scans first
         try {
             await ble.stopDeviceScan();
@@ -488,7 +495,7 @@ export default function useBluetoothService({
         } catch (stopErr) {
             console.log('[UNIFIED] SCAN: No existing BLE scan to stop');
         }
-        
+
         setIsScanning(true);
         setDevices([]);
         setBleDevices([]);
@@ -524,7 +531,7 @@ export default function useBluetoothService({
         // For other device types, scan both BLE and Classic
         // Scan BLE first (primary)
         await scanBLEDevices();
-        
+
         // Scan Classic second (secondary) - run in parallel after a short delay
         setTimeout(() => {
             scanClassicDevices().finally(() => {
@@ -532,7 +539,7 @@ export default function useBluetoothService({
                 console.log('[UNIFIED] ========== UNIFIED SCAN COMPLETE ==========');
             });
         }, 500);
-        
+
         // Also stop scanning flag after BLE scan completes
         setTimeout(() => {
             setIsScanning(false);
@@ -549,7 +556,7 @@ export default function useBluetoothService({
         setIsConnecting(true);
         setConnectionFailed(false);
         setLastConnectionAttempt(new Date().toISOString());
-        
+
         try {
             const enabled = await ensureClassicBluetoothEnabled();
             if (!enabled) {
@@ -557,7 +564,7 @@ export default function useBluetoothService({
                 return null;
             }
 
-            await RNBluetoothClassic.cancelDiscovery().catch(() => {});
+            await RNBluetoothClassic.cancelDiscovery().catch(() => { });
 
             // Check if device is paired
             const bonded = await RNBluetoothClassic.getBondedDevices();
@@ -719,7 +726,7 @@ export default function useBluetoothService({
             const errMsg = (e as any)?.message || String(e);
             console.log('[CLASSIC] CONNECT ERROR:', errMsg);
             console.log('[CLASSIC] CONNECT ERROR stack:', (e as any)?.stack);
-            
+
             Alert.alert('Classic Bluetooth Connection Failed', errMsg);
             setConnectionFailed(true);
             setIsConnecting(false);
@@ -731,14 +738,14 @@ export default function useBluetoothService({
     // 🔌 Disconnect (handles both BLE and Classic)
     const disconnect = useCallback(async () => {
         console.log('[UNIFIED] ========== DISCONNECT STARTED ==========');
-        
+
         // Capture current device reference before any async operations
         const currentDevice = connectedDevice;
-        
+
         try {
             // Mark as manual disconnect to prevent auto-reconnect
             manualDisconnectRef.current = true;
-            
+
             // Reset state FIRST to prevent any callbacks from trying to use the device
             // This prevents crashes if state updates happen during disconnect
             try {
@@ -748,7 +755,7 @@ export default function useBluetoothService({
             } catch (stateErr) {
                 console.log('[UNIFIED] DISCONNECT: Error resetting state early (ignored):', stateErr);
             }
-            
+
             if (currentDevice) {
                 if (currentDevice.type === 'ble' && currentDevice.bleDevice) {
                     // BLE disconnect - with comprehensive error handling
@@ -770,7 +777,7 @@ export default function useBluetoothService({
                         console.log('[UNIFIED] DISCONNECT: Remove subscription error (ignored):', e);
                     }
                     notifySubRef.current = null;
-                    
+
                     try {
                         console.log('[UNIFIED] DISCONNECT: Cancelling BLE device connection...');
                         const bleDev = currentDevice.bleDevice;
@@ -807,7 +814,7 @@ export default function useBluetoothService({
                         console.log('[UNIFIED] DISCONNECT: Remove Classic subscription error (ignored):', e);
                     }
                     classicSubscriptionRef.current = null;
-                    
+
                     if (classicReadIntervalRef.current) {
                         try {
                             clearInterval(classicReadIntervalRef.current);
@@ -816,7 +823,7 @@ export default function useBluetoothService({
                         }
                         classicReadIntervalRef.current = null;
                     }
-                    
+
                     try {
                         console.log('[UNIFIED] DISCONNECT: Disconnecting Classic device...');
                         const classicDev = currentDevice.classicDevice;
@@ -834,20 +841,20 @@ export default function useBluetoothService({
                     }
                 }
             }
-            
+
             // Cleanup - with error handling
             try {
                 cleanupBLE();
             } catch (cleanupErr) {
                 console.log('[UNIFIED] DISCONNECT: BLE cleanup error (ignored):', cleanupErr);
             }
-            
+
             try {
                 cleanupClassic();
             } catch (cleanupErr) {
                 console.log('[UNIFIED] DISCONNECT: Classic cleanup error (ignored):', cleanupErr);
             }
-            
+
             console.log('[UNIFIED] ========== DISCONNECT COMPLETE ==========');
         } catch (error) {
             console.error('[UNIFIED] DISCONNECT: Unexpected error:', error);
@@ -869,16 +876,16 @@ export default function useBluetoothService({
         setIsConnecting(true);
         setConnectionFailed(false);
         setLastConnectionAttempt(new Date().toISOString());
-        
+
         try {
             console.log('[BLE] CONNECT STEP 1: Initiating connection...');
             const d = await ble.connectToDevice(device.id, { autoConnect: false });
             console.log('[BLE] CONNECT STEP 1: ✓ Connection established');
-            
+
             console.log('[BLE] CONNECT STEP 2: Discovering all services and characteristics...');
             await d.discoverAllServicesAndCharacteristics();
             console.log('[BLE] CONNECT STEP 2: ✓ Discovery complete');
-            
+
             // Store device info permanently (save forever)
             const deviceInfo = {
                 id: device.id,
@@ -906,14 +913,14 @@ export default function useBluetoothService({
             console.log('[BLE] CONNECT STEP 3: Enumerating services and characteristics...');
             const services = await d.services();
             console.log(`[BLE] CONNECT STEP 3: Found ${services.length} service(s)`);
-            
+
             for (let i = 0; i < services.length; i++) {
                 const s = services[i];
                 try {
                     const chars = await d.characteristicsForService(s.uuid);
                     console.log(`[BLE] CONNECT STEP 3: SERVICE #${i + 1}/${services.length} - UUID: ${s.uuid}`);
                     console.log(`[BLE] CONNECT STEP 3: SERVICE #${i + 1} has ${chars.length} characteristic(s)`);
-                    
+
                     chars.forEach((c, j) => {
                         console.log(`  [BLE] CONNECT STEP 3: CHAR #${j + 1}/${chars.length} - UUID: ${c.uuid}`);
                         console.log(`  [BLE] CONNECT STEP 3: CHAR #${j + 1} properties:`, {
@@ -934,44 +941,47 @@ export default function useBluetoothService({
             console.log('[BLE] CONNECT STEP 4: Looking for official weight service (0x181d) and characteristic (0x2a9d)...');
             let characteristic: Characteristic | null = null;
             const candidates: Array<{ service: string; char: Characteristic; reason: string }> = [];
-            
+
             try {
                 for (const s of services) {
-                    const chars = await d.characteristicsForService(s.uuid);
-                    for (const c of chars) {
-                        const su = (s.uuid || '').toLowerCase().replace(/-/g, '');
-                        const cu = (c.uuid || '').toLowerCase().replace(/-/g, '');
-                        
-                        // Skip Generic Access service (0x1800) and its common characteristics (2A00, 2A01)
-                        if (su.endsWith('1800') || cu.endsWith('2a00') || cu.endsWith('2a01')) {
-                            console.log(`[BLE] CONNECT STEP 4: Skipping Generic Access service/char: ${s.uuid}/${c.uuid}`);
-                            continue;
-                        }
-                        
-                        // Check for official weight service/characteristic
-                        if (WEIGHT_SERVICE_UUIDS.some(wsu => su.endsWith(wsu)) && 
-                            WEIGHT_CHARACTERISTIC_UUIDS.some(wcu => cu.endsWith(wcu))) {
+                    try {
+                        const chars = await d.characteristicsForService(s.uuid);
+                        for (const c of chars) {
+                            const su = s.uuid.toLowerCase().replace(/-/g, '');
+                            const cu = c.uuid.toLowerCase().replace(/-/g, '');
+
+                            // Skip Generic Access service
+                            if (su.endsWith('1800') || cu.endsWith('2a00') || cu.endsWith('2a01')) {
+                                console.log(`[BLE] CONNECT STEP 4: Skipping Generic Access service/char: ${s.uuid}/${c.uuid}`);
+                                continue;
+                            }
+
+                            // Check for official weight service/characteristic
+                            if (WEIGHT_SERVICE_UUIDS.some(wsu => su.endsWith(wsu)) &&
+                                WEIGHT_CHARACTERISTIC_UUIDS.some(wcu => cu.endsWith(wcu))) {
+                                if (c.isNotifiable || c.isReadable) {
+                                    characteristic = c;
+                                    console.log(`[BLE] CONNECT STEP 4: ✓✓✓ FOUND OFFICIAL WEIGHT SERVICE/CHAR!`);
+                                    console.log(`[BLE] CONNECT STEP 4: Service: ${s.uuid}, Characteristic: ${c.uuid}`);
+                                    console.log(`[BLE] CONNECT STEP 4: Notifiable: ${c.isNotifiable}, Readable: ${c.isReadable}`);
+                                    break;
+                                }
+                            }
+
+                            // Collect candidates
                             if (c.isNotifiable || c.isReadable) {
-                                characteristic = c;
-                                console.log(`[BLE] CONNECT STEP 4: ✓✓✓ FOUND OFFICIAL WEIGHT SERVICE/CHAR!`);
-                                console.log(`[BLE] CONNECT STEP 4: Service: ${s.uuid}, Characteristic: ${c.uuid}`);
-                                console.log(`[BLE] CONNECT STEP 4: Notifiable: ${c.isNotifiable}, Readable: ${c.isReadable}`);
-                                break;
-                            } else {
-                                console.log(`[BLE] CONNECT STEP 4: Found weight service/char but not notifiable/readable: ${s.uuid}/${c.uuid}`);
+                                candidates.push({
+                                    service: s.uuid,
+                                    char: c,
+                                    reason: c.isNotifiable ? 'Notifiable' : 'Readable'
+                                });
                             }
                         }
-                        
-                        // Collect candidates
-                        if (c.isNotifiable || c.isReadable) {
-                            candidates.push({
-                                service: s.uuid,
-                                char: c,
-                                reason: c.isNotifiable ? 'Notifiable' : 'Readable'
-                            });
-                        }
+                        if (characteristic) break;
+                    } catch (serviceErr) {
+                        console.error(`[BLE] CONNECT STEP 4: Error processing service ${s.uuid}:`, serviceErr);
+                        continue;
                     }
-                    if (characteristic) break;
                 }
             } catch (err) {
                 console.log('[BLE] CONNECT STEP 4: Error searching for weight service:', (err as any)?.message || err);
@@ -981,7 +991,7 @@ export default function useBluetoothService({
             if (!characteristic) {
                 console.log('[BLE] CONNECT STEP 4: Official weight service not found. Trying fallback candidates...');
                 console.log(`[BLE] CONNECT STEP 4: Found ${candidates.length} candidate characteristic(s)`);
-                
+
                 // Prefer notifiable over readable
                 const notifiable = candidates.filter(c => c.char.isNotifiable);
                 if (notifiable.length > 0) {
@@ -1004,15 +1014,15 @@ export default function useBluetoothService({
                         for (const c of chars) {
                             const su = (s.uuid || '').toLowerCase().replace(/-/g, '');
                             const cu = (c.uuid || '').toLowerCase().replace(/-/g, '');
-                            
+
                             // Skip Generic Access service
                             if (su.endsWith('1800')) continue;
-                            
+
                             // Look for common printer write characteristics
                             // Serial Port Profile: fff0 service, fff1/fff2 characteristics
                             // Or any writable characteristic
                             if (c.isWritableWithResponse || c.isWritableWithoutResponse) {
-                                if (su.includes('fff0') || cu.includes('fff1') || cu.includes('fff2') || 
+                                if (su.includes('fff0') || cu.includes('fff1') || cu.includes('fff2') ||
                                     su.includes('ae30') || cu.includes('ae31')) {
                                     writeCharacteristic = c;
                                     serviceUUIDForWrite = s.uuid;
@@ -1032,7 +1042,7 @@ export default function useBluetoothService({
                 } catch (err) {
                     console.log('[BLE] CONNECT STEP 4: Error searching for printer characteristic:', (err as any)?.message || err);
                 }
-                
+
                 if (!writeCharacteristic || !serviceUUIDForWrite) {
                     console.log('[BLE] CONNECT STEP 4: ✗ No writable characteristic found for printer');
                     setIsConnecting(false);
@@ -1040,7 +1050,7 @@ export default function useBluetoothService({
                     Alert.alert('No BLE printer service', 'Connected, but no writable characteristic found for printing.');
                     return null;
                 }
-                
+
                 // Store write characteristic for printing (include service UUID)
                 (unifiedDevice as any).writeCharacteristic = {
                     uuid: writeCharacteristic.uuid,
@@ -1060,7 +1070,7 @@ export default function useBluetoothService({
                 console.log('[BLE] ========== BLE PRINTER CONNECT COMPLETE ==========');
                 return unifiedDevice;
             }
-            
+
             // For scales, check for weight service
             if (!characteristic) {
                 console.log('[BLE] CONNECT STEP 4: ✗ No suitable characteristic found');
@@ -1076,22 +1086,22 @@ export default function useBluetoothService({
                     console.log(`[BLE] PARSE [${source}]: No bytes to parse`);
                     return false;
                 }
-                
+
                 try {
                     console.log(`[BLE] PARSE [${source}]: Bytes length: ${bytes.length}`);
                     console.log(`[BLE] PARSE [${source}]: Bytes (hex): ${bytesToHex(bytes)}`);
                     console.log(`[BLE] PARSE [${source}]: Bytes (decimal): ${Array.from(bytes).join(', ')}`);
-                    
+
                     // Try UTF-8 decode
                     const asText = decodeUtf8(bytes);
                     console.log(`[BLE] PARSE [${source}]: As UTF-8 text: ${JSON.stringify(asText)}`);
-                    
+
                     // Skip device name frames
                     if (/^xh\d+\s*$/i.test(asText)) {
                         console.log(`[BLE] PARSE [${source}]: Skipping device name frame`);
                         return false;
                     }
-                    
+
                     // Try multiple number patterns
                     let match = asText.match(/([-+]?[0-9]+(?:[.,][0-9]+)?)/);
                     if (!match) {
@@ -1107,11 +1117,7 @@ export default function useBluetoothService({
                             if (val16 > 0 && val16 < 100000) { // Reasonable weight range
                                 const weight = (val16 / 100.0).toFixed(2); // Assuming 0.01kg resolution
                                 console.log(`[BLE] PARSE [${source}]: ✓✓✓ Parsed from binary (2-byte LE): ${weight}`);
-                                try {
-                                    setLastMessage(weight); // Store as weight in kgs (0.01 precision)
-                                } catch (setErr) {
-                                    console.error(`[BLE] PARSE [${source}]: Error setting last message:`, setErr);
-                                }
+                                setLastMessage(weight); // Store as weight in kgs (0.01 precision)
                                 return true;
                             }
                         }
@@ -1124,11 +1130,7 @@ export default function useBluetoothService({
                                     const val = view.getFloat32(0, true); // Little-endian
                                     if (!isNaN(val) && isFinite(val) && val >= -1000 && val <= 100000) {
                                         console.log(`[BLE] PARSE [${source}]: ✓✓✓ Parsed from binary (4-byte float): ${val.toFixed(2)}`);
-                                        try {
-                                            setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
-                                        } catch (setErr) {
-                                            console.error(`[BLE] PARSE [${source}]: Error setting last message:`, setErr);
-                                        }
+                                        setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
                                         return true;
                                     }
                                 }
@@ -1137,17 +1139,13 @@ export default function useBluetoothService({
                             }
                         }
                     }
-                    
+
                     if (match) {
                         const val = parseFloat(match[1].replace(',', '.'));
                         if (!isNaN(val) && isFinite(val)) {
                             console.log(`[BLE] PARSE [${source}]: ✓✓✓ VALID WEIGHT PARSED: ${val.toFixed(2)}`);
-                            try {
-                                setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
-                                console.log(`[BLE] PARSE [${source}]: UI Updated with reading: ${val.toFixed(2)}`);
-                            } catch (setErr) {
-                                console.error(`[BLE] PARSE [${source}]: Error setting last message:`, setErr);
-                            }
+                            setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
+                            console.log(`[BLE] PARSE [${source}]: UI Updated with reading: ${val.toFixed(2)}`);
                             return true;
                         } else {
                             console.log(`[BLE] PARSE [${source}]: Parsed NaN/Infinity from: ${match[1]}`);
@@ -1167,7 +1165,7 @@ export default function useBluetoothService({
                 console.log('[BLE] CONNECT STEP 5: Using NOTIFICATION method (characteristic is notifiable)');
                 console.log(`[BLE] CONNECT STEP 5: Service UUID: ${characteristic.serviceUUID}`);
                 console.log(`[BLE] CONNECT STEP 5: Characteristic UUID: ${characteristic.uuid}`);
-                
+
                 try {
                     notifySubRef.current = d.monitorCharacteristicForService(
                         characteristic.serviceUUID!,
@@ -1178,16 +1176,16 @@ export default function useBluetoothService({
                                     console.log('[BLE] NOTIFY ERROR:', error?.message || error);
                                     return;
                                 }
-                                
+
                                 if (!c) {
                                     console.log('[BLE] NOTIFY: No characteristic data received');
                                     return;
                                 }
-                                
+
                                 console.log('[BLE] NOTIFY: ✓✓✓ NOTIFICATION RECEIVED!');
                                 const rawB64 = c?.value;
                                 console.log(`[BLE] NOTIFY: Base64 value: ${rawB64 ? rawB64.substring(0, 50) + '...' : 'null'}`);
-                                
+
                                 try {
                                     const bytes = rawB64 ? base64ToBytes(rawB64) : null;
                                     if (bytes) {
@@ -1196,7 +1194,7 @@ export default function useBluetoothService({
                                 } catch (parseErr) {
                                     console.error('[BLE] NOTIFY: Error parsing weight data:', parseErr);
                                 }
-                                
+
                                 console.log(`[BLE] NOTIFY: Full notification object:`, {
                                     uuid: c?.uuid,
                                     serviceUUID: c?.serviceUUID,
@@ -1215,13 +1213,13 @@ export default function useBluetoothService({
                     characteristic = { ...characteristic, isNotifiable: false, isReadable: true } as Characteristic;
                 }
             }
-            
+
             if (!characteristic.isNotifiable && characteristic.isReadable) {
                 console.log('[BLE] CONNECT STEP 5: Using POLLING method (characteristic is readable)');
                 console.log(`[BLE] CONNECT STEP 5: Service UUID: ${characteristic.serviceUUID}`);
                 console.log(`[BLE] CONNECT STEP 5: Characteristic UUID: ${characteristic.uuid}`);
                 console.log('[BLE] CONNECT STEP 5: Polling every 250ms...');
-                
+
                 let pollCount = 0;
                 let isPollingActive = true;
                 const interval = setInterval(async () => {
@@ -1229,7 +1227,7 @@ export default function useBluetoothService({
                         clearInterval(interval);
                         return;
                     }
-                    
+
                     pollCount++;
                     try {
                         // Check if device is still connected before reading
@@ -1239,13 +1237,13 @@ export default function useBluetoothService({
                             clearInterval(interval);
                             return;
                         }
-                        
+
                         const c = await d.readCharacteristicForService(characteristic!.serviceUUID!, characteristic!.uuid);
                         console.log(`[BLE] POLL #${pollCount}: ✓ Read successful`);
-                        
+
                         const rawB64 = c?.value;
                         console.log(`[BLE] POLL #${pollCount}: Base64 value: ${rawB64 ? rawB64.substring(0, 50) + '...' : 'null'}`);
-                        
+
                         try {
                             const bytes = rawB64 ? base64ToBytes(rawB64) : null;
                             if (bytes) {
@@ -1254,7 +1252,7 @@ export default function useBluetoothService({
                         } catch (parseErr) {
                             console.error(`[BLE] POLL #${pollCount}: Error parsing weight data:`, parseErr);
                         }
-                        
+
                         if (pollCount % 20 === 0) {
                             console.log(`[BLE] POLL #${pollCount}: Still polling (no data yet, this is OK)`);
                         }
@@ -1269,18 +1267,20 @@ export default function useBluetoothService({
                     }
                 }, 250);
                 // IMPORTANT: Store interval cleanup in notifySubRef (exact match with ScaleTestScreen)
-                notifySubRef.current = { remove: () => {
-                    isPollingActive = false;
-                    clearInterval(interval);
-                    console.log('[BLE] POLL: Polling stopped');
-                }};
+                notifySubRef.current = {
+                    remove: () => {
+                        isPollingActive = false;
+                        clearInterval(interval);
+                        console.log('[BLE] POLL: Polling stopped');
+                    }
+                };
                 console.log('[BLE] CONNECT STEP 5: ✓ Polling started');
             }
 
             // Reset manual disconnect flag when connecting successfully
             manualDisconnectRef.current = false;
             setConnectionFailed(false);
-            
+
             console.log('[BLE] ========== CONNECT COMPLETE ==========');
             setIsConnecting(false);
             return unifiedDevice;
@@ -1289,11 +1289,11 @@ export default function useBluetoothService({
             const errMsg = (e as any)?.message || String(e);
             console.log('[BLE] CONNECT ERROR:', errMsg);
             console.log('[BLE] CONNECT ERROR stack:', (e as any)?.stack);
-            
+
             Alert.alert('Connection failed', errMsg);
             setConnectionFailed(true);
             setIsConnecting(false);
-            
+
             // Clear connected device on error
             setConnectedDevice(null);
             return null;
@@ -1305,14 +1305,14 @@ export default function useBluetoothService({
         async (id: string): Promise<UnifiedDevice | null> => {
             console.log(`[UNIFIED] ========== CONNECT WRAPPER STARTED ==========`);
             console.log(`[UNIFIED] CONNECT: Target device ID: ${id}`);
-            
+
             // Validate input
             if (!id || typeof id !== 'string') {
                 console.error('[UNIFIED] CONNECT: Invalid device ID provided');
                 Alert.alert('Invalid Device', 'Invalid device ID provided');
                 return null;
             }
-            
+
             // Check if already connected to this device
             if (connectedDevice && connectedDevice.id && id) {
                 try {
@@ -1332,7 +1332,7 @@ export default function useBluetoothService({
                     console.warn('[UNIFIED] CONNECT: Error checking existing connection:', err);
                 }
             }
-            
+
             // Cleanup before attempting new connection
             try {
                 cleanupBLE();
@@ -1398,13 +1398,13 @@ export default function useBluetoothService({
                 } catch (detectionErr) {
                     console.warn('[UNIFIED] CONNECT: Error detecting InnerPrinter (continuing):', detectionErr);
                 }
-                
+
                 if (isInnerPrinter && deviceType === "printer") {
                     console.log("[UNIFIED] CONNECT: InnerPrinter detected - FORCING Classic connection (skipping BLE)...");
                     // Skip BLE entirely and go straight to Classic
                     let classicDev: ClassicBluetoothDevice | undefined;
                     let unifiedClassicDev: UnifiedDevice | undefined;
-                    
+
                     try {
                         if (Array.isArray(classicDevices)) {
                             classicDev = classicDevices.find(d => {
@@ -1413,14 +1413,14 @@ export default function useBluetoothService({
                             });
                         }
                         if (Array.isArray(devices)) {
-                            unifiedClassicDev = devices.find(d => 
+                            unifiedClassicDev = devices.find(d =>
                                 d && d.id && d.id.toLowerCase() === id.toLowerCase() && d.type === 'classic'
                             );
                         }
                     } catch (findErr) {
                         console.warn('[UNIFIED] CONNECT: Error finding Classic device (continuing):', findErr);
                     }
-                    
+
                     if (classicDev || unifiedClassicDev?.classicDevice) {
                         const deviceToConnect = classicDev || unifiedClassicDev?.classicDevice;
                         if (deviceToConnect) {
@@ -1441,12 +1441,12 @@ export default function useBluetoothService({
                         // Continue to normal flow which will try Classic as fallback
                     }
                 }
-                
+
                 // ========== TRY BLE FIRST (PRIMARY) - BUT SKIP FOR INNERPRINTER ==========
                 // InnerPrinter MUST use Classic, so skip BLE entirely for InnerPrinter
                 let bleDev: BLEDevice | undefined;
                 let unifiedBleDev: UnifiedDevice | undefined;
-                
+
                 // Only try BLE if it's NOT an InnerPrinter
                 if (!isInnerPrinter || deviceType !== "printer") {
                     try {
@@ -1455,7 +1455,7 @@ export default function useBluetoothService({
                         }
                         // Then check unified devices list for BLE type
                         if (Array.isArray(devices)) {
-                            unifiedBleDev = devices.find(d => 
+                            unifiedBleDev = devices.find(d =>
                                 d && d.id && d.id.toLowerCase() === id.toLowerCase() && d.type === 'ble'
                             );
                         }
@@ -1465,13 +1465,13 @@ export default function useBluetoothService({
                 } else {
                     console.log('[UNIFIED] CONNECT: Skipping BLE scan for InnerPrinter (must use Classic)');
                 }
-                
+
                 // If device not found in current lists and it's a scale, do a quick scan to find it
                 if (!bleDev && !unifiedBleDev && deviceType === "scale") {
                     console.log("[UNIFIED] CONNECT: Device not in current list, doing quick scan to find it...");
                     const foundDevices: any[] = [];
                     const seen: Record<string, boolean> = {};
-                    
+
                     try {
                         // Stop any existing scan first
                         try {
@@ -1482,7 +1482,7 @@ export default function useBluetoothService({
                             // Ignore if no scan running
                             console.log("[UNIFIED] CONNECT: No existing scan to stop (or error):", stopErr);
                         }
-                        
+
                         if (ble && typeof ble.startDeviceScan === 'function') {
                             ble.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
                                 if (error) {
@@ -1490,7 +1490,7 @@ export default function useBluetoothService({
                                     return;
                                 }
                                 if (!device || !device.id) return;
-                                
+
                                 const key = device.id;
                                 if (!seen[key] && device.id && device.id.toLowerCase() === id.toLowerCase()) {
                                     // Check if it's a scale device (but don't filter too strictly - just match ID)
@@ -1499,10 +1499,10 @@ export default function useBluetoothService({
                                     console.log("[UNIFIED] CONNECT: Found device during scan:", device.name || device.id);
                                 }
                             });
-                            
+
                             // Wait up to 5 seconds to find the device
                             await new Promise<void>(resolve => setTimeout(() => resolve(), 5000));
-                            
+
                             try {
                                 if (ble && typeof ble.stopDeviceScan === 'function') {
                                     await ble.stopDeviceScan();
@@ -1510,7 +1510,7 @@ export default function useBluetoothService({
                             } catch (stopErr) {
                                 console.log("[UNIFIED] CONNECT: Error stopping scan:", stopErr);
                             }
-                            
+
                             if (foundDevices.length > 0) {
                                 const foundDevice = foundDevices[0];
                                 if (foundDevice && foundDevice.id) {
@@ -1568,7 +1568,7 @@ export default function useBluetoothService({
                         }
                     }
                 }
-                
+
                 // If BLE device found, connect via BLE (don't even check Classic)
                 if (bleDev || unifiedBleDev?.bleDevice) {
                     const deviceToConnect = bleDev || unifiedBleDev?.bleDevice;
@@ -1606,7 +1606,7 @@ export default function useBluetoothService({
                     console.log("[UNIFIED] CONNECT: No BLE device found, trying Classic as fallback...");
                     let classicDev: ClassicBluetoothDevice | undefined;
                     let unifiedClassicDev: UnifiedDevice | undefined;
-                    
+
                     try {
                         if (Array.isArray(classicDevices)) {
                             classicDev = classicDevices.find(d => {
@@ -1615,14 +1615,14 @@ export default function useBluetoothService({
                             });
                         }
                         if (Array.isArray(devices)) {
-                            unifiedClassicDev = devices.find(d => 
+                            unifiedClassicDev = devices.find(d =>
                                 d && d.id && d.id.toLowerCase() === id.toLowerCase() && d.type === 'classic'
                             );
                         }
                     } catch (findErr) {
                         console.warn('[UNIFIED] CONNECT: Error finding Classic fallback device (continuing):', findErr);
                     }
-                    
+
                     if (classicDev || unifiedClassicDev?.classicDevice) {
                         const deviceToConnect = classicDev || unifiedClassicDev?.classicDevice;
                         if (deviceToConnect) {
@@ -1649,10 +1649,10 @@ export default function useBluetoothService({
             } catch (err) {
                 const error = err as any;
                 const errMsg = error?.reason || error?.message || error?.error || String(error || 'Unknown error occurred');
-                
+
                 console.error("[UNIFIED] CONNECT: Connection error:", errMsg);
                 console.error("[UNIFIED] CONNECT: Full error object:", error);
-                
+
                 // Only show alert if it's a user-facing error (not a silent failure)
                 try {
                     Alert.alert(
@@ -1663,13 +1663,13 @@ export default function useBluetoothService({
                 } catch (alertErr) {
                     console.error("[UNIFIED] CONNECT: Error showing alert:", alertErr);
                 }
-                
+
                 try {
                     setConnectionFailed(true);
                 } catch (stateErr) {
                     console.error("[UNIFIED] CONNECT: Error setting connection failed state:", stateErr);
                 }
-                
+
                 return null;
             }
         },
@@ -1680,21 +1680,21 @@ export default function useBluetoothService({
     async function printText(text: string) {
         // Capture current device reference to avoid stale closures
         const currentDevice = connectedDevice;
-        
+
         if (deviceType !== "printer" || !currentDevice) {
             console.warn("[PRINT] Print text only supported for connected printers");
             return;
         }
-        
+
         if (!text || typeof text !== 'string') {
             console.error("[PRINT] Invalid text provided for printing");
             return;
         }
-        
+
         try {
             const formatted = `${text}\n\n`;
             const bytes = new Uint8Array(formatted.split('').map(c => c.charCodeAt(0)));
-            
+
             if (currentDevice.type === 'ble' && currentDevice.bleDevice) {
                 // BLE printing - with comprehensive error handling
                 try {
@@ -1704,7 +1704,7 @@ export default function useBluetoothService({
                         console.error("[PRINT] BLE device reference is null");
                         return;
                     }
-                    
+
                     // Check connection status safely
                     try {
                         const isConnected = (bleDev as any).isConnected;
@@ -1716,13 +1716,13 @@ export default function useBluetoothService({
                         console.error("[PRINT] Error checking connection status:", connCheckErr);
                         return;
                     }
-                    
+
                     const writeChar = (currentDevice as any).writeCharacteristic;
                     if (!writeChar) {
                         console.error("[PRINT] No write characteristic found for BLE printer");
                         return;
                     }
-                    
+
                     // Get the service UUID from the characteristic - with error handling
                     let serviceUUID: string | null = null;
                     try {
@@ -1741,12 +1741,12 @@ export default function useBluetoothService({
                         console.error("[PRINT] Error getting service UUID:", uuidErr);
                         return;
                     }
-                    
+
                     if (!serviceUUID) {
                         console.error("[PRINT] No service UUID found for BLE printer");
                         return;
                     }
-                    
+
                     // Convert bytes to base64 for BLE write - with fallback
                     let base64: string;
                     try {
@@ -1769,7 +1769,7 @@ export default function useBluetoothService({
                         console.error("[PRINT] Error encoding to base64:", base64Err);
                         return;
                     }
-                    
+
                     // Write with response (more reliable) - with error handling
                     try {
                         if (writeChar.isWritableWithResponse) {
@@ -1788,7 +1788,7 @@ export default function useBluetoothService({
                             console.error("[PRINT] Write characteristic is not writable");
                             return;
                         }
-                        
+
                         console.log("[PRINT] Printed text via BLE:", text.substring(0, 50) + "...");
                     } catch (writeErr) {
                         console.error("[PRINT] Error writing to BLE characteristic:", writeErr);
@@ -1833,7 +1833,7 @@ export default function useBluetoothService({
         }
         try {
             const byteArray = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-            
+
             if (connectedDevice.type === 'ble' && connectedDevice.bleDevice) {
                 // BLE printing
                 const writeChar = (connectedDevice as any).writeCharacteristic;
@@ -1841,7 +1841,7 @@ export default function useBluetoothService({
                     console.error("[PRINT] No write characteristic found for BLE printer");
                     return;
                 }
-                
+
                 try {
                     // Get the service UUID from the characteristic
                     const serviceUUID = writeChar.serviceUUID || (await connectedDevice.bleDevice.services())[0]?.uuid;
@@ -1849,10 +1849,10 @@ export default function useBluetoothService({
                         console.error("[PRINT] No service UUID found for BLE printer");
                         return;
                     }
-                    
+
                     // Convert bytes to base64 for BLE write
                     const base64 = btoa(String.fromCharCode(...byteArray));
-                    
+
                     // Write with response (more reliable)
                     if (writeChar.isWritableWithResponse) {
                         await connectedDevice.bleDevice.writeCharacteristicWithResponseForService(
@@ -1870,7 +1870,7 @@ export default function useBluetoothService({
                         console.error("[PRINT] Write characteristic is not writable");
                         return;
                     }
-                    
+
                     console.log("[PRINT] Printed raw bytes via BLE");
                 } catch (bleError) {
                     console.error("[PRINT] BLE print raw error:", bleError);
@@ -1892,23 +1892,23 @@ export default function useBluetoothService({
     // ♻️ Auto-connect to last device on mount (for scales only)
     useEffect(() => {
         if (deviceType !== 'scale') return;
-        
+
         // Skip auto-connect if user manually disconnected
         if (manualDisconnectRef.current) {
             console.log('[BLE] AUTO-CONNECT: Manual disconnect detected, skipping auto-connect');
             return;
         }
-        
+
         // Only run auto-connect once on mount (not on every connectedDevice change)
         if (autoConnectHasRunRef.current) {
             return;
         }
-        
+
         const autoConnect = async () => {
             try {
                 // Mark as run
                 autoConnectHasRunRef.current = true;
-                
+
                 // Check if already connected - skip auto-connect
                 if (connectedDevice) {
                     try {
@@ -1922,9 +1922,9 @@ export default function useBluetoothService({
                             console.log('[UNIFIED] AUTO-CONNECT: Already connected to device, skipping auto-connect');
                             return;
                         }
-                    } catch {}
+                    } catch { }
                 }
-                
+
                 // Safely retrieve last device
                 let deviceData: any = null;
                 try {
@@ -1941,43 +1941,43 @@ export default function useBluetoothService({
                     console.error('[UNIFIED] AUTO-CONNECT: Error parsing stored device:', parseError);
                     return;
                 }
-                
+
                 // Wait a bit for scan to complete if it's running
                 await new Promise<void>(r => setTimeout(() => r(), 2000));
-                
+
                 // Use id as primary identifier
                 const deviceId = deviceData.id || deviceData.address || deviceData.address_or_id;
                 if (!deviceId) {
                     console.log('[UNIFIED] AUTO-CONNECT: No valid device ID found');
                     return;
                 }
-                
+
                 // Check if device is available in scanned devices (BLE or Classic)
                 const deviceAvailableBLE = devices.some(d =>
                     d.id.toLowerCase() === deviceId.toLowerCase() && d.type === 'ble'
                 ) || bleDevices.some(d =>
                     d.id.toLowerCase() === deviceId.toLowerCase()
                 );
-                
+
                 const deviceAvailableClassic = devices.some(d =>
                     d.id.toLowerCase() === deviceId.toLowerCase() && d.type === 'classic'
                 ) || classicDevices.some(d =>
                     (d.address || d.id || '').toLowerCase() === deviceId.toLowerCase()
                 );
-                
+
                 const deviceAvailable = deviceAvailableBLE || deviceAvailableClassic;
-                
+
                 if (!deviceAvailable) {
                     console.log('[UNIFIED] AUTO-CONNECT: Device not available in scanned devices, showing as disconnected');
                     console.log('[UNIFIED] AUTO-CONNECT: Available devices - BLE:', bleDevices.length, 'Classic:', classicDevices.length);
                     // Don't try to connect if device is not available, just show as disconnected
                     return;
                 }
-                
+
                 // Reconnect based on stored type - try BLE first, then Classic
                 const storedType = deviceData.type || 'ble';
                 console.log('[UNIFIED] AUTO-CONNECT: Stored type is', storedType, '- attempting connection to:', deviceId);
-                
+
                 if (storedType === 'ble' && deviceAvailableBLE) {
                     console.log('[UNIFIED] AUTO-CONNECT: Attempting BLE connection...');
                     await connectToDevice(deviceId);
@@ -1992,7 +1992,7 @@ export default function useBluetoothService({
                 // Don't crash, just log the error
             }
         };
-        
+
         // Delay auto-connect slightly to allow component to mount
         // Only run once on mount, not on dependency changes
         const timeout = setTimeout(() => {

@@ -228,13 +228,35 @@ const BluetoothConnectionModal: React.FC<BluetoothConnectionModalProps> = ({
 
           {type === 'device-list' && (
             <View style={styles.deviceListContainer}>
+              {/* Bluetooth Enable Instruction */}
+              <View style={styles.bluetoothInstruction}>
+                <Warning2 size={16} color="#F59E0B" variant="Bold" />
+                <Text style={styles.instructionText}>
+                  Ensure Bluetooth is enabled on your device before scanning for {deviceType} devices.
+                </Text>
+              </View>
+
               {isScanning ? (
                 <View style={styles.scanningContainer}>
                   <ActivityIndicator size="large" color="#3B82F6" />
                   <Text style={styles.scanningText}>Scanning for {deviceType} devices...</Text>
                 </View>
               ) : devices?.length === 0 ? (
-                <Text style={styles.noDevicesText}>No {deviceType} devices found</Text>
+                <View style={{ alignItems: 'center', padding: 12 }}>
+                  <Text style={styles.noDevicesText}>No {deviceType} devices found</Text>
+                  <Text style={{ color: '#64748B', fontSize: 12, marginTop: 4, textAlign: 'center' }}>
+                    Only confirmed {deviceType} devices are shown for accuracy.{'\n'}
+                    Check console logs for filtering details.{'\n'}
+                    Try switching between BLE and Classic Bluetooth in Settings.{'\n'}
+                    Make sure your device is a known {deviceType} model (H05, CF, XH250, etc.).
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.scanButton, { marginTop: 12 }]}
+                    onPress={scanForDevices}
+                  >
+                    <Text style={styles.scanButtonText}>Scan Again</Text>
+                  </TouchableOpacity>
+                </View>
               ) : (
                 <FlatList
                   data={devices}
@@ -250,12 +272,21 @@ const BluetoothConnectionModal: React.FC<BluetoothConnectionModalProps> = ({
                       connectedDevice.address?.toLowerCase() === id?.toLowerCase()
                     );
 
+                    // Check if this is a known scale device
+                    const deviceName = (item.name || '').toLowerCase();
+                    const deviceId = item.id.toLowerCase();
+                    const isKnownScale = deviceName.includes('xh2507024006') ||
+                                         deviceId.includes('xh2507024006') ||
+                                         deviceName.includes('xiaomi') && deviceName.includes('scale') ||
+                                         deviceName.includes('huawei') && deviceName.includes('scale');
+
                     return (
                       <View style={styles.deviceItem}>
                         <View style={styles.deviceInfo}>
                           <Text style={styles.deviceName}>
                             {item.name || 'Unnamed Device'}
                             {item.type && <Text style={{ color: '#64748B', fontSize: 11 }}> ({item.type.toUpperCase()})</Text>}
+                            {isKnownScale && <Text style={{ color: '#16a34a', fontSize: 11, fontWeight: 'bold' }}> ⚖️ SCALE</Text>}
                           </Text>
                           <Text style={styles.deviceAddress}>{item.address || item.id}</Text>
                         </View>
@@ -340,6 +371,24 @@ const styles = StyleSheet.create({
   deviceName: { marginLeft: 8, fontSize: 14, color: '#374151', fontWeight: '600' },
   message: { textAlign: 'center', color: '#374151', marginBottom: 10 },
   deviceListContainer: { width: '100%', marginTop: 6, alignItems: 'center' },
+  bluetoothInstruction: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FEF3C7',
+    borderColor: '#F59E0B',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    width: '100%',
+  },
+  instructionText: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 13,
+    color: '#92400E',
+    lineHeight: 18,
+  },
   scanningContainer: { alignItems: 'center', justifyContent: 'center', padding: 12 },
   scanningText: { marginTop: 8, color: '#3B82F6' },
   noDevicesText: { color: '#64748B', padding: 12 },
