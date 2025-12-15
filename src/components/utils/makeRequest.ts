@@ -2,7 +2,7 @@ import { Alert } from "react-native";
 import { getItem } from "./local-storage";
 import NetInfo from '@react-native-community/netinfo';
 
-const BASE_URL = "https://dev.edairy.africa/api/" // //"http://192.168.100.2:8000/api/" //  //; // "http://10.0.2.2:8000/api/" //
+const BASE_URL = "https://dev.edairy.africa/api/" //"http://10.111.178.140:8000/api/" // //"http://10.111.178.140:8000/api/" //"http://192.168.100.2:8000/api/" //"https://dev.edairy.africa/api/" // //"http://192.168.100.2:8000/api/" //  //; // "http://10.0.2.2:8000/api/" //
 
 const makeRequest = async ({
     url,

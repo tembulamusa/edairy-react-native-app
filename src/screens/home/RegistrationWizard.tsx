@@ -35,6 +35,8 @@ export default function RegistrationWizard() {
             lastName: "",
             idNo: "",
             gender: "",
+            maritalStatus: "",
+            secondaryPhone: "",
             dob: "",
             dateRegistered: "",
             idDateOfIssue: "",

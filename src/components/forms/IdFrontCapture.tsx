@@ -32,7 +32,7 @@ const IdFrontCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
         try {
             // Check Android version
             const androidVersion = Platform.Version;
-            
+
             // Android 13+ (API 33+) uses READ_MEDIA_IMAGES
             if (androidVersion >= 33) {
                 const READ_MEDIA_IMAGES = (PermissionsAndroid as any).PERMISSIONS.READ_MEDIA_IMAGES;
@@ -40,7 +40,7 @@ const IdFrontCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
                     // Check if already granted
                     const checkResult = await PermissionsAndroid.check(READ_MEDIA_IMAGES);
                     if (checkResult) return true;
-                    
+
                     // Request permission
                     const result = await PermissionsAndroid.request(READ_MEDIA_IMAGES, {
                         title: "Photos Permission",
@@ -58,7 +58,7 @@ const IdFrontCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
                     PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE
                 );
                 if (checkResult) return true;
-                
+
                 // Request permission
                 const result = await PermissionsAndroid.request(
                     PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
@@ -160,24 +160,24 @@ const styles = StyleSheet.create({
     },
     previewBox: {
         width: "100%",
-        height: 250,
-        backgroundColor: "#fff",
+        aspectRatio: 1.586, // ID card ratio
+        backgroundColor: "#f5f5f5",
         borderRadius: 12,
         justifyContent: "center",
         alignItems: "center",
         marginBottom: 20,
-        shadowColor: "#000",
-        shadowOpacity: 0.1,
-        shadowOffset: { width: 0, height: 2 },
-        shadowRadius: 6,
-        elevation: 3,
+        padding: 8,
+        borderWidth: 1,
+        borderColor: "#ddd",
     },
+
     image: {
         width: "100%",
         height: "100%",
         borderRadius: 12,
-        resizeMode: "cover",
+        resizeMode: "contain", // ✅ preserves full image
     },
+
     placeholder: {
         color: "#aaa",
         fontSize: 16,

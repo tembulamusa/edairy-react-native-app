@@ -39,6 +39,8 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
         routeId: "",
         routeName: "",
         phone: "",
+        secondaryPhone: "",
+        maritalStatus: "",
         membershipNo: "",
         birthCity: "",
         idDateOfIssue: "",
@@ -119,7 +121,9 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
             !form.birthCity ||
             !form.membershipNo ||
             !form.numberOfCows ||
-            !form.phone
+            !form.phone ||
+            !form.maritalStatus ||
+            !form.secondaryPhone
         ) {
             Alert.alert("Missing Fields", "Please fill in all required fields.");
             return;
@@ -267,6 +271,50 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                     </TouchableOpacity>
                 </View>
 
+                {/* Marital Status */}
+                <Text style={[globalStyles.label, { marginTop: 16 }]}>
+                    Marital Status <Text style={styles.required}>*</Text>
+                </Text>
+                <View style={globalStyles.row}>
+                    <TouchableOpacity
+                        style={globalStyles.radioOption}
+                        onPress={() => handleChange("maritalStatus", "Single")}
+                    >
+                        <View
+                            style={[
+                                globalStyles.radioCircle,
+                                form.maritalStatus === "Single" && globalStyles.radioSelected,
+                            ]}
+                        />
+                        <Text style={globalStyles.radioLabel}>Single</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={globalStyles.radioOption}
+                        onPress={() => handleChange("maritalStatus", "Married")}
+                    >
+                        <View
+                            style={[
+                                globalStyles.radioCircle,
+                                form.maritalStatus === "Female" && globalStyles.radioSelected,
+                            ]}
+                        />
+                        <Text style={globalStyles.radioLabel}>Married</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={globalStyles.radioOption}
+                        onPress={() => handleChange("maritalStatus", "Divorced")}
+                    >
+                        <View
+                            style={[
+                                globalStyles.radioCircle,
+                                form.maritalStatus === "Divorced" && globalStyles.radioSelected,
+                            ]}
+                        />
+                        <Text style={globalStyles.radioLabel}>Divorced</Text>
+                    </TouchableOpacity>
+                </View>
+
                 {/* Date of Birth */}
                 <View>
                     <Text style={globalStyles.label}>
@@ -295,7 +343,7 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                 {/* ID Date Registered */}
                 <View>
                     <Text style={globalStyles.label}>
-                        ID Date Registered <Text style={styles.required}>*</Text>
+                        Date Registered <Text style={styles.required}>*</Text>
                     </Text>
                     <TouchableOpacity
                         style={globalStyles.inputWithIcon}
@@ -341,6 +389,7 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                         />
                     )}
                 </View>
+
 
                 {/* Route */}
                 <View>
@@ -390,6 +439,18 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                         placeholder="Enter Phone Number"
                         value={form.phone}
                         onChangeText={(v) => handleChange("phone", v)}
+                        keyboardType="phone-pad"
+                    />
+                </View>
+                <View>
+                    <Text style={globalStyles.label}>
+                        Alternative Phone No. <Text style={styles.required}>*</Text>
+                    </Text>
+                    <TextInput
+                        style={[globalStyles.input, styles.input]}
+                        placeholder="Enter Alternative Phone Number"
+                        value={form.secondaryPhone}
+                        onChangeText={(v) => handleChange("secondaryPhone", v)}
                         keyboardType="phone-pad"
                     />
                 </View>

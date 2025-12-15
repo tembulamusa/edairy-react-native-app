@@ -2,7 +2,7 @@
 import { StyleSheet } from "react-native";
 
 export const globalStyles = StyleSheet.create({
-    
+
     input: {
         backgroundColor: "#fff",
         borderRadius: 32, // fully rounded
@@ -78,7 +78,7 @@ export const globalStyles = StyleSheet.create({
         marginTop: 4,
         marginBottom: 4
     },
-    
+
     container: {
         backgroundColor: "#ffffff",
         flex: 1,
@@ -92,26 +92,25 @@ export const globalStyles = StyleSheet.create({
         borderRadius: 8,
         backgroundColor: "#fff",
     },
-    
+
     previewBox: {
         width: "100%",
-        height: 250,
-        backgroundColor: "#fff",
+        aspectRatio: 1.586, // ID card ratio
+        backgroundColor: "#f5f5f5",
         borderRadius: 12,
         justifyContent: "center",
         alignItems: "center",
         marginBottom: 20,
-        shadowColor: "#000",
-        shadowOpacity: 0.1,
-        shadowOffset: { width: 0, height: 2 },
-        shadowRadius: 6,
-        elevation: 3,
+        padding: 8,
+        borderWidth: 1,
+        borderColor: "#ddd",
     },
+
     image: {
         width: "100%",
         height: "100%",
         borderRadius: 12,
-        resizeMode: "cover",
+        resizeMode: "contain", // ✅ preserves full image
     },
     placeholder: {
         color: "#aaa",
