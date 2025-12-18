@@ -944,44 +944,41 @@ export default function useBluetoothService({
 
             try {
                 for (const s of services) {
-                    try {
-                        const chars = await d.characteristicsForService(s.uuid);
-                        for (const c of chars) {
-                            const su = s.uuid.toLowerCase().replace(/-/g, '');
-                            const cu = c.uuid.toLowerCase().replace(/-/g, '');
+                    const chars = await d.characteristicsForService(s.uuid);
+                    for (const c of chars) {
+                        const su = (s.uuid || '').toLowerCase().replace(/-/g, '');
+                        const cu = (c.uuid || '').toLowerCase().replace(/-/g, '');
 
-                            // Skip Generic Access service
-                            if (su.endsWith('1800') || cu.endsWith('2a00') || cu.endsWith('2a01')) {
-                                console.log(`[BLE] CONNECT STEP 4: Skipping Generic Access service/char: ${s.uuid}/${c.uuid}`);
-                                continue;
-                            }
+                        // Skip Generic Access service (0x1800) and its common characteristics (2A00, 2A01)
+                        if (su.endsWith('1800') || cu.endsWith('2a00') || cu.endsWith('2a01')) {
+                            console.log(`[BLE] CONNECT STEP 4: Skipping Generic Access service/char: ${s.uuid}/${c.uuid}`);
+                            continue;
+                        }
 
-                            // Check for official weight service/characteristic
-                            if (WEIGHT_SERVICE_UUIDS.some(wsu => su.endsWith(wsu)) &&
-                                WEIGHT_CHARACTERISTIC_UUIDS.some(wcu => cu.endsWith(wcu))) {
-                                if (c.isNotifiable || c.isReadable) {
-                                    characteristic = c;
-                                    console.log(`[BLE] CONNECT STEP 4: ✓✓✓ FOUND OFFICIAL WEIGHT SERVICE/CHAR!`);
-                                    console.log(`[BLE] CONNECT STEP 4: Service: ${s.uuid}, Characteristic: ${c.uuid}`);
-                                    console.log(`[BLE] CONNECT STEP 4: Notifiable: ${c.isNotifiable}, Readable: ${c.isReadable}`);
-                                    break;
-                                }
-                            }
-
-                            // Collect candidates
+                        // Check for official weight service/characteristic
+                        if (WEIGHT_SERVICE_UUIDS.some(wsu => su.endsWith(wsu)) &&
+                            WEIGHT_CHARACTERISTIC_UUIDS.some(wcu => cu.endsWith(wcu))) {
                             if (c.isNotifiable || c.isReadable) {
-                                candidates.push({
-                                    service: s.uuid,
-                                    char: c,
-                                    reason: c.isNotifiable ? 'Notifiable' : 'Readable'
-                                });
+                                characteristic = c;
+                                console.log(`[BLE] CONNECT STEP 4: ✓✓✓ FOUND OFFICIAL WEIGHT SERVICE/CHAR!`);
+                                console.log(`[BLE] CONNECT STEP 4: Service: ${s.uuid}, Characteristic: ${c.uuid}`);
+                                console.log(`[BLE] CONNECT STEP 4: Notifiable: ${c.isNotifiable}, Readable: ${c.isReadable}`);
+                                break;
+                            } else {
+                                console.log(`[BLE] CONNECT STEP 4: Found weight service/char but not notifiable/readable: ${s.uuid}/${c.uuid}`);
                             }
                         }
-                        if (characteristic) break;
-                    } catch (serviceErr) {
-                        console.error(`[BLE] CONNECT STEP 4: Error processing service ${s.uuid}:`, serviceErr);
-                        continue;
+
+                        // Collect candidates
+                        if (c.isNotifiable || c.isReadable) {
+                            candidates.push({
+                                service: s.uuid,
+                                char: c,
+                                reason: c.isNotifiable ? 'Notifiable' : 'Readable'
+                            });
+                        }
                     }
+                    if (characteristic) break;
                 }
             } catch (err) {
                 console.log('[BLE] CONNECT STEP 4: Error searching for weight service:', (err as any)?.message || err);
@@ -1117,7 +1114,11 @@ export default function useBluetoothService({
                             if (val16 > 0 && val16 < 100000) { // Reasonable weight range
                                 const weight = (val16 / 100.0).toFixed(2); // Assuming 0.01kg resolution
                                 console.log(`[BLE] PARSE [${source}]: ✓✓✓ Parsed from binary (2-byte LE): ${weight}`);
-                                setLastMessage(weight); // Store as weight in kgs (0.01 precision)
+                                try {
+                                    setLastMessage(weight); // Store as weight in kgs (0.01 precision)
+                                } catch (setErr) {
+                                    console.error(`[BLE] PARSE [${source}]: Error setting last message:`, setErr);
+                                }
                                 return true;
                             }
                         }
@@ -1130,7 +1131,11 @@ export default function useBluetoothService({
                                     const val = view.getFloat32(0, true); // Little-endian
                                     if (!isNaN(val) && isFinite(val) && val >= -1000 && val <= 100000) {
                                         console.log(`[BLE] PARSE [${source}]: ✓✓✓ Parsed from binary (4-byte float): ${val.toFixed(2)}`);
-                                        setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
+                                        try {
+                                            setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
+                                        } catch (setErr) {
+                                            console.error(`[BLE] PARSE [${source}]: Error setting last message:`, setErr);
+                                        }
                                         return true;
                                     }
                                 }
@@ -1144,8 +1149,12 @@ export default function useBluetoothService({
                         const val = parseFloat(match[1].replace(',', '.'));
                         if (!isNaN(val) && isFinite(val)) {
                             console.log(`[BLE] PARSE [${source}]: ✓✓✓ VALID WEIGHT PARSED: ${val.toFixed(2)}`);
-                            setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
-                            console.log(`[BLE] PARSE [${source}]: UI Updated with reading: ${val.toFixed(2)}`);
+                            try {
+                                setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
+                                console.log(`[BLE] PARSE [${source}]: UI Updated with reading: ${val.toFixed(2)}`);
+                            } catch (setErr) {
+                                console.error(`[BLE] PARSE [${source}]: Error setting last message:`, setErr);
+                            }
                             return true;
                         } else {
                             console.log(`[BLE] PARSE [${source}]: Parsed NaN/Infinity from: ${match[1]}`);
@@ -1597,6 +1606,7 @@ export default function useBluetoothService({
                     }
                 } else {
                     console.log("[UNIFIED] CONNECT: No BLE device found for ID:", id);
+                    return null;
                 }
 
                 // ========== TRY CLASSIC AS FALLBACK (SECONDARY) - ONLY IF NO BLE AND NOT SCALE ==========

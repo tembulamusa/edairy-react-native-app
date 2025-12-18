@@ -660,6 +660,18 @@ const MemberKilosScreen = () => {
                             setTransporter(matchedTransporter);
                             console.log(`[MemberKilos] ✅ Auto-selected transporter: ${matchedTransporter.full_names} (ID: ${matchedTransporter.id})`);
 
+                            // Auto-select route if transporter has default_route_id
+                            if (matchedTransporter.default_route_id && routes) {
+                                const matchingRoute = (routes || []).find((r: any) => r.id === matchedTransporter.default_route_id);
+                                if (matchingRoute) {
+                                    setRouteValue(matchingRoute.id);
+                                    setRoute(matchingRoute);
+                                    console.log(`[MemberKilos] ✅ Auto-selected route: ${matchingRoute.route_name} (ID: ${matchingRoute.id}) for transporter: ${matchedTransporter.full_names}`);
+                                } else {
+                                    console.log(`[MemberKilos] ⚠️ Transporter has default_route_id (${matchedTransporter.default_route_id}) but route not found in available routes`);
+                                }
+                            }
+
                             // Disable transporter dropdown if user is NOT an employee
                             if (!userGroups.includes("employee")) {
                                 setTransporterDisabled(true);
@@ -1595,7 +1607,24 @@ const MemberKilosScreen = () => {
                                     value={transporterValue}
                                     items={transporterItems}
                                     setOpen={setTransporterOpen}
-                                    setValue={(val: any) => { setTransporterValue(val as number); const sel = (commonData.transporters || []).find((t: any) => t.id === val); if (sel) setTransporter(sel); }}
+                                    setValue={(val: any) => { 
+                                        setTransporterValue(val as number); 
+                                        const sel = (commonData.transporters || []).find((t: any) => t.id === val); 
+                                        if (sel) {
+                                            setTransporter(sel);
+                                            // Auto-select route if transporter has default_route_id
+                                            if (sel.default_route_id && commonData.routes) {
+                                                const matchingRoute = (commonData.routes || []).find((r: any) => r.id === sel.default_route_id);
+                                                if (matchingRoute) {
+                                                    setRouteValue(matchingRoute.id);
+                                                    setRoute(matchingRoute);
+                                                    console.log(`[MemberKilos] ✅ Auto-selected route: ${matchingRoute.route_name} (ID: ${matchingRoute.id}) for transporter: ${sel.full_names}`);
+                                                } else {
+                                                    console.log(`[MemberKilos] ⚠️ Transporter has default_route_id (${sel.default_route_id}) but route not found in available routes`);
+                                                }
+                                            }
+                                        }
+                                    }}
                                     setItems={setTransporterItems}
                                     placeholder="Select transporter"
                                     searchable={true}

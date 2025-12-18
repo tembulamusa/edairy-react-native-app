@@ -117,6 +117,8 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
             !form.gender ||
             !form.dob ||
             !form.dateRegistered ||
+            !form.idDateOfIssue ||
+            // !form.dateRegistered ||
             !form.routeId ||
             !form.birthCity ||
             !form.membershipNo ||
