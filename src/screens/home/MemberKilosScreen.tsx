@@ -575,7 +575,13 @@ const MemberKilosScreen = () => {
                 setTransporterItems((transporters || []).map((t: any) => ({ label: t.full_names, value: t.id })));
                 setShiftItems((shifts || []).map((s: any) => ({ label: s.name, value: s.id })));
                 setRouteItems((routes || []).map((r: any) => ({ label: `${r.route_name} (${r.route_code})`, value: r.id })));
-                setMemberItems((members || []).map((m: any) => ({ label: `${m.first_name} ${m.last_name}`, value: m.id })));
+                setMemberItems((members || []).map((m: any) => {
+                    const memberNo = m.member_no || m.membership_no || m.membershipNo;
+                    return {
+                        label: memberNo ? `${m.first_name} ${m.last_name} (${memberNo})` : `${m.first_name} ${m.last_name}`,
+                        value: m.id
+                    };
+                }));
                 setCanItems((cans || []).map((c: any) => ({ label: c.can_id || `Can ${c.id}`, value: c.id })));
                 setMeasuringCanItems([]);
                 setCenterItems((centers || []).map((c: any) => ({ label: c.center, value: c.id })));
@@ -649,6 +655,31 @@ const MemberKilosScreen = () => {
                         if (matched) {
                             setMemberValue(matched.id);
                             setSelectedMember(matched);
+                            // Auto-select center if member has center_id
+                            const memberCenterId = matched.center_id;
+                            if (memberCenterId != null && memberCenterId !== undefined && memberCenterId !== '' && Array.isArray(centers) && centers.length > 0) {
+                                // Try matching with both string and number comparison
+                                const matchingCenter = centers.find((c: any) => {
+                                    return c.id === memberCenterId || 
+                                           c.id === Number(memberCenterId) || 
+                                           Number(c.id) === memberCenterId ||
+                                           String(c.id) === String(memberCenterId);
+                                });
+                                if (matchingCenter) {
+                                    setCenterValue(matchingCenter.id);
+                                    setCenter({ id: matchingCenter.id, center: matchingCenter.center });
+                                    console.log(`[MemberKilos] ✅ Auto-selected center (member-only): ${matchingCenter.center} (ID: ${matchingCenter.id}) for member: ${matched.first_name} ${matched.last_name}`);
+                                } else {
+                                    console.log(`[MemberKilos] ⚠️ Member has center_id (${memberCenterId}, type: ${typeof memberCenterId}) but center not found in available centers`);
+                                    console.log(`[MemberKilos] Available center IDs:`, centers.map((c: any) => `${c.id} (${typeof c.id})`));
+                                }
+                            } else {
+                                if (!memberCenterId) {
+                                    console.log(`[MemberKilos] Member has no center_id`);
+                                } else if (!Array.isArray(centers) || centers.length === 0) {
+                                    console.log(`[MemberKilos] Centers data not loaded yet`);
+                                }
+                            }
                         }
                     }
 
@@ -722,14 +753,40 @@ const MemberKilosScreen = () => {
             if (found) setCan(found);
         }
     }, [canValue, commonData.cans]);
-    // Keep selected can details fully loaded
+    // Keep selected can details fully loaded and auto-select center
     useEffect(() => {
         if (memberValue && Array.isArray(commonData.members)) {
             const found = commonData.members.find((m: any) => m.id === memberValue);
-            if (found) setMember(found);
-            if (found) setSelectedMember(found || null);
+            if (found) {
+                setMember(found);
+                setSelectedMember(found || null);
+                
+                // Auto-select center if member has center_id
+                const memberCenterId = found.center_id;
+                if (memberCenterId != null && memberCenterId !== undefined && memberCenterId !== '' && Array.isArray(commonData.centers) && commonData.centers.length > 0) {
+                    // Try matching with both string and number comparison
+                    const matchingCenter = commonData.centers.find((c: any) => {
+                        return c.id === memberCenterId || 
+                               c.id === Number(memberCenterId) || 
+                               Number(c.id) === memberCenterId ||
+                               String(c.id) === String(memberCenterId);
+                    });
+                    if (matchingCenter) {
+                        setCenterValue(matchingCenter.id);
+                        setCenter({ id: matchingCenter.id, center: matchingCenter.center });
+                        console.log(`[MemberKilos] ✅ Auto-selected center (via useEffect): ${matchingCenter.center} (ID: ${matchingCenter.id}) for member: ${found.first_name} ${found.last_name}`);
+                    } else {
+                        console.log(`[MemberKilos] ⚠️ Member has center_id (${memberCenterId}, type: ${typeof memberCenterId}) but center not found in available centers`);
+                        console.log(`[MemberKilos] Available center IDs:`, commonData.centers.map((c: any) => `${c.id} (${typeof c.id})`));
+                    }
+                } else {
+                    if (memberCenterId) {
+                        console.log(`[MemberKilos] ⚠️ Member has center_id (${memberCenterId}) but centers data not loaded yet`);
+                    }
+                }
+            }
         }
-    }, [memberValue, commonData.members]);
+    }, [memberValue, commonData.members, commonData.centers]);
 
     // Fetch measuring cans when transporter is selected
     useEffect(() => {
@@ -765,12 +822,24 @@ const MemberKilosScreen = () => {
                 setMeasuringCanItems(canItems);
 
                 // Clear measuring can selection if current selection is not in new list
+                let shouldAutoSelect = false;
                 if (measuringCanValue) {
                     const isStillAvailable = (measuringCans || []).some((c: any) => c.id === measuringCanValue);
                     if (!isStillAvailable) {
                         setMeasuringCanValue(null);
                         setMeasuringCan(null);
+                        shouldAutoSelect = true; // Auto-select after clearing invalid selection
                     }
+                } else {
+                    shouldAutoSelect = true; // No current selection, auto-select first
+                }
+
+                // Auto-select the first measuring can if none is selected and cans are available
+                if (shouldAutoSelect && measuringCans && measuringCans.length > 0) {
+                    const firstMeasuringCan = measuringCans[0];
+                    setMeasuringCanValue(firstMeasuringCan.id);
+                    setMeasuringCan(firstMeasuringCan);
+                    console.log(`[MemberKilos] ✅ Auto-selected first measuring can: ${firstMeasuringCan.can_id || `Can ${firstMeasuringCan.id}`} (ID: ${firstMeasuringCan.id}) for transporter: ${transporterValue}`);
                 }
             } catch (error: any) {
                 console.error('[MemberKilos] Error fetching measuring cans:', error);
@@ -898,6 +967,12 @@ const MemberKilosScreen = () => {
         const timeStr = now.toTimeString().split(" ")[0];
         receipt += `Date: ${dateStr} ${timeStr}\n`;
         receipt += `Member: ${selectedMember ? `${selectedMember.first_name} ${selectedMember.last_name}` : 'N/A'}\n`;
+        if (selectedMember) {
+            const memberNo = selectedMember.member_no || selectedMember.membership_no || selectedMember.membershipNo;
+            if (memberNo) {
+                receipt += `Member No: ${memberNo}\n`;
+            }
+        }
         receipt += `Transporter: ${selectedTransporter?.full_names || 'N/A'}\n`;
         receipt += `Shift: ${selectedShift?.name || 'N/A'}\n`;
         receipt += `Route: ${selectedRoute?.route_name || 'N/A'}\n`;
@@ -1684,6 +1759,62 @@ const MemberKilosScreen = () => {
                             <View style={styles.col}>
                                 <DropDownPicker
                                     listMode="SCROLLVIEW"
+                                    open={memberOpen}
+                                    value={memberValue}
+                                    items={memberItems}
+                                    setOpen={setMemberOpen}
+                                    setValue={(val: any) => { 
+                                        setMemberValue(val as number); 
+                                        const sel = (commonData.members || []).find((m: any) => m.id === val); 
+                                        if (sel) {
+                                            setMember(sel);
+                                            setSelectedMember(sel);
+                                            // Auto-select center if member has center_id
+                                            const memberCenterId = sel.center_id;
+                                            console.log(`[MemberKilos] Member selected: ${sel.first_name} ${sel.last_name}, center_id: ${memberCenterId}`);
+                                            if (memberCenterId != null && memberCenterId !== undefined && memberCenterId !== '' && Array.isArray(commonData.centers) && commonData.centers.length > 0) {
+                                                // Try matching with both string and number comparison
+                                                const matchingCenter = commonData.centers.find((c: any) => {
+                                                    return c.id === memberCenterId || 
+                                                           c.id === Number(memberCenterId) || 
+                                                           Number(c.id) === memberCenterId ||
+                                                           String(c.id) === String(memberCenterId);
+                                                });
+                                                if (matchingCenter) {
+                                                    setCenterValue(matchingCenter.id);
+                                                    setCenter({ id: matchingCenter.id, center: matchingCenter.center });
+                                                    console.log(`[MemberKilos] ✅ Auto-selected center: ${matchingCenter.center} (ID: ${matchingCenter.id}) for member: ${sel.first_name} ${sel.last_name}`);
+                                                } else {
+                                                    console.log(`[MemberKilos] ⚠️ Member has center_id (${memberCenterId}, type: ${typeof memberCenterId}) but center not found`);
+                                                    console.log(`[MemberKilos] Available center IDs:`, commonData.centers.map((c: any) => `${c.id} (${typeof c.id})`));
+                                                }
+                                            } else {
+                                                if (!memberCenterId) {
+                                                    console.log(`[MemberKilos] Member has no center_id`);
+                                                } else if (!Array.isArray(commonData.centers) || commonData.centers.length === 0) {
+                                                    console.log(`[MemberKilos] Centers data not loaded yet`);
+                                                }
+                                            }
+                                        }
+                                    }}
+                                    setItems={setMemberItems}
+                                    placeholder="Select member"
+                                    searchable={true}
+                                    searchPlaceholder="Search member"
+                                    renderListItem={renderDropdownItem}
+                                    zIndex={3500}
+                                    style={globalStyles.basedropdown}
+                                    dropDownContainerStyle={globalStyles.basedropdown}
+                                    zIndexInverse={2000}
+                                    scrollViewProps={{ nestedScrollEnabled: true }}
+                                />
+                            </View>
+                        </View>
+
+                        <View style={styles.row}>
+                            <View style={styles.col}>
+                                <DropDownPicker
+                                    listMode="SCROLLVIEW"
                                     open={centerOpen}
                                     value={centerValue}
                                     items={centerItems}
@@ -1694,33 +1825,10 @@ const MemberKilosScreen = () => {
                                     searchable={true}
                                     searchPlaceholder="Search center"
                                     renderListItem={renderDropdownItem}
-                                    zIndex={3500}
-                                    style={globalStyles.basedropdown}
-                                    dropDownContainerStyle={globalStyles.basedropdown}
-                                    zIndexInverse={1500}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
-                                />
-                            </View>
-                        </View>
-
-                        <View style={styles.row}>
-                            <View style={styles.col}>
-                                <DropDownPicker
-                                    listMode="SCROLLVIEW"
-                                    open={memberOpen}
-                                    value={memberValue}
-                                    items={memberItems}
-                                    setOpen={setMemberOpen}
-                                    setValue={(val: any) => { setMemberValue(val as number); const sel = (commonData.members || []).find((m: any) => m.id === val); if (sel) setMember(sel); if (sel) setSelectedMember(sel); }}
-                                    setItems={setMemberItems}
-                                    placeholder="Select member"
-                                    searchable={true}
-                                    searchPlaceholder="Search member"
-                                    renderListItem={renderDropdownItem}
                                     zIndex={3000}
                                     style={globalStyles.basedropdown}
                                     dropDownContainerStyle={globalStyles.basedropdown}
-                                    zIndexInverse={2000}
+                                    zIndexInverse={1500}
                                     scrollViewProps={{ nestedScrollEnabled: true }}
                                 />
                             </View>
