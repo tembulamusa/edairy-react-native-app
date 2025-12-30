@@ -35,12 +35,23 @@ const fetchCommonData = async ({
             parsed[name].length === 0
         ) {
             // Build query string
-            const queryParams = new URLSearchParams({
+            const queryParamsObj: Record<string, string> = {
                 model: name,
-                ...(search ? { search } : {}),
-                ...params,
-            }).toString();
+            };
 
+            if (search) {
+                queryParamsObj.search = search;
+            }
+
+            // Convert params to query string format, handling null/undefined
+            Object.keys(params).forEach((key) => {
+                const value = params[key];
+                if (value !== null && value !== undefined && value !== '') {
+                    queryParamsObj[key] = String(value);
+                }
+            });
+
+            const queryParams = new URLSearchParams(queryParamsObj).toString();
             const [status, response] = await makeRequest({
                 url: `global-data?${queryParams}`,
                 method: "GET",

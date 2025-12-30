@@ -113,6 +113,8 @@ const MemberKilosScreen = () => {
     const [loading, setLoading] = useState(false);
     const [memberCreditLimit, setMemberCreditLimit] = useState<number | null>(null);
     const [fetchingCredit, setFetchingCredit] = useState(false);
+    const [memberTotals, setMemberTotals] = useState<any>(null);
+    const [fetchingMemberTotals, setFetchingMemberTotals] = useState(false);
     const [errors, setErrors] = useState<any>({});
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -745,6 +747,32 @@ const MemberKilosScreen = () => {
 
         fetchCreditLimit();
     }, [memberValue]);
+
+    // --- Fetch Member Totals (pending entries) ---
+    const fetchMemberTotals = useCallback(async () => {
+        if (!memberValue) {
+            setMemberTotals(null);
+            return;
+        }
+        setFetchingMemberTotals(true);
+        try {
+            const pendingEntries = await fetchCommonData({ 
+                name: "pending_entries",
+                cachable: false,
+                params: { member_id: memberValue }
+            });
+            setMemberTotals(pendingEntries);
+        } catch (err) {
+            console.error('[MemberKilos] Error fetching member totals:', err);
+            setMemberTotals(null);
+        } finally {
+            setFetchingMemberTotals(false);
+        }
+    }, [memberValue]);
+
+    useEffect(() => {
+        fetchMemberTotals();
+    }, [fetchMemberTotals]);
 
     // Keep selected can details fully loaded
     useEffect(() => {
@@ -1533,6 +1561,9 @@ const MemberKilosScreen = () => {
                 if (!isMountedRef.current) return;
                 setSuccessModalVisible(true);
                 setIsPrinting(true);
+                
+                // Refresh member totals after successful submission
+                fetchMemberTotals();
 
                 try {
                     let connectedPrinter: any = null;
@@ -1824,6 +1855,7 @@ const MemberKilosScreen = () => {
                                     placeholder="Select center"
                                     searchable={true}
                                     searchPlaceholder="Search center"
+                                    disabled={true}
                                     renderListItem={renderDropdownItem}
                                     zIndex={3000}
                                     style={globalStyles.basedropdown}
@@ -2088,6 +2120,37 @@ const MemberKilosScreen = () => {
                     ) : (
                         <Text style={{ color: "gray" }}>No data available</Text>
                     )}
+
+                    {/* Total Milk Section */}
+                    <View style={{ marginTop: 16, alignItems: "center" }}>
+                        <Text style={{ fontSize: 16, fontWeight: "600", marginBottom: 8 }}>
+                            Total Milk
+                        </Text>
+
+                        {fetchingMemberTotals ? (
+                            <Text>Loading...</Text>
+                        ) : memberTotals ? (
+                            <Text style={{ fontSize: 20, fontWeight: "bold", color: "#2563eb" }}>
+                                {(() => {
+                                    let total = 0;
+                                    if (typeof memberTotals === 'number') {
+                                        total = memberTotals;
+                                    } else if (Array.isArray(memberTotals)) {
+                                        // Sum total_quantity from array of entries
+                                        total = memberTotals.reduce((sum: number, entry: any) => {
+                                            return sum + (parseFloat(entry.total_quantity || entry.net || entry.quantity || 0) || 0);
+                                        }, 0);
+                                    } else if (typeof memberTotals === 'object') {
+                                        // Get total from object properties
+                                        total = parseFloat(memberTotals.total_quantity || memberTotals.total_milk || memberTotals.total || 0) || 0;
+                                    }
+                                    return `${total.toFixed(2)} KG`;
+                                })()}
+                            </Text>
+                        ) : (
+                            <Text style={{ color: "gray" }}>No data available</Text>
+                        )}
+                    </View>
 
                     <TouchableOpacity
                         style={{
