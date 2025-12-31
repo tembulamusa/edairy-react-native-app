@@ -90,12 +90,13 @@ const ShiftSummaryReportScreen = () => {
                     }))
                 );
 
-                setRouteItems(
-                    (routes || []).map((r: any) => ({
+                setRouteItems([
+                    { label: 'All', value: null },
+                    ...(routes || []).map((r: any) => ({
                         label: `${r.route_name || r.name || 'Unnamed Route'}${r.route_code ? ` (${r.route_code})` : ''}`,
                         value: r.id,
                     }))
-                );
+                ]);
 
                 setShiftItems([
                     { label: 'All', value: 'all' },
@@ -163,7 +164,6 @@ const ShiftSummaryReportScreen = () => {
                         return;
                     }
                     setUserSummary(shifts || []);
-
                 } catch (error) {
                     console.error("Error loading user summary:", error);
                     Alert.alert("Error", `Failed to load user summary report ${JSON.stringify(error)} `);
@@ -692,18 +692,13 @@ const ShiftSummaryReportScreen = () => {
 
     return (
         <SafeAreaView style={styles.container}>
-            <View>
-                <Text style={[styles.header, { marginBottom: 10, marginTop: 5, fontWeight: 'bold' }]}>
-                    Transporter Balance Statements
-                </Text>
-            </View>
-
             <ScrollView
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={true}
                 nestedScrollEnabled={true}
             >
+                <Text style={styles.title}>Transporter Shift Summary</Text>
                 <View style={styles.content}>
                     <View style={styles.row}>
                         <View style={styles.col}>
@@ -827,10 +822,10 @@ const ShiftSummaryReportScreen = () => {
                         </View>
                     </View>
                 </View>
-                <View>
-                    <Text style={[styles.label, { marginTop: 20 }]}>Transporter Shift Summary</Text>
+                <View style={styles.summarySection}>
+                    <Text style={styles.sectionTitle}>Transporter Shift Summary</Text>
                     {loading ? (
-                        <ActivityIndicator size="large" color="#1b7f74" style={{ marginTop: 20 }} />
+                        <ActivityIndicator size="large" color="#16a34a" style={{ marginTop: 20 }} />
                     ) : userSummary.length === 0 ? (
                         <Text style={{ textAlign: 'center', marginVertical: 20, color: '#666' }}>
                             No records found
@@ -987,14 +982,23 @@ export default ShiftSummaryReportScreen;
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#f2f2f2',
+        backgroundColor: '#fff',
     },
     scrollView: {
         flex: 1,
     },
     scrollContent: {
-        padding: 20,
+        padding: 16,
         paddingBottom: 40,
+    },
+    title: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        marginBottom: 20,
+        color: '#333',
+    },
+    content: {
+        marginBottom: 20,
     },
     row: {
         flexDirection: 'row',
@@ -1008,7 +1012,7 @@ const styles = StyleSheet.create({
     label: {
         fontSize: 14,
         marginBottom: 6,
-        color: '#444',
+        color: '#333',
     },
     inputWithIcon: {
         flexDirection: 'row',
@@ -1019,28 +1023,47 @@ const styles = StyleSheet.create({
         flex: 1,
         borderWidth: 1,
         borderColor: '#ddd',
-        borderRadius: 12,
-        paddingHorizontal: 15,
-        height: 45,
+        borderRadius: 6,
+        padding: 8,
+        paddingRight: 40,
         backgroundColor: '#fff',
+        fontSize: 14,
+        color: '#333',
     },
     iconInside: {
         position: 'absolute',
-        right: 12,
+        right: 8,
+        padding: 4,
     },
     dropdown: {
-        borderRadius: 12,
+        borderRadius: 6,
         borderColor: '#ddd',
-        height: 45,
-        paddingHorizontal: 12,
+        backgroundColor: '#fff',
+        minHeight: 40,
     },
     dropdownBox: {
         borderColor: '#ddd',
+        backgroundColor: '#fff',
+        borderRadius: 6,
+    },
+    summarySection: {
+        marginTop: 20,
+        backgroundColor: '#fff',
+        borderRadius: 8,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: '#eee',
+    },
+    sectionTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        marginBottom: 12,
+        color: '#333',
     },
     generateButton: {
-        backgroundColor: '#1b7f74',
+        backgroundColor: '#16a34a',
         paddingVertical: 14,
-        borderRadius: 12,
+        borderRadius: 8,
         alignItems: 'center',
         marginTop: 20,
     },
@@ -1074,7 +1097,7 @@ const styles = StyleSheet.create({
     summaryAmount: {
         fontSize: 14,
         fontWeight: '600',
-        color: '#1b7f74',
+        color: '#16a34a',
         minWidth: 80,
         textAlign: 'right',
     },
@@ -1094,6 +1117,6 @@ const styles = StyleSheet.create({
     totalValue: {
         fontSize: 15,
         fontWeight: '700',
-        color: '#1b7f74',
+        color: '#16a34a',
     },
 });

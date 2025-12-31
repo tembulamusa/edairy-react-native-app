@@ -79,6 +79,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         label?: string;
         unit_price?: number;
         selling_price?: number;
+        available_stock?: number | null;
         item?: {
             description?: string;
             selling_price?: number;
@@ -257,14 +258,26 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         }
         if (commonData?.stock_items) {
             setStockItems(
-                commonData.stock_items.map((s) => ({
-                    label: s?.item?.description
+                commonData.stock_items.map((s) => {
+                    const itemName = s?.item?.description
                         ? String(s.item.description)
                         : s?.name
                         ? String(s.name)
-                        : `Item ${s.id}`,
-                    value: s.id,
-                }))
+                        : `Item ${s.id}`;
+                    
+                    // Get available stock quantity (check multiple possible field names)
+                    const stockQty = s?.quantity ?? s?.stock ?? s?.available_quantity ?? s?.stock_quantity ?? s?.available_stock ?? null;
+                    
+                    // Add quantity in brackets if available (remove decimals)
+                    const label = stockQty !== null && stockQty !== undefined
+                        ? `${itemName} (${Math.floor(Number(stockQty))})`
+                        : itemName;
+                    
+                    return {
+                        label,
+                        value: s.id,
+                    };
+                })
             );
         }
     }, [commonData]);
@@ -277,6 +290,9 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
     const addStockEntry = (stockId: number) => {
         const stock = commonData.stock_items.find((s) => s.id === stockId);
         if (stock && !entries.find((e) => e.id === stock.id)) {
+            // Get available stock quantity (check multiple possible field names)
+            const availableStock = stock?.quantity ?? stock?.stock ?? stock?.available_quantity ?? stock?.stock_quantity ?? stock?.available_stock ?? null;
+            
             setEntries([
                 ...entries,
                 {
@@ -290,6 +306,8 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                             0
                         ) || 0,
                     quantity: "1",
+                    // Store available stock for validation
+                    available_stock: availableStock,
                 },
             ]);
         }
@@ -544,6 +562,25 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             Alert.alert("Validation", "Please complete store, date, and items.");
             return;
         }
+        
+        // Validate quantities don't exceed available stock
+        for (const entry of entries) {
+            const requestedQty = parseFloat(entry?.quantity || "0");
+            const availableStock = entry?.available_stock ?? entry?.quantity ?? entry?.stock ?? entry?.available_quantity ?? entry?.stock_quantity ?? null;
+            
+            if (availableStock !== null && availableStock !== undefined) {
+                const maxQty = parseFloat(String(availableStock)) || 0;
+                if (requestedQty > maxQty) {
+                    const itemName = entry?.item?.description || entry?.name || entry?.label || `Item ${entry.id}`;
+                    Alert.alert(
+                        "Invalid Quantity",
+                        `${itemName}: Requested quantity (${requestedQty}) exceeds available stock (${maxQty}).`
+                    );
+                    return;
+                }
+            }
+        }
+        
         setSaving(true);
         setErrors({});
         try {
@@ -732,10 +769,19 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         ListEmptyComponent={
                             <Text style={styles.emptyEntriesText}>No items added yet.</Text>
                         }
-                        renderItem={({ item, index }) => (
+                        renderItem={({ item, index }) => {
+                            const itemName = item?.item?.description || item?.name || item?.label || `Item ${index + 1}`;
+                            // Get available stock quantity (check multiple possible field names)
+                            const availableStock = item?.available_stock ?? item?.quantity ?? item?.stock ?? item?.available_quantity ?? item?.stock_quantity ?? null;
+                            // Add quantity in brackets if available (remove decimals)
+                            const displayName = availableStock !== null && availableStock !== undefined
+                                ? `${itemName} (${Math.floor(Number(availableStock))})`
+                                : itemName;
+                            
+                            return (
                             <View style={styles.entry}>
                                 <Text style={styles.entryDescription}>
-                                    {item?.item?.description || item?.name || item?.label || `Item ${index + 1}`}
+                                    {displayName}
                                 </Text>
                                 <TextInput
                                     style={[
@@ -747,6 +793,29 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                     value={item.quantity?.toString() ?? "1"}
                                     onChangeText={(val) => {
                                         if (!saving) {
+                                            // Get available stock for this item
+                                            const availableStock = item?.available_stock ?? item?.quantity ?? item?.stock ?? item?.available_quantity ?? item?.stock_quantity ?? null;
+                                            
+                                            // Allow empty string for clearing the input
+                                            if (val === '' || val === '.') {
+                                                const updated = [...entries];
+                                                updated[index].quantity = val;
+                                                setEntries(updated);
+                                                return;
+                                            }
+                                            
+                                            // Parse input value
+                                            const inputQty = parseFloat(val);
+                                            
+                                            // Validate: don't allow quantity to exceed available stock
+                                            if (availableStock !== null && availableStock !== undefined && !isNaN(inputQty)) {
+                                                const maxQty = parseFloat(String(availableStock)) || 0;
+                                                if (inputQty > maxQty) {
+                                                    // Silently cap at max available quantity
+                                                    val = String(maxQty);
+                                                }
+                                            }
+                                            
                                             const updated = [...entries];
                                             updated[index].quantity = val;
                                             setEntries(updated);
@@ -774,7 +843,8 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                     <Icon name="delete" size={22} color="#d11a2a" />
                                 </TouchableOpacity>
                             </View>
-                        )}
+                            );
+                        }}
                     />
                     {/* Overall Total */}
                     <View style={styles.totalRow}>
