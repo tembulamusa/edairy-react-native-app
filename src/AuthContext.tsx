@@ -53,16 +53,32 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     };
 
     const logout = async () => {
+        console.log('AuthContext logout called');
         clearExpiryTimer();
-        await AsyncStorage.removeItem("token");
+
+        // Clear session authentication data (but keep offline credentials)
+        console.log('Clearing session authentication data...');
+        await AsyncStorage.multiRemove([
+            "token",
+            "user"
+        ]);
+
+        // NOTE: Keep offline credentials in SQLite for offline login capability
+        // Only clear user_phone_number as it's session-specific
+        await AsyncStorage.removeItem("@edairyApp:user_phone_number");
+
         setUserToken(null);
+        console.log('User token set to null');
 
         // 🔥 Automatically navigate to login
         if (navigationRef.current) {
+            console.log('Navigation ref available, resetting to Auth screen');
             navigationRef.current.reset({
                 index: 0,
                 routes: [{ name: "Auth" }],
             });
+        } else {
+            console.log('Navigation ref not available!');
         }
     };
 

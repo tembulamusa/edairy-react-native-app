@@ -9,7 +9,11 @@ import Store from "./src/context/store";
 import { GlobalProvider } from "./src/context/GlobalContext";
 import { AuthProvider, AuthContext } from "./src/AuthContext";
 import { ConnectivityProvider } from "./src/context/ConnectivityContext";
+import { SyncProvider, useSync } from "./src/context/SyncContext";
 import ConnectivityDebugger from "./src/components/ConnectivityDebugger";
+import SyncLoadingOverlay from "./src/components/SyncLoadingOverlay";
+import { initDatabase } from "./src/services/offlineDatabase";
+import { startAutoSync, setupNetworkListener, setupNetworkListenerWithSync } from "./src/services/offlineSync";
 
 import {
   LoginScreen,
@@ -35,6 +39,7 @@ import {
   ScaleTestScreen,
   ProfileScreen,
   SettingsScreen,
+  OfflineMilkCollectionScreen,
 } from "./src/screens";
 import CustomHeader from "./src/components/CustomHeader";
 
@@ -68,6 +73,18 @@ function AuthStack() {
             contentStyle: { backgroundColor: 'rgba(0,0,0,0)' },
           }}
         />
+        <RootStack.Screen
+          name="OfflineCollection"
+          component={OfflineMilkCollectionScreen}
+          options={{
+            headerShown: true,
+            headerTitle: "Offline Collection",
+            headerStyle: { backgroundColor: '#1b7f74' },
+            headerTintColor: '#fff',
+            headerTitleStyle: { fontWeight: '600' },
+            contentStyle: { backgroundColor: '#fff' },
+          }}
+        />
       </RootStack.Navigator>
     </AuthLayout>
   );
@@ -95,6 +112,7 @@ function MembersStackNavigator() {
       <MembersStack.Screen name="LivenessCheck" component={WebViewScreen} />
       <MembersStack.Screen name="UserBalanceSummary" component={UserBalanceSummaryScreen} />
       <MembersStack.Screen name="ScaleTest" component={ScaleTestScreen} />
+      <MembersStack.Screen name="OfflineMilkCollection" component={OfflineMilkCollectionScreen} />
     </MembersStack.Navigator>
   );
 }
@@ -154,6 +172,41 @@ function HomeStack() {
   );
 }
 
+function AppContent({ navigationRef }: { navigationRef: React.RefObject<any> }) {
+  const { isUIBlocked, isSyncing, isInitialLoading, triggerSync } = useSync();
+  const { setNavigationRef } = React.useContext(AuthContext);
+
+  // Set navigation ref for AuthContext
+  React.useEffect(() => {
+    if (navigationRef.current) {
+      setNavigationRef(navigationRef);
+    }
+  }, [navigationRef, setNavigationRef]);
+
+  // Removed automatic sync on network connection - sync should be user-initiated only
+  // React.useEffect(() => {
+  //   const unsubscribe = setupNetworkListenerWithSync(triggerSync);
+  //   return unsubscribe;
+  // }, [triggerSync]);
+
+  return (
+    <>
+      <ConnectivityDebugger />
+      <NavigationContainer ref={navigationRef}>
+        <RootStack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Auth">
+          <RootStack.Screen name="Auth" component={AuthStack} />
+          <RootStack.Screen name="Home" component={HomeStack} />
+        </RootStack.Navigator>
+      </NavigationContainer>
+
+      <SyncLoadingOverlay
+        visible={isSyncing}
+        message="Syncing data..."
+      />
+    </>
+  );
+}
+
 export default function App() {
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
   const { setNavigationRef } = useContext(AuthContext);
@@ -164,21 +217,37 @@ export default function App() {
     }
   }, []);
 
+  // Initialize offline database and sync service (without network listener)
+  useEffect(() => {
+    const initOfflineServices = async () => {
+      try {
+        // Initialize database
+        await initDatabase();
+        console.log('[APP] Offline database initialized');
+
+        // Removed auto-sync on launch - sync should be user-initiated only
+        // startAutoSync(5);
+        // console.log('[APP] Auto-sync service started');
+
+      } catch (error) {
+        console.error('[APP] Error initializing offline services:', error);
+      }
+    };
+
+    initOfflineServices();
+  }, []);
+
   return (
-    <AuthProvider>
+    <SyncProvider>
       <Store>
         <GlobalProvider>
           <ConnectivityProvider>
-            <ConnectivityDebugger />
-            <NavigationContainer ref={navigationRef}>
-              <RootStack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Auth">
-                <RootStack.Screen name="Auth" component={AuthStack} />
-                <RootStack.Screen name="Home" component={HomeStack} />
-              </RootStack.Navigator>
-            </NavigationContainer>
+            <AuthProvider>
+              <AppContent navigationRef={navigationRef} />
+            </AuthProvider>
           </ConnectivityProvider>
         </GlobalProvider>
       </Store>
-    </AuthProvider>
+    </SyncProvider>
   );
 }

@@ -1,8 +1,36 @@
 import { Alert } from "react-native";
 import { getItem } from "./local-storage";
 import NetInfo from '@react-native-community/netinfo';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BASE_URL = "http://10.110.174.140:8000/api/" //"http://192.168.100.2:8000/api/" //"http://10.253.147.140:8000/api/" // //"http://10.0.2.2:8000/api/" //"https://dev.edairy.africa/api/" // //"http://10.111.178.140:8000/api/" //"https://dev.edairy.africa/api/" "http://192.168.100.2:8000/api/"
+// Network alert state management
+let hasShownNetworkAlert = false;
+
+// Default fallback URL
+const DEFAULT_BASE_URL = "https://dev.edairy.africa";
+
+// Get dynamic server URL
+const getServerUrl = async (): Promise<string> => {
+    try {
+        const serverConfig = await AsyncStorage.getItem('@edairyApp:server_config');
+        if (serverConfig) {
+            const config = JSON.parse(serverConfig);
+            if (config.domain && config.domain.trim()) {
+                // Ensure the domain has a protocol
+                let domain = config.domain.trim();
+                if (!domain.startsWith('http://') && !domain.startsWith('https://')) {
+                    domain = `http://${domain}`;
+                }
+                // Remove trailing slash if present
+                domain = domain.replace(/\/$/, '');
+                return `${domain}/api`;
+            }
+        }
+    } catch (error) {
+        console.warn('Failed to load server config, using default:', error);
+    }
+    return `${DEFAULT_BASE_URL}/api/`;
+};
 
 const makeRequest = async ({
     url,
@@ -14,28 +42,38 @@ const makeRequest = async ({
 }) => {
     // Check internet connectivity before making request
     const netInfo = await NetInfo.fetch();
-    if (!netInfo.isConnected || !netInfo.isInternetReachable) {
-        Alert.alert(
-            "No Internet Connection",
-            "Please check your internet connection and try again.",
-            [
-                { text: "OK", style: "default" },
-                {
-                    text: "Retry",
-                    onPress: () => {
-                        // Retry the request after user confirms
-                        setTimeout(() => {
-                            makeRequest({ url, method, data, use_jwt, responseType, isFormData });
-                        }, 10000);
+    const isCurrentlyConnected = netInfo.isConnected && netInfo.isInternetReachable;
+
+    if (!isCurrentlyConnected) {
+        // Only show alert once when connection is lost
+        if (!hasShownNetworkAlert) {
+            hasShownNetworkAlert = true;
+            Alert.alert(
+                "No Internet Connection",
+                "Please check your internet connection and try again.",
+                [
+                    { text: "OK", style: "default" },
+                    {
+                        text: "Retry",
+                        onPress: () => {
+                            // Retry the request after user confirms
+                            setTimeout(() => {
+                                makeRequest({ url, method, data, use_jwt, responseType, isFormData });
+                            }, 10000);
+                        },
                     },
-                },
-            ]
-        );
+                ]
+            );
+        }
         return [503, { message: "No internet connection" }];
+    } else {
+        // Reset alert flag when connection is restored
+        hasShownNetworkAlert = false;
     }
 
-    url = BASE_URL + url;
-
+    // Get dynamic server URL
+    const baseUrl = await getServerUrl();
+    url = baseUrl + url;
     let headers: any = {
         accept: "application/json",
     };
@@ -74,6 +112,7 @@ const makeRequest = async ({
 
         return [response.status, result];
     } catch (err: any) {
+
         console.error("Fetch error:", err);
 
         // Check if it's a network error
