@@ -47,10 +47,13 @@ const CustomHeader = ({ scene, previous, navigation }) => {
 
     const handleSyncPress = async () => {
         try {
+            console.log('[SYNC] Sync button pressed, checking for pending collections...');
             // Check if there are pending syncs
             const pendingCollections = await getUnsyncedCollections();
+            console.log('[SYNC] Found pending collections:', pendingCollections.length);
             if (pendingCollections.length > 0) {
                 // If there are pending syncs, automatically start sync
+                console.log('[SYNC] Starting sync process...');
                 const result = await triggerSync();
 
                 // Show result

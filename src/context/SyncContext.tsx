@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+// Import sync function statically to avoid bundler issues
+import { syncAllCollections } from '../services/offlineSync';
 
 interface SyncContextType {
   isSyncing: boolean;
@@ -26,7 +28,7 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isInitialSyncComplete, setIsInitialSyncComplete] = useState<boolean>(false);
   const [isUIBlocked, setIsUIBlocked] = useState<boolean>(false);
-  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(false);
   const [lastSyncResult, setLastSyncResult] = useState<{ success: number; failed: number } | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -89,8 +91,7 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
       setIsSyncing(true);
       setSyncError(null);
 
-      // Import dynamically to avoid circular dependencies
-      const { syncAllCollections } = await import('../services/offlineSync');
+      // Use statically imported sync function
       const result = await syncAllCollections(
         () => {
           console.log('[SYNC] Sync started');

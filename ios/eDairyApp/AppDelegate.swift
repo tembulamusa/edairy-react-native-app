@@ -22,6 +22,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     reactNativeFactory = factory
 
     window = UIWindow(frame: UIScreen.main.bounds)
+    window?.backgroundColor = UIColor(red: 0.149, green: 0.6, blue: 0.4, alpha: 1.0) // #26A69A
 
     factory.startReactNative(
       withModuleName: "eDairyApp",

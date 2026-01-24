@@ -1,4 +1,5 @@
-import React, { useRef, useContext, useEffect } from "react";
+import React, { useRef, useContext, useEffect, useState } from "react";
+import { View } from "react-native";
 import { NavigationContainer, NavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
@@ -14,6 +15,7 @@ import ConnectivityDebugger from "./src/components/ConnectivityDebugger";
 import SyncLoadingOverlay from "./src/components/SyncLoadingOverlay";
 import { initDatabase } from "./src/services/offlineDatabase";
 import { startAutoSync, setupNetworkListener, setupNetworkListenerWithSync } from "./src/services/offlineSync";
+import LaunchScreen from "./src/components/LaunchScreen";
 
 import {
   LoginScreen,
@@ -210,6 +212,7 @@ function AppContent({ navigationRef }: { navigationRef: React.RefObject<any> }) 
 export default function App() {
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
   const { setNavigationRef } = useContext(AuthContext);
+  const [isLaunching, setIsLaunching] = useState(true);
 
   useEffect(() => {
     if (navigationRef.current) {
@@ -229,8 +232,19 @@ export default function App() {
         // startAutoSync(5);
         // console.log('[APP] Auto-sync service started');
 
+        // Hide launch screen after initialization
+        console.log('[APP] Initialization complete, hiding launch screen');
+        setTimeout(() => {
+          console.log('[APP] Setting isLaunching to false');
+          setIsLaunching(false);
+        }, 2000); // Show launch screen for at least 2 seconds
+
       } catch (error) {
         console.error('[APP] Error initializing offline services:', error);
+        // Still hide launch screen even on error
+        setTimeout(() => {
+          setIsLaunching(false);
+        }, 2000);
       }
     };
 
@@ -238,16 +252,19 @@ export default function App() {
   }, []);
 
   return (
-    <SyncProvider>
-      <Store>
-        <GlobalProvider>
-          <ConnectivityProvider>
-            <AuthProvider>
-              <AppContent navigationRef={navigationRef} />
-            </AuthProvider>
-          </ConnectivityProvider>
-        </GlobalProvider>
-      </Store>
-    </SyncProvider>
+    <View style={{ flex: 1, backgroundColor: '#26A69A' }}>
+      <SyncProvider>
+        <Store>
+          <GlobalProvider>
+            <ConnectivityProvider>
+              <AuthProvider>
+                <AppContent navigationRef={navigationRef} />
+              </AuthProvider>
+            </ConnectivityProvider>
+          </GlobalProvider>
+        </Store>
+      </SyncProvider>
+      <LaunchScreen visible={isLaunching} />
+    </View>
   );
 }
