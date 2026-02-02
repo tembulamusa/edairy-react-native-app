@@ -1,15 +1,32 @@
 import React, { useState } from "react";
-import { View, Text, Image, StyleSheet, TouchableOpacity, Platform, PermissionsAndroid, Alert } from "react-native";
+import { View, Text, Image, StyleSheet, TouchableOpacity, Platform, PermissionsAndroid, Alert, ActivityIndicator } from "react-native";
 import { launchCamera, launchImageLibrary, Asset } from "react-native-image-picker";
 import { globalStyles } from "../../styles";
+import { compressImageForID } from "../utils/imageCompression";
 
 interface Props {
     onPrevious: () => void;
     onNext: (image?: Asset) => void;
+    initialImage?: Asset | null;
 }
 
-const IdBackCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
-    const [image, setImage] = useState<Asset | null>(null);
+const IdBackCapture: React.FC<Props> = ({ onPrevious, onNext, initialImage }) => {
+    const [image, setImage] = useState<Asset | null>(initialImage || null);
+    const [isCompressing, setIsCompressing] = useState(false);
+
+    const processImage = async (asset: Asset) => {
+        setIsCompressing(true);
+        try {
+            const compressedAsset = await compressImageForID(asset);
+            setImage(compressedAsset);
+        } catch (error) {
+            console.error('Image compression failed:', error);
+            Alert.alert('Compression Error', 'Failed to compress image. Using original image.');
+            setImage(asset);
+        } finally {
+            setIsCompressing(false);
+        }
+    };
 
     const requestCameraPermission = async (): Promise<boolean> => {
         if (Platform.OS !== "android") return true;
@@ -91,7 +108,7 @@ const IdBackCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
             return;
         }
         if (result.assets && result.assets.length > 0) {
-            setImage(result.assets[0]);
+            await processImage(result.assets[0]);
         }
     };
 
@@ -108,7 +125,7 @@ const IdBackCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
             return;
         }
         if (result.assets && result.assets.length > 0) {
-            setImage(result.assets[0]);
+            await processImage(result.assets[0]);
         }
     };
 
@@ -116,7 +133,12 @@ const IdBackCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
         <View style={globalStyles.container}>
             {/* Preview Box */}
             <View style={globalStyles.previewBox}>
-                {image ? (
+                {isCompressing ? (
+                    <View style={styles.compressionContainer}>
+                        <ActivityIndicator size="large" color="#009688" />
+                        <Text style={styles.compressionText}>Compressing image...</Text>
+                    </View>
+                ) : image ? (
                     <Image source={{ uri: image.uri }} style={globalStyles.image} />
                 ) : (
                     <Text style={globalStyles.placeholder}>ID Back Preview</Text>
@@ -125,10 +147,18 @@ const IdBackCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
 
             {/* Photo buttons */}
             <View style={globalStyles.photoButtonsRow}>
-                <TouchableOpacity style={globalStyles.actionButton} onPress={handleTakePhoto}>
+                <TouchableOpacity
+                    style={[globalStyles.actionButton, isCompressing && styles.disabledButton]}
+                    onPress={handleTakePhoto}
+                    disabled={isCompressing}
+                >
                     <Text style={[globalStyles.actionButtonText]}>Take Photo</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={globalStyles.actionButton} onPress={handleBrowseGallery}>
+                <TouchableOpacity
+                    style={[globalStyles.actionButton, isCompressing && styles.disabledButton]}
+                    onPress={handleBrowseGallery}
+                    disabled={isCompressing}
+                >
                     <Text style={globalStyles.actionButtonText}>Browse Gallery</Text>
                 </TouchableOpacity>
             </View>
@@ -149,5 +179,22 @@ const IdBackCapture: React.FC<Props> = ({ onPrevious, onNext }) => {
         </View>
     );
 };
+
+const styles = StyleSheet.create({
+    compressionContainer: {
+        alignItems: "center",
+        justifyContent: "center",
+        flex: 1,
+    },
+    compressionText: {
+        marginTop: 10,
+        color: "#009688",
+        fontSize: 14,
+        fontWeight: "500",
+    },
+    disabledButton: {
+        opacity: 0.6,
+    },
+});
 
 export default IdBackCapture;

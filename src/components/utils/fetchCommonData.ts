@@ -77,4 +77,35 @@ const fetchCommonData = async ({
     }
 };
 
+/**
+ * Clears all cached common data from AsyncStorage
+ */
+export const clearCommonDataCache = async (): Promise<void> => {
+    try {
+        await AsyncStorage.removeItem("commonData");
+        console.log("✅ Common data cache cleared successfully");
+    } catch (error) {
+        console.error("❌ Failed to clear common data cache:", error);
+        throw error;
+    }
+};
+
+/**
+ * Clears specific cached data from AsyncStorage
+ */
+export const clearSpecificCommonDataCache = async (name: string): Promise<void> => {
+    try {
+        const commonData = await AsyncStorage.getItem("commonData");
+        if (commonData) {
+            const parsed = JSON.parse(commonData);
+            delete parsed[name];
+            await AsyncStorage.setItem("commonData", JSON.stringify(parsed));
+            console.log(`✅ ${name} cache cleared successfully`);
+        }
+    } catch (error) {
+        console.error(`❌ Failed to clear ${name} cache:`, error);
+        throw error;
+    }
+};
+
 export default fetchCommonData;

@@ -5,13 +5,14 @@ import { globalStyles } from '../../styles';
 interface NextOfKinProps {
     onNext: (data: { fullName: string; phone: string; relationship: string }) => void;
     onPrevious: () => void;
+    initialData?: any;
 }
 
-const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious }) => {
+const NextOfKin: React.FC<NextOfKinProps> = ({ onNext, onPrevious, initialData }) => {
     const [form, setForm] = React.useState({
-        nextOfKinFullName: '',
-        nextOfKinPhone: '',
-        nextOfKinRelationship: ''
+        nextOfKinFullName: initialData?.nextOfKinFullName || '',
+        nextOfKinPhone: initialData?.nextOfKinPhone || '',
+        nextOfKinRelationship: initialData?.nextOfKinRelationship || ''
     });
 
     // Update form state dynamically

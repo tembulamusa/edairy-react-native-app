@@ -655,17 +655,17 @@ const MemberKilosScreen = () => {
                         setViewMode(true);
                         const matched = (members || []).find((m: any) => m.id === userData?.member_id);
                         if (matched) {
-                            setMemberValue(matched.id);
+                            setMemberValue(matched?.id);
                             setSelectedMember(matched);
                             // Auto-select center if member has center_id
-                            const memberCenterId = matched.center_id;
+                            const memberCenterId = matched?.center_id;
                             if (memberCenterId != null && memberCenterId !== undefined && memberCenterId !== '' && Array.isArray(centers) && centers.length > 0) {
                                 // Try matching with both string and number comparison
                                 const matchingCenter = centers.find((c: any) => {
-                                    return c.id === memberCenterId || 
-                                           c.id === Number(memberCenterId) || 
-                                           Number(c.id) === memberCenterId ||
-                                           String(c.id) === String(memberCenterId);
+                                    return c.id === memberCenterId ||
+                                        c.id === Number(memberCenterId) ||
+                                        Number(c.id) === memberCenterId ||
+                                        String(c.id) === String(memberCenterId);
                                 });
                                 if (matchingCenter) {
                                     setCenterValue(matchingCenter.id);
@@ -756,12 +756,22 @@ const MemberKilosScreen = () => {
         }
         setFetchingMemberTotals(true);
         try {
-            const pendingEntries = await fetchCommonData({ 
-                name: "pending_entries",
+            const pendingEntries = await fetchCommonData({
+                name: "customer_delivery_summary",
                 cachable: false,
-                params: { member_id: memberValue }
+                params: { member_id: memberValue, status: "pending" }
             });
-            setMemberTotals(pendingEntries);
+
+            // Sum quantity from pending journal entries
+            let totalQuantity = 0;
+            if (Array.isArray(pendingEntries)) {
+                totalQuantity = pendingEntries.reduce((sum: number, entry: any) => {
+                    const quantity = parseFloat(entry.quantity || entry.net || entry.total_quantity || 0) || 0;
+                    return sum + quantity;
+                }, 0);
+            }
+
+            setMemberTotals(totalQuantity);
         } catch (err) {
             console.error('[MemberKilos] Error fetching member totals:', err);
             setMemberTotals(null);
@@ -788,16 +798,16 @@ const MemberKilosScreen = () => {
             if (found) {
                 setMember(found);
                 setSelectedMember(found || null);
-                
+
                 // Auto-select center if member has center_id
                 const memberCenterId = found.center_id;
                 if (memberCenterId != null && memberCenterId !== undefined && memberCenterId !== '' && Array.isArray(commonData.centers) && commonData.centers.length > 0) {
                     // Try matching with both string and number comparison
                     const matchingCenter = commonData.centers.find((c: any) => {
-                        return c.id === memberCenterId || 
-                               c.id === Number(memberCenterId) || 
-                               Number(c.id) === memberCenterId ||
-                               String(c.id) === String(memberCenterId);
+                        return c.id === memberCenterId ||
+                            c.id === Number(memberCenterId) ||
+                            Number(c.id) === memberCenterId ||
+                            String(c.id) === String(memberCenterId);
                     });
                     if (matchingCenter) {
                         setCenterValue(matchingCenter.id);
@@ -1561,7 +1571,7 @@ const MemberKilosScreen = () => {
                 if (!isMountedRef.current) return;
                 setSuccessModalVisible(true);
                 setIsPrinting(true);
-                
+
                 // Refresh member totals after successful submission
                 fetchMemberTotals();
 
@@ -1713,9 +1723,9 @@ const MemberKilosScreen = () => {
                                     value={transporterValue}
                                     items={transporterItems}
                                     setOpen={setTransporterOpen}
-                                    setValue={(val: any) => { 
-                                        setTransporterValue(val as number); 
-                                        const sel = (commonData.transporters || []).find((t: any) => t.id === val); 
+                                    setValue={(val: any) => {
+                                        setTransporterValue(val as number);
+                                        const sel = (commonData.transporters || []).find((t: any) => t.id === val);
                                         if (sel) {
                                             setTransporter(sel);
                                             // Auto-select route if transporter has default_route_id
@@ -1794,9 +1804,9 @@ const MemberKilosScreen = () => {
                                     value={memberValue}
                                     items={memberItems}
                                     setOpen={setMemberOpen}
-                                    setValue={(val: any) => { 
-                                        setMemberValue(val as number); 
-                                        const sel = (commonData.members || []).find((m: any) => m.id === val); 
+                                    setValue={(val: any) => {
+                                        setMemberValue(val as number);
+                                        const sel = (commonData.members || []).find((m: any) => m.id === val);
                                         if (sel) {
                                             setMember(sel);
                                             setSelectedMember(sel);
@@ -1806,10 +1816,10 @@ const MemberKilosScreen = () => {
                                             if (memberCenterId != null && memberCenterId !== undefined && memberCenterId !== '' && Array.isArray(commonData.centers) && commonData.centers.length > 0) {
                                                 // Try matching with both string and number comparison
                                                 const matchingCenter = commonData.centers.find((c: any) => {
-                                                    return c.id === memberCenterId || 
-                                                           c.id === Number(memberCenterId) || 
-                                                           Number(c.id) === memberCenterId ||
-                                                           String(c.id) === String(memberCenterId);
+                                                    return c.id === memberCenterId ||
+                                                        c.id === Number(memberCenterId) ||
+                                                        Number(c.id) === memberCenterId ||
+                                                        String(c.id) === String(memberCenterId);
                                                 });
                                                 if (matchingCenter) {
                                                     setCenterValue(matchingCenter.id);
@@ -2129,23 +2139,9 @@ const MemberKilosScreen = () => {
 
                         {fetchingMemberTotals ? (
                             <Text>Loading...</Text>
-                        ) : memberTotals ? (
+                        ) : memberTotals !== null && memberTotals !== undefined ? (
                             <Text style={{ fontSize: 20, fontWeight: "bold", color: "#2563eb" }}>
-                                {(() => {
-                                    let total = 0;
-                                    if (typeof memberTotals === 'number') {
-                                        total = memberTotals;
-                                    } else if (Array.isArray(memberTotals)) {
-                                        // Sum total_quantity from array of entries
-                                        total = memberTotals.reduce((sum: number, entry: any) => {
-                                            return sum + (parseFloat(entry.total_quantity || entry.net || entry.quantity || 0) || 0);
-                                        }, 0);
-                                    } else if (typeof memberTotals === 'object') {
-                                        // Get total from object properties
-                                        total = parseFloat(memberTotals.total_quantity || memberTotals.total_milk || memberTotals.total || 0) || 0;
-                                    }
-                                    return `${total.toFixed(2)} KG`;
-                                })()}
+                                {typeof memberTotals === 'number' ? `${memberTotals.toFixed(2)} KG` : '0.00 KG'}
                             </Text>
                         ) : (
                             <Text style={{ color: "gray" }}>No data available</Text>

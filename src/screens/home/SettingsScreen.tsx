@@ -16,7 +16,7 @@ import Icon from "react-native-vector-icons/MaterialIcons";
 import { useNavigation } from "@react-navigation/native";
 import DropDownPicker from "react-native-dropdown-picker";
 import NetInfo from "@react-native-community/netinfo";
-import fetchCommonData from "../../components/utils/fetchCommonData";
+import fetchCommonData, { clearCommonDataCache } from "../../components/utils/fetchCommonData";
 import {
     saveMeasuringCan,
     getMeasuringCan,
@@ -73,6 +73,9 @@ const SettingsScreen: React.FC = () => {
     // Server configuration states
     const [serverDomain, setServerDomain] = useState<string>("");
     const [serverConfigSaving, setServerConfigSaving] = useState(false);
+
+    // Data clearing states
+    const [clearingData, setClearingData] = useState(false);
 
     const preferenceStorageKey = "@edairyApp:user_preferences";
     const serverConfigStorageKey = "@edairyApp:server_config";
@@ -402,6 +405,36 @@ const SettingsScreen: React.FC = () => {
         }
     };
 
+    const handleClearData = async () => {
+        Alert.alert(
+            "Clear Cached Data",
+            "This will clear all cached data (routes, centers, etc.) from your device. Fresh data will be downloaded next time you access these features.\n\nThis action cannot be undone.",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Clear Data",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            setClearingData(true);
+                            await clearCommonDataCache();
+                            Alert.alert(
+                                "Data Cleared",
+                                "All cached data has been successfully cleared. The app will download fresh data as needed.",
+                                [{ text: "OK" }]
+                            );
+                        } catch (error) {
+                            console.error("[Settings] Error clearing data:", error);
+                            Alert.alert("Error", "Failed to clear cached data. Please try again.");
+                        } finally {
+                            setClearingData(false);
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     if (loading) {
         return (
             <View style={styles.loadingContainer}>
@@ -415,9 +448,17 @@ const SettingsScreen: React.FC = () => {
         <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
             <View style={styles.headerCard}>
                 <Icon name="settings" size={32} color="#047857" />
-                <Text style={styles.headerTitle}>Settings</Text>
+                <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
+                    {user?.member_details?.full_name ||
+                        `${user?.first_name || ""} ${user?.last_name || ""}`.trim() ||
+                        user?.username ||
+                        "Settings"}
+                </Text>
                 <Text style={styles.headerSubtitle}>
                     Manage your profile, preferences, and app experience.
+                </Text>
+                <Text style={styles.headerSlogan}>
+                    Where milk farming gives you wings
                 </Text>
             </View>
 
@@ -695,6 +736,22 @@ const SettingsScreen: React.FC = () => {
                         </View>
                         <Icon name="chevron-right" size={20} color="#cbd5f5" />
                     </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.listRow, clearingData && { opacity: 0.6 }]}
+                        onPress={handleClearData}
+                        disabled={clearingData}
+                    >
+                        {clearingData ? (
+                            <ActivityIndicator size="small" color="#dc2626" />
+                        ) : (
+                            <Icon name="delete-sweep" size={20} color="#dc2626" />
+                        )}
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                            <Text style={[styles.listTitle, { color: '#dc2626' }]}>Clear Cached Data</Text>
+                            <Text style={styles.listSubtitle}>Remove all cached data to ensure fresh information.</Text>
+                        </View>
+                        <Icon name="chevron-right" size={20} color="#cbd5f5" />
+                    </TouchableOpacity>
                 </View>
             </View>
 
@@ -744,6 +801,7 @@ const styles = StyleSheet.create({
     },
     headerTitle: { fontSize: 20, fontWeight: "700", color: "#0f172a" },
     headerSubtitle: { color: "#475569", fontSize: 13 },
+    headerSlogan: { color: "#26A69A", fontSize: 12, fontStyle: "italic", marginTop: 2 },
     section: { marginBottom: 24 },
     sectionTitle: { fontSize: 16, fontWeight: "700", color: "#0f172a", marginBottom: 12 },
     card: {

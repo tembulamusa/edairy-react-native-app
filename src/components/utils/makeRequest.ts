@@ -3,8 +3,9 @@ import { getItem } from "./local-storage";
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Network alert state management
+// Network alert state management - prevents multiple alerts when offline
 let hasShownNetworkAlert = false;
+let networkAlertCount = 0; // Track how many times we've alerted about network issues
 
 // Default fallback URL
 const DEFAULT_BASE_URL = "https://dev.edairy.africa";
@@ -45,9 +46,10 @@ const makeRequest = async ({
     const isCurrentlyConnected = netInfo.isConnected && netInfo.isInternetReachable;
 
     if (!isCurrentlyConnected) {
-        // Only show alert once when connection is lost
+        // Only show alert once when connection is lost - increment counter to prevent multiple alerts
         if (!hasShownNetworkAlert) {
             hasShownNetworkAlert = true;
+            networkAlertCount++;
             Alert.alert(
                 "No Internet Connection",
                 "Please check your internet connection and try again.",
@@ -67,8 +69,9 @@ const makeRequest = async ({
         }
         return [503, { message: "No internet connection" }];
     } else {
-        // Reset alert flag when connection is restored
+        // Reset alert flag when connection is restored - allow new alerts when offline again
         hasShownNetworkAlert = false;
+        networkAlertCount = 0;
     }
 
     // Get dynamic server URL
@@ -121,22 +124,28 @@ const makeRequest = async ({
             err.code === 'NETWORK_ERROR';
 
         if (isNetworkError) {
-            Alert.alert(
-                "Network Error",
-                "Unable to connect to the server. Please check your internet connection.",
-                [
-                    { text: "OK", style: "default" },
-                    {
-                        text: "Retry",
-                        onPress: () => {
-                            setTimeout(() => {
-                                makeRequest({ url, method, data, use_jwt, responseType, isFormData });
-                            }, 1000);
+            // Only show network error alert if we haven't already alerted about connectivity issues
+            if (!hasShownNetworkAlert) {
+                hasShownNetworkAlert = true;
+                networkAlertCount++;
+                Alert.alert(
+                    "Network Error",
+                    "Unable to connect to the server. Please check your internet connection.",
+                    [
+                        { text: "OK", style: "default" },
+                        {
+                            text: "Retry",
+                            onPress: () => {
+                                setTimeout(() => {
+                                    makeRequest({ url, method, data, use_jwt, responseType, isFormData });
+                                }, 1000);
+                            },
                         },
-                    },
-                ]
-            );
+                    ]
+                );
+            }
         } else {
+            // Non-network errors should always show alerts (these are different from connectivity issues)
             Alert.alert("Error", "An unexpected error occurred. Please try again.");
         }
 

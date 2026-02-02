@@ -20,37 +20,28 @@ import { useFocusEffect } from "@react-navigation/native";
 
 interface PersonalInfoFormProps {
     onNext: (data: any) => void;
+    initialData?: any;
 }
 
-const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
+const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext, initialData }) => {
     const firstNameInputRef = useRef<TextInput>(null);
     const [dataLoaded, setDataLoaded] = useState(false);
 
-    const [routeOpen, setRouteOpen] = useState(false);
-    const [routeValue, setRouteValue] = useState<number | null>(null);
-    const [routeItems, setRouteItems] = useState<any[]>([]);
-
     const [form, setForm] = React.useState({
-        firstName: "",
-        lastName: "",
-        idNo: "",
-        gender: "",
-        dob: "",
-        routeId: "",
-        routeName: "",
-        phone: "",
-        secondaryPhone: "",
-        maritalStatus: "",
-        membershipNo: "",
-        birthCity: "",
-        idDateOfIssue: "",
-        numberOfCows: "",
-        taxNumber: "",
-        dateRegistered: "",
+        firstName: initialData?.firstName || "",
+        lastName: initialData?.lastName || "",
+        idNo: initialData?.idNo || "",
+        gender: initialData?.gender || "",
+        dob: initialData?.dob || "",
+        phone: initialData?.phone || "",
+        secondaryPhone: initialData?.secondaryPhone || "",
+        maritalStatus: initialData?.maritalStatus || "",
+        birthCity: initialData?.birthCity || "",
+        idDateOfIssue: initialData?.idDateOfIssue || "",
+        taxNumber: initialData?.taxNumber || "",
     });
 
     const [showDatePicker, setShowDatePicker] = React.useState(false);
-    const [showDateRegisteredPicker, setShowDateRegisteredPicker] = React.useState(false);
     const [showIdDateOfIssuePicker, setShowIdDateOfIssuePicker] = React.useState(false);
 
     const handleChange = (field: string, value: string) => {
@@ -58,27 +49,7 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
     };
 
     useEffect(() => {
-        const loadCommonData = async () => {
-            try {
-                const [routes] =
-                    await Promise.all([
-                        fetchCommonData({ name: "routes" }),
-                    ]);
-                const allData = { routes };
-                setRouteItems(
-                    (routes || []).map((r: any) => ({
-                        label: `${r.route_name} (${r.route_code})`,
-                        value: r.id,
-                        routeName: r.route_name, // Store route name separately for easy access
-                    }))
-                );
-                setDataLoaded(true);
-            } catch (err) {
-                Alert.alert("Error", `Failed to load common data ${JSON.stringify(err)}`);
-                setDataLoaded(true);
-            }
-        };
-        loadCommonData();
+        setDataLoaded(true);
     }, []);
 
     // Focus first name input when screen comes into focus and data is loaded
@@ -116,13 +87,8 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
             !form.idNo ||
             !form.gender ||
             !form.dob ||
-            !form.dateRegistered ||
             !form.idDateOfIssue ||
-            // !form.dateRegistered ||
-            !form.routeId ||
             !form.birthCity ||
-            !form.membershipNo ||
-            !form.numberOfCows ||
             !form.phone ||
             !form.maritalStatus ||
             !form.secondaryPhone
@@ -143,28 +109,12 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
         onNext(form);
     };
 
-    const validateMembership = () => {
-        if (!form.membershipNo) {
-            Alert.alert("Validation", "Please enter a membership number first.");
-            return;
-        }
-        // TODO: Replace with API call
-        Alert.alert("Validated", `Membership No ${form.membershipNo} is valid`);
-    };
 
     const onDateChange = (event: Event, selectedDate?: Date) => {
         setShowDatePicker(Platform.OS === "ios"); // keep picker open on iOS
         if (selectedDate) {
             const formatted = selectedDate.toISOString().split("T")[0]; // YYYY-MM-DD
             handleChange("dob", formatted);
-        }
-    };
-
-    const onDateRegisteredChange = (event: Event, selectedDate?: Date) => {
-        setShowDateRegisteredPicker(Platform.OS === "ios"); // keep picker open on iOS
-        if (selectedDate) {
-            const formatted = selectedDate.toISOString().split("T")[0]; // YYYY-MM-DD
-            handleChange("dateRegistered", formatted);
         }
     };
 
@@ -187,12 +137,6 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                 contentContainerStyle={styles.container}
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
-                onScrollBeginDrag={() => {
-                    // Close dropdown when ScrollView starts scrolling
-                    if (routeOpen) {
-                        setRouteOpen(false);
-                    }
-                }}
                 scrollEventThrottle={16}
             >
                 <Text style={globalStyles.pageTitle}>Member Registration</Text>
@@ -298,7 +242,7 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                         <View
                             style={[
                                 globalStyles.radioCircle,
-                                form.maritalStatus === "Female" && globalStyles.radioSelected,
+                                form.maritalStatus === "Married" && globalStyles.radioSelected,
                             ]}
                         />
                         <Text style={globalStyles.radioLabel}>Married</Text>
@@ -342,35 +286,10 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                     )}
                 </View>
 
-                {/* ID Date Registered */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        Date Registered <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TouchableOpacity
-                        style={globalStyles.inputWithIcon}
-                        onPress={() => setShowDateRegisteredPicker(true)}
-                    >
-                        <Text style={{ flex: 1, color: form.dateRegistered ? "#111827" : "#9ca3af" }}>
-                            {form.dateRegistered || "Select ID Date Registered"}
-                        </Text>
-                        <Icon name="calendar-today" size={20} color="#009688" />
-                    </TouchableOpacity>
-
-                    {showDateRegisteredPicker && (
-                        <DateTimePicker
-                            value={form.dateRegistered ? new Date(form.dateRegistered) : new Date()}
-                            mode="date"
-                            display="spinner" // 👈 works on both iOS & Android
-                            onChange={onDateRegisteredChange}
-                        />
-                    )}
-                </View>
-
                 {/* ID Date of Issue */}
                 <View>
                     <Text style={globalStyles.label}>
-                        ID Date of Issue
+                        ID Date of Issue <Text style={styles.required}>*</Text>
                     </Text>
                     <TouchableOpacity
                         style={globalStyles.inputWithIcon}
@@ -390,45 +309,6 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                             onChange={onIdDateOfIssueChange}
                         />
                     )}
-                </View>
-
-
-                {/* Route */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        Select Route <Text style={globalStyles.required}>*</Text>
-                    </Text>
-                    <View style={styles.col}>
-                        <DropDownPicker
-                            open={routeOpen}
-                            style={[globalStyles.input, styles.dropdown]}
-                            value={routeValue}
-                            items={routeItems}
-                            setOpen={setRouteOpen}
-                            setValue={(callback) => {
-                                const value = callback(routeValue);
-                                setRouteValue(value);
-                                // Find the selected route to get its name
-                                const selectedRoute = routeItems.find(item => item.value === value);
-                                // Use routeName if available, otherwise use label
-                                const routeName = selectedRoute ? (selectedRoute.routeName || selectedRoute.label) : "";
-                                handleChange("routeId", value?.toString() || "");
-                                handleChange("routeName", routeName);
-                            }}
-                            setItems={setRouteItems}
-                            placeholder="Select route"
-                            searchable
-                            renderListItem={renderDropdownItem}
-                            zIndex={4000}
-                            zIndexInverse={3000}
-                            listMode="SCROLLVIEW"
-                            maxHeight={300}
-                            scrollViewProps={{
-                                nestedScrollEnabled: true,
-                            }}
-                            dropDownContainerStyle={styles.dropdownContainer}
-                        />
-                    </View>
                 </View>
 
                 {/* Phone No */}
@@ -470,33 +350,6 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext }) => {
                     />
                 </View>
 
-                {/* Number of Cows */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        Number of Cows <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TextInput
-                        style={[globalStyles.input, styles.input]}
-                        placeholder="Enter Number of Cows"
-                        value={form.numberOfCows}
-                        onChangeText={(v) => handleChange("numberOfCows", v)}
-                        keyboardType="numeric"
-                    />
-                </View>
-
-                {/* Membership Number */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        Membership Number <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TextInput
-                        style={[globalStyles.input, styles.input]}
-                        placeholder="Enter Membership Number"
-                        value={form.membershipNo}
-                        onChangeText={(v) => handleChange("membershipNo", v)}
-                        keyboardType="default"
-                    />
-                </View>
                 {/* Membership Number */}
                 <View>
                     <Text style={globalStyles.label}>
@@ -525,19 +378,6 @@ const styles = StyleSheet.create({
     container: {
         padding: 20,
         paddingBottom: 100, // Extra padding for bottom tab bar (60px) + keyboard clearance
-    },
-    col: {
-        zIndex: 4000,
-    },
-    dropdown: {
-        borderWidth: 1,
-        borderColor: "#d1d5db",
-        borderRadius: 8,
-    },
-    dropdownContainer: {
-        borderWidth: 1,
-        borderColor: "#d1d5db",
-        borderRadius: 8,
     },
     input: {
         borderWidth: 1,

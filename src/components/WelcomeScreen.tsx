@@ -55,7 +55,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ visible, onComplete }) =>
             <Image
               source={require('../assets/images/profile.png')}
               style={styles.logo}
-              resizeMode="contain"
+              resizeMode="cover"
             />
           </View>
 
@@ -98,7 +98,7 @@ const styles = StyleSheet.create({
   logo: {
     width: 120,
     height: 120,
-    borderRadius: 1000,
+    borderRadius: 60,
     borderWidth: 4,
     borderColor: 'rgba(255, 255, 255, 0.3)',
   },

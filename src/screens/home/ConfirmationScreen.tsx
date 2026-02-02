@@ -13,21 +13,27 @@ import type { Asset } from "react-native-image-picker";
 import { globalStyles } from "../../styles";
 
 type PersonalInfo = {
-    membershipNo: string;
     firstName: string;
     lastName: string;
     idNo: string;
     gender: string;
     dob: string;
-    route: string;
-    routeId?: string;
-    routeName?: string;
     phone: string;
-    bank: string;
-    accountNo: string;
-    numberOfCows?: string;
-    taxNumber?: string;
+    secondaryPhone: string;
+    maritalStatus: string;
     birthCity?: string;
+    idDateOfIssue?: string;
+    taxNumber?: string;
+};
+
+type DBUInfo = {
+    dateRegistered: string;
+    routeId: string;
+    routeName?: string;
+    centerId: string;
+    centerName?: string;
+    numberOfCows: string;
+    membershipNo: string;
 };
 
 type NextOfKin = {
@@ -43,6 +49,7 @@ type IdUploads = {
 
 export interface ConfirmationData {
     personalInfo: PersonalInfo;
+    dbuInfo: DBUInfo;
     nextOfKin: NextOfKin;
     idUploads?: IdUploads;
 }
@@ -56,6 +63,7 @@ export interface ConfirmationData {
 interface Props {
     data: ConfirmationData;
     onEditPersonal?: () => void;
+    onEditDBUInfo?: () => void;
     onEditNextOfKin?: () => void;
     onEditIDs?: () => void;
     onFinish?: () => void;
@@ -64,6 +72,7 @@ interface Props {
 export default function ConfirmationScreen({
     data,
     onEditPersonal,
+    onEditDBUInfo,
     onEditNextOfKin,
     onEditIDs,
     onFinish,
@@ -83,7 +92,7 @@ export default function ConfirmationScreen({
         });
     };
 
-    const { personalInfo, nextOfKin, idUploads } = data;
+    const { personalInfo, dbuInfo, nextOfKin, idUploads } = data;
 
     const renderRow = (label: string, value?: string | null) => (
         <View style={globalStyles.row}>
@@ -110,17 +119,37 @@ export default function ConfirmationScreen({
                     </TouchableOpacity>
                 </View>
 
-                {renderRow("Membership No", personalInfo.membershipNo)}
                 {renderRow("First Name", personalInfo.firstName)}
                 {renderRow("Last Name", personalInfo.lastName)}
                 {renderRow("ID No", personalInfo.idNo)}
                 {renderRow("Gender", personalInfo.gender)}
                 {renderRow("Date of Birth", personalInfo.dob)}
-                {renderRow("Route", personalInfo.routeName || personalInfo.routeId || "-")}
+                {renderRow("Marital Status", personalInfo.maritalStatus)}
                 {renderRow("Phone", personalInfo.phone)}
-                {renderRow("Number of Cows", personalInfo.numberOfCows)}
+                {renderRow("Alternative Phone", personalInfo.secondaryPhone)}
+                {renderRow("ID Date of Issue", personalInfo.idDateOfIssue)}
                 {renderRow("Tax Number", personalInfo.taxNumber)}
                 {renderRow("Birth City", personalInfo.birthCity)}
+            </View>
+
+            {/* DBU Info Card */}
+            <View style={globalStyles.card}>
+                <View style={globalStyles.cardHeader}>
+                    <Text style={globalStyles.cardTitle}>DBU Information</Text>
+                    <TouchableOpacity
+                        onPress={onEditDBUInfo}
+                        style={globalStyles.smallEditBtn}
+                        activeOpacity={0.8}
+                    >
+                        <Text style={globalStyles.smallEditText}>Edit</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {renderRow("Membership No", dbuInfo.membershipNo)}
+                {renderRow("Date Registered", dbuInfo.dateRegistered)}
+                {renderRow("Route", dbuInfo.routeName || dbuInfo.routeId || "-")}
+                {renderRow("Center", dbuInfo.centerName || dbuInfo.centerId || "-")}
+                {renderRow("Number of Cows", dbuInfo.numberOfCows)}
             </View>
 
             {/* Next of Kin Card */}
@@ -136,9 +165,9 @@ export default function ConfirmationScreen({
                     </TouchableOpacity>
                 </View>
 
-                {renderRow("Full Name", nextOfKin.nextOfKinFullName)}
-                {renderRow("Phone", nextOfKin.nextOfKinPhone)}
-                {renderRow("Relationship", nextOfKin.nextOfKinRelationship)}
+                {renderRow("Full Name", nextOfKin.nextOfKinFullName || nextOfKin.fullName)}
+                {renderRow("Phone", nextOfKin.nextOfKinPhone || nextOfKin.phone)}
+                {renderRow("Relationship", nextOfKin.nextOfKinRelationship || nextOfKin.relationship)}
             </View>
 
             {/* ID Uploads Card */}

@@ -84,7 +84,7 @@ const LaunchScreen: React.FC<LaunchScreenProps> = ({ visible }) => {
           <Image
             source={require('../assets/images/profile.png')}
             style={styles.logo}
-            resizeMode="contain"
+            resizeMode="cover"
           />
           <ActivityIndicator size="large" color="#FFFFFF" style={styles.spinner} />
           <Animated.Text style={[styles.mainMessage, { transform: [{ translateY: bounceAnim }] }]}>
@@ -138,7 +138,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     marginBottom: 20,
-    borderRadius: 1000,
+    borderRadius: 40,
   },
   spinner: {
     marginBottom: 20,

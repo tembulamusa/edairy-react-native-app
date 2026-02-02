@@ -5,6 +5,7 @@ import type { Asset } from "react-native-image-picker";
 
 import ConfirmationScreen, { ConfirmationData } from "./ConfirmationScreen";
 import PersonalInfoForm from "../../components/forms/PersonalInfo";
+import DBUInfoForm from "../../components/forms/DBUInfo";
 import NextOfKin from "../../components/forms/NextOfKin";
 import IdFrontCapture from "../../components/forms/IdFrontCapture";
 import IdBackCapture from "../../components/forms/IdBackCapture";
@@ -30,7 +31,6 @@ export default function RegistrationWizard() {
 
     const [data, setData] = useState<ConfirmationData>({
         personalInfo: {
-            membershipNo: "",
             firstName: "",
             lastName: "",
             idNo: "",
@@ -38,13 +38,19 @@ export default function RegistrationWizard() {
             maritalStatus: "",
             secondaryPhone: "",
             dob: "",
-            dateRegistered: "",
             idDateOfIssue: "",
-            routeId: "",
             phone: "",
-            numberOfCows: "",
             birthCity: "",
             taxNumber: "",
+        },
+        dbuInfo: {
+            dateRegistered: "",
+            routeId: "",
+            routeName: "",
+            centerId: "",
+            centerName: "",
+            numberOfCows: "",
+            membershipNo: "",
         },
         nextOfKin: {
             nextOfKinFullName: "",
@@ -86,19 +92,22 @@ export default function RegistrationWizard() {
     const goBack = () => setStep((prev) => Math.max(0, prev - 1));
 
     const registerMember = async (payload: ConfirmationData) => {
-
+        // Alert.alert("The data submitted successfully!", JSON.stringify(payload));
         try {
             setLoading(true);
 
             const formData = new FormData();
 
-            // personalInfo - exclude routeName as we only submit routeId
+            // Merge personalInfo and dbuInfo
+            const mergedData = { ...payload.personalInfo, ...payload.dbuInfo };
+
+            // personalInfo + dbuInfo - exclude routeName and centerName as we only submit IDs
             // Map dateRegistered to dateRegistred for backend
             // Ensure all fields are included even if empty (including idDateOfIssue)
-            Object.entries(payload.personalInfo).forEach(([key, value]) => {
-                if (key !== "routeName") {
+            Object.entries(mergedData).forEach(([key, value]) => {
+                if (key !== "routeName" && key !== "centerName") {
                     // Map dateRegistered to dateRegistred for backend
-                    const formKey = key === "dateRegistered" ? "dateRegistred" : key;
+                    const formKey = key === "dateRegistered" ? "dateRegistered" : key;
                     // Always append, even if value is empty string
                     formData.append(formKey, value !== undefined && value !== null ? value : "");
                 }
@@ -139,13 +148,45 @@ export default function RegistrationWizard() {
             if ([200, 201].includes(status)) {
                 showAlert(
                     "Success",
-                    "Member registered successfully!",
+                    "Member registered successfully! Starting new registration.",
                     "check-circle",
                     "success",
                     () => {
                         setAlertVisible(false);
-                        navigation.navigate("Members" as never, {
-                            screen: "MembersList" as never,
+                        // Reset form to start fresh registration
+                        setStep(0);
+                        setData({
+                            personalInfo: {
+                                firstName: "",
+                                lastName: "",
+                                idNo: "",
+                                gender: "",
+                                maritalStatus: "",
+                                secondaryPhone: "",
+                                dob: "",
+                                idDateOfIssue: "",
+                                phone: "",
+                                birthCity: "",
+                                taxNumber: "",
+                            },
+                            dbuInfo: {
+                                dateRegistered: "",
+                                routeId: "",
+                                routeName: "",
+                                centerId: "",
+                                centerName: "",
+                                numberOfCows: "",
+                                membershipNo: "",
+                            },
+                            nextOfKin: {
+                                nextOfKinFullName: "",
+                                nextOfKinPhone: "",
+                                nextOfKinRelationship: "",
+                            },
+                            idUploads: {
+                                idFront: null,
+                                idBack: null,
+                            },
                         });
                     }
                 );
@@ -177,10 +218,23 @@ export default function RegistrationWizard() {
                         setData((prev) => ({ ...prev, personalInfo }));
                         goNext();
                     }}
+                    initialData={data.personalInfo}
                 />
             );
             break;
         case 1:
+            content = (
+                <DBUInfoForm
+                    onNext={(dbuInfo) => {
+                        setData((prev) => ({ ...prev, dbuInfo }));
+                        goNext();
+                    }}
+                    onPrevious={goBack}
+                    initialData={data.dbuInfo}
+                />
+            );
+            break;
+        case 2:
             content = (
                 <NextOfKin
                     onNext={(nextOfKin) => {
@@ -188,10 +242,11 @@ export default function RegistrationWizard() {
                         goNext();
                     }}
                     onPrevious={goBack}
+                    initialData={data.nextOfKin}
                 />
             );
             break;
-        case 2:
+        case 3:
             content = (
                 <IdFrontCapture
                     onNext={(idFront?: Asset) => {
@@ -202,10 +257,11 @@ export default function RegistrationWizard() {
                         goNext();
                     }}
                     onPrevious={goBack}
+                    initialImage={data.idUploads?.idFront}
                 />
             );
             break;
-        case 3:
+        case 4:
             content = (
                 <IdBackCapture
                     onNext={(idBack?: Asset) => {
@@ -216,6 +272,7 @@ export default function RegistrationWizard() {
                         goNext();
                     }}
                     onPrevious={goBack}
+                    initialImage={data.idUploads?.idBack}
                 />
             );
             break;
@@ -224,8 +281,9 @@ export default function RegistrationWizard() {
                 <ConfirmationScreen
                     data={data}
                     onEditPersonal={() => setStep(0)}
-                    onEditNextOfKin={() => setStep(1)}
-                    onEditIDs={() => setStep(2)}
+                    onEditDBUInfo={() => setStep(1)}
+                    onEditNextOfKin={() => setStep(2)}
+                    onEditIDs={() => setStep(3)}
                     onFinish={() => registerMember(data)}
                 />
             );
