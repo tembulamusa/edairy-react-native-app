@@ -108,6 +108,11 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
             return;
         }
 
+        if (!activeCashout?.uuid) {
+            setErrors(["Invalid cashout data. Please try again."]);
+            return;
+        }
+
         try {
             setLoading(true);
             setMessage("");
@@ -115,7 +120,7 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
             const [status, response] = await makeRequest({
                 url: "loan-acceptance-otp-confirm",
                 method: "POST",
-                data: { otp, id: activeCashout.uuid },
+                data: { otp, id: activeCashout.uuid } as any,
             });
             if ([200, 201].includes(status)) {
                 setMessage("OTP confirmed successfully.");
@@ -145,44 +150,48 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
                         keyboardShouldPersistTaps="handled"
                     >
                         <View style={styles.modalContent}>
-                            <Text style={styles.modalTitle}>Confirm Cashout</Text>
-                            <Text>Cashout amount: {amount} KES</Text>
+                            <View style={styles.titleSection}>
+                                <Text style={styles.modalTitle}>Confirm Cashout</Text>
+                            </View>
+                            <View style={styles.contentSection}>
+                                    <Text>Cashout amount: {amount} KES</Text>
 
-                            {loading && <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 10 }} />}
-                            {message ? <Text style={styles.message}>{message}</Text> : null}
+                                {loading && <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 10 }} />}
+                                {message ? <Text style={styles.message}>{message}</Text> : null}
 
-                            {errors?.map((err, idx) => (
-                                <Text key={idx} style={{ color: "red", marginBottom: 2 }}>{err}</Text>
-                            ))}
+                                {errors?.map((err, idx) => (
+                                    <Text key={idx} style={{ color: "red", marginBottom: 2 }}>{err}</Text>
+                                ))}
 
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Enter OTP"
-                                value={otp}
-                                onChangeText={setOtp}
-                                keyboardType="numeric"
-                                maxLength={6}
-                            />
+                                <TextInput
+                                    style={styles.input}
+                                    placeholder="Enter OTP"
+                                    value={otp}
+                                    onChangeText={setOtp}
+                                    keyboardType="numeric"
+                                    maxLength={6}
+                                />
 
-                            <TouchableOpacity onPress={handleRequestOtp}>
-                                <Text style={styles.resendLink}>Resend OTP</Text>
-                            </TouchableOpacity>
-
-                            <View style={styles.modalActions}>
-                                <TouchableOpacity
-                                    style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
-                                    onPress={handleConfirmOtp}
-                                    disabled={!otp}
-                                >
-                                    <Text style={styles.modalButtonText}>Confirm OTP</Text>
+                                <TouchableOpacity onPress={handleRequestOtp}>
+                                    <Text style={styles.resendLink}>Resend OTP</Text>
                                 </TouchableOpacity>
 
-                                <TouchableOpacity
-                                    style={[styles.modalButton, { backgroundColor: "gray" }]}
-                                    onPress={onClose}
-                                >
-                                    <Text style={styles.modalButtonText}>Cancel</Text>
-                                </TouchableOpacity>
+                                <View style={styles.modalActions}>
+                                    <TouchableOpacity
+                                        style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
+                                        onPress={handleConfirmOtp}
+                                        disabled={!otp}
+                                    >
+                                        <Text style={styles.modalButtonText} numberOfLines={1}>Confirm OTP</Text>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        style={[styles.modalButton, { backgroundColor: "gray" }]}
+                                        onPress={onClose}
+                                    >
+                                        <Text style={styles.modalButtonText} numberOfLines={1}>Cancel</Text>
+                                    </TouchableOpacity>
+                                </View>
                             </View>
                         </View>
                     </ScrollView>
@@ -202,16 +211,27 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
     modalContent: {
-        width: "90%",
+        minWidth: "90%",
+        width: "100%",
         backgroundColor: "#fff",
-        padding: 20,
         borderRadius: 12,
+    },
+    titleSection: {
+        width: "100%",
+        backgroundColor: "#0f766e",
+        paddingVertical: 20,
+        paddingHorizontal: 20,
+        borderTopLeftRadius: 12,
+        borderTopRightRadius: 12,
     },
     modalTitle: {
         fontSize: 18,
         fontWeight: "700",
-        marginBottom: 16,
-        color: "#0f766e",
+        color: "#fff",
+        textAlign: "center",
+    },
+    contentSection: {
+        padding: 20,
     },
     input: {
         borderWidth: 1,
