@@ -178,7 +178,7 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
 
                                 <View style={styles.modalActions}>
                                     <TouchableOpacity
-                                        style={[styles.modalButton, { backgroundColor: "gray" }]}
+                                        style={[styles.cancelButton, { backgroundColor: "gray" }]}
                                         onPress={onClose}
                                     >
                                         <Text style={styles.modalButtonText} numberOfLines={1}>Cancel</Text>
@@ -261,6 +261,13 @@ const styles = StyleSheet.create({
         flex: 1,
         marginHorizontal: 5,
         paddingVertical: 10,
+        borderRadius: 8,
+        alignItems: "center",
+    },
+    cancelButton: {
+        flex: 0.6,
+        marginHorizontal: 5,
+        paddingVertical: 8,
         borderRadius: 8,
         alignItems: "center",
     },
