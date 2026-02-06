@@ -64,7 +64,10 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
                 const newNextLevel = newMember?.next_level?.toLowerCase() ?? "pending";
 
                 // Stabilize nextLevel to prevent flickering
-                if (stableNextLevel === newNextLevel) {
+                if (stableNextLevel === null) {
+                    // Initialize on first load
+                    setStableNextLevel(newNextLevel);
+                } else if (stableNextLevel === newNextLevel) {
                     nextLevelChangeCount.current = 0; // Reset counter when stable
                 } else {
                     nextLevelChangeCount.current += 1;
@@ -106,7 +109,10 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
         }
 
         // Stabilize balance to prevent flickering
-        if (stableBalance === newBalance) {
+        if (stableBalance === null) {
+            // Initialize on first load
+            setStableBalance(newBalance);
+        } else if (stableBalance === newBalance) {
             balanceChangeCount.current = 0; // Reset counter when stable
         } else {
             balanceChangeCount.current += 1;
@@ -122,17 +128,15 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
     useEffect(() => {
         if (!memberId) return;
 
+        // Clear stable values when member changes
+        setStableNextLevel(null);
+        setStableBalance(null);
+        nextLevelChangeCount.current = 0;
+        balanceChangeCount.current = 0;
+
         const runInitial = async () => {
             await refreshMemberData();
             await updateMemberBalance();
-
-            // Initialize stable values on first load
-            if (selectedMember && stableNextLevel === null) {
-                setStableNextLevel(selectedMember?.next_level?.toLowerCase() ?? "pending");
-            }
-            if (memberWalletBalanceDetails && stableBalance === null) {
-                setStableBalance(memberWalletBalanceDetails.currentBalance);
-            }
         };
 
         runInitial();
@@ -143,7 +147,7 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
         }, 20000); // every 20 seconds
 
         return () => clearInterval(interval);
-    }, [memberId, selectedMember, memberWalletBalanceDetails]);
+    }, [memberId]); // Only depend on memberId to prevent cascading effects
 
 
     if (!selectedMember) {
