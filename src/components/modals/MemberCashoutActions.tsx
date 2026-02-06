@@ -27,11 +27,11 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
     const [loading, setLoading] = useState(false);
     const [memberWalletBalanceDetails, setMemberWalletBalanceDetails] = useState(null);
 
-    // Add stable UI state to prevent flickering
-    const [stableNextLevel, setStableNextLevel] = useState<string | null>(null);
-    const [stableBalance, setStableBalance] = useState<number | null>(null);
+    // Use refs to avoid state changes that trigger re-renders
+    const stableNextLevel = React.useRef<string | null>(null);
+    const stableBalance = React.useRef<number | null>(null);
     const nextLevelChangeCount = React.useRef(0);
-    const balanceChangeCount = React.useRef(0); // Track balance changes to prevent UI flickering
+    const balanceChangeCount = React.useRef(0);
 
     const refreshMemberData = async () => {
         try {
@@ -64,16 +64,16 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
                 const newNextLevel = newMember?.next_level?.toLowerCase() ?? "pending";
 
                 // Stabilize nextLevel to prevent flickering
-                if (stableNextLevel === null) {
+                if (stableNextLevel.current === null) {
                     // Initialize on first load
-                    setStableNextLevel(newNextLevel);
-                } else if (stableNextLevel === newNextLevel) {
+                    stableNextLevel.current = newNextLevel;
+                } else if (stableNextLevel.current === newNextLevel) {
                     nextLevelChangeCount.current = 0; // Reset counter when stable
                 } else {
                     nextLevelChangeCount.current += 1;
                     // Only update stable state after 2 consecutive same values
                     if (nextLevelChangeCount.current >= 2) {
-                        setStableNextLevel(newNextLevel);
+                        stableNextLevel.current = newNextLevel;
                         nextLevelChangeCount.current = 0;
                     }
                 }
@@ -109,16 +109,16 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
         }
 
         // Stabilize balance to prevent flickering
-        if (stableBalance === null) {
+        if (stableBalance.current === null) {
             // Initialize on first load
-            setStableBalance(newBalance);
-        } else if (stableBalance === newBalance) {
+            stableBalance.current = newBalance;
+        } else if (stableBalance.current === newBalance) {
             balanceChangeCount.current = 0; // Reset counter when stable
         } else {
             balanceChangeCount.current += 1;
             // Only update stable state after 2 consecutive same values
             if (balanceChangeCount.current >= 2) {
-                setStableBalance(newBalance);
+                stableBalance.current = newBalance;
                 balanceChangeCount.current = 0;
             }
         }
@@ -129,8 +129,8 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
         if (!memberId) return;
 
         // Clear stable values when member changes
-        setStableNextLevel(null);
-        setStableBalance(null);
+        stableNextLevel.current = null;
+        stableBalance.current = null;
         nextLevelChangeCount.current = 0;
         balanceChangeCount.current = 0;
 
@@ -161,8 +161,8 @@ const MemberCashoutActions: React.FC<MemberCashoutActionsProps> = ({
     }
 
     // Use stable values to prevent flickering
-    const nextLevel = stableNextLevel || selectedMember?.next_level?.toLowerCase() || "pending";
-    const currentBalance = stableBalance !== null ? stableBalance : memberWalletBalanceDetails?.currentBalance || 0;
+    const nextLevel = stableNextLevel.current || selectedMember?.next_level?.toLowerCase() || "pending";
+    const currentBalance = stableBalance.current !== null ? stableBalance.current : memberWalletBalanceDetails?.currentBalance || 0;
 
     // ---- Case: Needs Liveness ----
     if (nextLevel === "liveness") {
