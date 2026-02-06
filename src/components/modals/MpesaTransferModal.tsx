@@ -107,6 +107,7 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
                 data: data as any,
                 method: "POST",
             });
+            Alert.alert("Error", JSON.stringify(response));
             if ([200, 201].includes(status)) {
                 setMessage("OTP has been sent to your phone.");
                 if (!(response?.scaId && response?.transferData)) {
@@ -201,134 +202,137 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
                         keyboardShouldPersistTaps="handled"
                     >
                         <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>Confirm Cashout</Text>
-                    <Text>Amount: {amount} KES</Text>
-                    <Text>Transfer type: {transferType}</Text>
-
-                    {loading && (
-                        <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 10 }} />
-                    )}
-
-                    {message ? <Text style={styles.message}>{message}</Text> : null}
-
-                    {errors?.length > 0 && (
-                        <View>
-                            {errors.map((err, idx) => (
-                                <Text key={idx} style={{ color: "red" }}>
-                                    {err}
-                                </Text>
-                            ))}
-                        </View>
-                    )}
-
-                    {/* Show toggle buttons for members only and M-Pesa transfers */}
-                    {isMemberOnly && transferType === "mpesa" && !scaId && (
-                        <>
-                            <View style={styles.toggleContainer}>
-                                <TouchableOpacity
-                                    onPress={() => handleToggleNumber(true)}
-                                    style={[
-                                        styles.toggleButton,
-                                        useMyNumber && styles.toggleButtonActive
-                                    ]}
-                                >
-                                    <Text style={[
-                                        styles.toggleButtonText,
-                                        useMyNumber && styles.toggleButtonTextActive
-                                    ]}>
-                                        My Number
-                                    </Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    onPress={() => handleToggleNumber(false)}
-                                    style={[
-                                        styles.toggleButton,
-                                        !useMyNumber && styles.toggleButtonActive
-                                    ]}
-                                >
-                                    <Text style={[
-                                        styles.toggleButtonText,
-                                        !useMyNumber && styles.toggleButtonTextActive
-                                    ]}>
-                                        Other Number
-                                    </Text>
-                                </TouchableOpacity>
+                            <View style={styles.titleSection}>
+                                <Text style={styles.modalTitle}>Confirm Withdrawal</Text>
                             </View>
+                            <View style={styles.contentSection}>
+                                <Text>Amount: {amount} KES</Text>
+                                <Text>Transfer type: {transferType}</Text>
 
-                            {useMyNumber && (
-                                <View style={styles.phoneDisplayContainer}>
-                                    <Text style={styles.phoneLabel}>To: {userPhoneNumber}</Text>
+                            {loading && (
+                                <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 10 }} />
+                            )}
+
+                            {message ? <Text style={styles.message}>{message}</Text> : null}
+
+                            {errors?.length > 0 && (
+                                <View>
+                                    {errors.map((err, idx) => (
+                                        <Text key={idx} style={{ color: "red" }}>
+                                            {err}
+                                        </Text>
+                                    ))}
                                 </View>
                             )}
-                        </>
-                    )}
 
-                    {/* Show phone input for members when using other number and M-Pesa transfers */}
-                    {isMemberOnly && transferType === "mpesa" && showPhoneInput && !scaId && (
-                        <>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Enter phone number (e.g., 254712345678)"
-                                value={alternativePhone}
-                                onChangeText={setAlternativePhone}
-                                keyboardType="numeric"
-                            />
-                        </>
-                    )}
+                            {/* Show toggle buttons for members only and M-Pesa transfers */}
+                            {isMemberOnly && transferType === "mpesa" && !scaId && (
+                                <>
+                                    <View style={styles.toggleContainer}>
+                                        <TouchableOpacity
+                                            onPress={() => handleToggleNumber(true)}
+                                            style={[
+                                                styles.toggleButton,
+                                                useMyNumber && styles.toggleButtonActive
+                                            ]}
+                                        >
+                                            <Text style={[
+                                                styles.toggleButtonText,
+                                                useMyNumber && styles.toggleButtonTextActive
+                                            ]}>
+                                                My Number
+                                            </Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            onPress={() => handleToggleNumber(false)}
+                                            style={[
+                                                styles.toggleButton,
+                                                !useMyNumber && styles.toggleButtonActive
+                                            ]}
+                                        >
+                                            <Text style={[
+                                                styles.toggleButtonText,
+                                                !useMyNumber && styles.toggleButtonTextActive
+                                            ]}>
+                                                Other Number
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
 
-                    {/* Action buttons for members and M-Pesa transfers */}
-                    {isMemberOnly && transferType === "mpesa" && !scaId && (
-                        <View style={styles.memberActionButtons}>
-                            {/* <TouchableOpacity
+                                    {useMyNumber && (
+                                        <View style={styles.phoneDisplayContainer}>
+                                            <Text style={styles.phoneLabel}>To: {userPhoneNumber}</Text>
+                                        </View>
+                                    )}
+                                </>
+                            )}
+
+                            {/* Show phone input for members when using other number and M-Pesa transfers */}
+                            {isMemberOnly && transferType === "mpesa" && showPhoneInput && !scaId && (
+                                <>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="Enter phone number (e.g., 254712345678)"
+                                        value={alternativePhone}
+                                        onChangeText={setAlternativePhone}
+                                        keyboardType="numeric"
+                                    />
+                                </>
+                            )}
+
+                            {/* Action buttons for members and M-Pesa transfers */}
+                            {isMemberOnly && transferType === "mpesa" && !scaId && (
+                                <View style={styles.memberActionButtons}>
+                                    {/* <TouchableOpacity
                                 onPress={onClose}
                                 style={[styles.modalButton, { backgroundColor: "gray", flex: 1, marginRight: 5 }]}
                             >
                                 <Text style={styles.modalButtonText}>Cancel</Text>
                             </TouchableOpacity> */}
-                            <TouchableOpacity
-                                onPress={handleRequestOtpWithPhone}
-                                style={[styles.modalButton, { backgroundColor: "#0f766e", flex: 1, marginLeft: 5 }]}
-                            >
-                                <Text style={styles.modalButtonText}>Proceed</Text>
-                            </TouchableOpacity>
-                        </View>
-                    )}
+                                    <TouchableOpacity
+                                        onPress={handleRequestOtpWithPhone}
+                                        style={[styles.modalButton, { backgroundColor: "#0f766e", flex: 1, marginLeft: 5 }]}
+                                    >
+                                        <Text style={styles.modalButtonText}>Proceed</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
 
-                    {/* Only show OTP input if type is not wallet and OTP has been requested */}
-                    {transferType && scaId && (
-                        <>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Enter OTP"
-                                value={otp}
-                                onChangeText={setOtp}
-                                keyboardType="numeric"
-                                maxLength={6}
-                            />
-                            <TouchableOpacity onPress={() => handleRequestOtp(alternativePhone || undefined)}>
-                                <Text style={styles.resendLink}>Resend OTP</Text>
-                            </TouchableOpacity>
-                        </>
-                    )}
+                            {/* Only show OTP input if type is not wallet and OTP has been requested */}
+                            {transferType && scaId && (
+                                <>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="Enter OTP"
+                                        value={otp}
+                                        onChangeText={setOtp}
+                                        keyboardType="numeric"
+                                        maxLength={6}
+                                    />
+                                    <TouchableOpacity onPress={() => handleRequestOtp(alternativePhone || undefined)}>
+                                        <Text style={styles.resendLink}>Resend OTP</Text>
+                                    </TouchableOpacity>
+                                </>
+                            )}
 
-                    <View style={styles.modalActions}>
-                        {<TouchableOpacity
-                            style={[styles.modalButton, { backgroundColor: "gray" }]}
-                            onPress={onClose}
-                        >
-                            <Text style={styles.modalButtonText}>Close</Text>
-                        </TouchableOpacity>}
-                        {transferType && scaId && (
-                            <TouchableOpacity
-                                style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
-                                onPress={handleConfirmOtp}
-                                disabled={!otp}
-                            >
-                                <Text style={styles.modalButtonText}>Confirm OTP</Text>
-                            </TouchableOpacity>
-                        )}
-
-                    </View>
+                                <View style={styles.modalActions}>
+                                    <TouchableOpacity
+                                        style={[styles.cancelButton, { backgroundColor: "gray" }]}
+                                        onPress={onClose}
+                                    >
+                                        <Text style={styles.modalButtonText} numberOfLines={1}>Close</Text>
+                                    </TouchableOpacity>
+                                    {transferType && scaId && (
+                                        <TouchableOpacity
+                                            style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
+                                            onPress={handleConfirmOtp}
+                                            disabled={!otp}
+                                        >
+                                            <Text style={styles.modalButtonText} numberOfLines={1}>Confirm OTP</Text>
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                            </View>
                         </View>
                     </ScrollView>
                 </View>
@@ -347,16 +351,27 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
     modalContent: {
-        width: "90%",
+        minWidth: "90%",
+        width: "100%",
         backgroundColor: "#fff",
-        padding: 20,
         borderRadius: 12,
+    },
+    titleSection: {
+        width: "100%",
+        backgroundColor: "#0f766e",
+        paddingVertical: 20,
+        paddingHorizontal: 20,
+        borderTopLeftRadius: 12,
+        borderTopRightRadius: 12,
     },
     modalTitle: {
         fontSize: 18,
         fontWeight: "700",
-        marginBottom: 16,
-        color: "#0f766e",
+        color: "#fff",
+        textAlign: "center",
+    },
+    contentSection: {
+        padding: 20,
     },
     input: {
         borderWidth: 1,
@@ -386,6 +401,13 @@ const styles = StyleSheet.create({
         flex: 1,
         marginHorizontal: 5,
         paddingVertical: 10,
+        borderRadius: 8,
+        alignItems: "center",
+    },
+    cancelButton: {
+        flex: 0.6,
+        marginHorizontal: 5,
+        paddingVertical: 8,
         borderRadius: 8,
         alignItems: "center",
     },
