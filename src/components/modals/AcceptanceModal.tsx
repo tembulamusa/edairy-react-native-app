@@ -178,18 +178,18 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
 
                                 <View style={styles.modalActions}>
                                     <TouchableOpacity
+                                        style={[styles.modalButton, { backgroundColor: "gray" }]}
+                                        onPress={onClose}
+                                    >
+                                        <Text style={styles.modalButtonText} numberOfLines={1}>Cancel</Text>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
                                         style={[styles.modalButton, { backgroundColor: "#0f766e" }]}
                                         onPress={handleConfirmOtp}
                                         disabled={!otp}
                                     >
                                         <Text style={styles.modalButtonText} numberOfLines={1}>Confirm OTP</Text>
-                                    </TouchableOpacity>
-
-                                    <TouchableOpacity
-                                        style={[styles.modalButton, { backgroundColor: "gray" }]}
-                                        onPress={onClose}
-                                    >
-                                        <Text style={styles.modalButtonText} numberOfLines={1}>Cancel</Text>
                                     </TouchableOpacity>
                                 </View>
                             </View>
