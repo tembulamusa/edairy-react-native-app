@@ -10,6 +10,7 @@ import {
     KeyboardAvoidingView,
     Platform,
     ScrollView,
+    Alert,
 } from "react-native";
 import SmsRetriever from "react-native-sms-retriever";
 import makeRequest from "../utils/makeRequest";
@@ -17,7 +18,7 @@ import makeRequest from "../utils/makeRequest";
 type AcceptanceModalProps = {
     visible: boolean;
     amount: string;
-    activeCashout: { id?: string; uuid?: string };
+    activeCashout: { id?: string; uuid?: string, repayment_amount: string } | null;
     onClose: () => void;
 };
 
@@ -37,6 +38,7 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
         if (visible && activeCashout?.id) {
             handleRequestOtp();
             startSmsListener();
+
         } else {
             stopSmsListener();
             setOtp("");
@@ -88,7 +90,7 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
                 method: "GET",
             });
             if ([200, 201].includes(status)) {
-                setMessage("OTP has been sent to your phone.");
+                setMessage("OTP has been sent to your phone. Enter and confirm to proceed.");
             } else {
                 setMessage(response?.message || "Failed to request OTP");
                 setErrors(response?.errors || []);
@@ -154,11 +156,10 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
                                 <Text style={styles.modalTitle}>Confirm Cashout</Text>
                             </View>
                             <View style={styles.contentSection}>
-                                    <Text>Cashout amount: {amount} KES</Text>
-
+                                <Text>Cashout amount: {amount} KES</Text>
+                                <Text style={{}}>Payable: {activeCashout?.repayment_amount || "---"} KES</Text>
                                 {loading && <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 10 }} />}
                                 {message ? <Text style={styles.message}>{message}</Text> : null}
-
                                 {errors?.map((err, idx) => (
                                     <Text key={idx} style={{ color: "red", marginBottom: 2 }}>{err}</Text>
                                 ))}
@@ -242,7 +243,9 @@ const styles = StyleSheet.create({
     },
     message: {
         fontSize: 13,
-        color: "#444",
+        color: "#222222",
+        fontWeight: "500",
+        marginTop: 8,
         marginBottom: 8,
     },
     resendLink: {

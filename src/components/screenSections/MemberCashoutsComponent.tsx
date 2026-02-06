@@ -297,6 +297,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                     visible={modalVisible}
                     activeCashout={activeCashout}
                     amount={activeCashout.amount}
+                    payableAmount={activeCashout.repayment_amount}
                     loanuid={activeCashout.uuid || ""}
                     phone={activeCashout.phone || ""}
                     onSend={() => setModalVisible(false)}
