@@ -20,11 +20,11 @@ const getServerUrl = async (): Promise<string> => {
                 // Ensure the domain has a protocol
                 let domain = config.domain.trim();
                 if (!domain.startsWith('http://') && !domain.startsWith('https://')) {
-                    domain = `http://${domain}`;
+                    domain = `https://${domain}`;
                 }
                 // Remove trailing slash if present
                 domain = domain.replace(/\/$/, '');
-                return `${domain}/api`;
+                return `${domain}/api/`;
             }
         }
     } catch (error) {
