@@ -112,7 +112,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
         const isAwaitingAcceptance =
             item.status?.toLowerCase() === "awaitingacceptance";
         const isProcessed = item.status?.toLowerCase() === "processed";
-        const isFailed = item.status?.toLowerCase() === "failed";
+        const isFailed = item.status?.toLowerCase().includes("failed");
 
 
         return (
@@ -191,7 +191,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                                 }
 
                                 Alert.alert(
-                                    "Cashout Failed",
+                                    "Transaction Failed",
                                     errorMessage
                                 );
                             } else {
