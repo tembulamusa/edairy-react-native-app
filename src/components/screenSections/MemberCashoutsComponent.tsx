@@ -116,7 +116,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
 
 
         return (
-            <View style={styles.card}>
+            <View style={[styles.card, isFailed && styles.cardFailed]}>
                 <View>
                     <Text
                         style={[
@@ -145,7 +145,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                             styles.status,
                             item.status === "completed"
                                 ? styles.statusCompleted
-                                : item.status === "failed"
+                                : item.status && item.status.toLowerCase().includes("failed")
                                     ? styles.statusFailed
                                     : isProcessed
                                         ? styles.statusProcessed
@@ -162,6 +162,9 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                             styles.actionButton,
                             isAwaitingAcceptance && {
                                 backgroundColor: "#00b341",
+                            },
+                            isFailed && {
+                                backgroundColor: "#dc2626",
                             },
                         ]}
                         onPress={() => {
@@ -380,6 +383,9 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 2 },
         shadowRadius: 6,
         elevation: 2,
+    },
+    cardFailed: {
+        opacity: 0.7,
     },
     amount: { fontSize: 16, fontWeight: "600", color: "#111827" },
     date: { fontSize: 14, color: "#6b7280", marginTop: 4 },
