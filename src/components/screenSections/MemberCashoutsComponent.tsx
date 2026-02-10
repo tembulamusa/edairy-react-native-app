@@ -18,6 +18,7 @@ type Cashout = {
     status: string;
     phone?: string;
     uuid?: string;
+    astra_remarks?: any;
 };
 
 type Transaction = {
@@ -111,6 +112,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
         const isAwaitingAcceptance =
             item.status?.toLowerCase() === "awaitingacceptance";
         const isProcessed = item.status?.toLowerCase() === "processed";
+        const isFailed = item.status?.toLowerCase() === "failed";
 
 
         return (
@@ -166,6 +168,32 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                             setActiveCashout(item);
                             if (isAwaitingAcceptance) {
                                 setModalVisible(true);
+                            } else if (isFailed && item.astra_remarks) {
+                                // Show astra_remarks message for failed cashouts
+                                let errorMessage = "Cashout failed.";
+                                try {
+                                    const remarks = typeof item.astra_remarks === 'string'
+                                        ? JSON.parse(item.astra_remarks)
+                                        : item.astra_remarks;
+
+                                    if (remarks?.message) {
+                                        errorMessage = remarks.message;
+                                    } else if (remarks?.details?.message) {
+                                        errorMessage = remarks.details.message;
+                                    } else if (remarks?.details?.errors && Array.isArray(remarks.details.errors)) {
+                                        errorMessage = remarks.details.errors.join('\n');
+                                    }
+                                } catch (e) {
+                                    // If parsing fails, use the raw astra_remarks
+                                    errorMessage = typeof item.astra_remarks === 'string'
+                                        ? item.astra_remarks
+                                        : JSON.stringify(item.astra_remarks);
+                                }
+
+                                Alert.alert(
+                                    "Cashout Failed",
+                                    errorMessage
+                                );
                             } else {
                                 Alert.alert(
                                     "Info",
