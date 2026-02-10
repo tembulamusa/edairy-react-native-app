@@ -257,7 +257,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                     data={cashouts}
                     keyExtractor={(item) => item.id}
                     renderItem={renderCashoutItem}
-                    contentContainerStyle={{ paddingBottom: 20 }}
+                    contentContainerStyle={{ paddingBottom: 10 }}
                     scrollEnabled={false}
                     nestedScrollEnabled={true}
                 />
@@ -274,7 +274,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
                 data={transactions}
                 keyExtractor={(item) => item.id}
                 renderItem={renderTransactionItem}
-                contentContainerStyle={{ paddingBottom: 20 }}
+                contentContainerStyle={{ paddingBottom: 10 }}
                 scrollEnabled={false}
                 nestedScrollEnabled={true}
             />
@@ -282,7 +282,7 @@ const CashoutsListComponent: React.FC<Props> = ({ memberId }) => {
     };
 
     return (
-        <View style={{ flex: 1 }}>
+        <View style={styles.container}>
             {/* Tabs Header */}
             <View style={styles.tabsContainer}>
                 <TouchableOpacity
@@ -345,11 +345,20 @@ export default CashoutsListComponent;
  * Styles
  -------------------------- */
 const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        backgroundColor: "#fff",
+        paddingHorizontal: 16,
+        paddingTop: 16,
+        paddingBottom: 20,
+    },
     tabsContainer: {
         flexDirection: "row",
+        backgroundColor: "#fff",
         borderBottomWidth: 1,
         borderBottomColor: "#e5e7eb",
-        marginBottom: 10,
+        marginBottom: 16,
+        paddingHorizontal: 4,
     },
     tabButton: {
         flex: 1,
@@ -385,7 +394,9 @@ const styles = StyleSheet.create({
         elevation: 2,
     },
     cardFailed: {
-        opacity: 0.7,
+        opacity: 0.5,
+        textDecorationLine: "line-through",
+        textDecorationColor: "red",
     },
     amount: { fontSize: 16, fontWeight: "600", color: "#111827" },
     date: { fontSize: 14, color: "#6b7280", marginTop: 4 },
