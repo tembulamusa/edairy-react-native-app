@@ -85,7 +85,7 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
                     const userData = JSON.parse(userDataString);
                     userGroups.push(...(userData?.user_groups || []));
                 }
-            } catch (e) {}
+            } catch (e) { }
 
             const memberOnly =
                 !userGroups.includes("transporter") &&
