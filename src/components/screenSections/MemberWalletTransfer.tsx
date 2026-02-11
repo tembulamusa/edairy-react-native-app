@@ -25,6 +25,7 @@ const MemberWalletTransfer: React.FC<MemberWalletTransferProps> = ({
     const [walletDetails, setWalletDetails] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [withdrawalCharge, setWithdrawalCharge] = useState(20); // can also be dynamic
+    const [availableBalance, setavailableBalance] = useState(0);
 
     useEffect(() => {
         if (!memberId) return;
@@ -41,13 +42,16 @@ const MemberWalletTransfer: React.FC<MemberWalletTransferProps> = ({
                 );
 
                 if ([200, 201].includes(status)) {
-                    setWalletDetails(response?.data || { currentBalance: 100 });
+                    const balance = response?.data?.availableBalance || response?.data?.currentBalance || 0;
+                    setWalletDetails(response?.data || { availableBalance: 0 });
+                    setavailableBalance(balance);
                 } else {
-                    setWalletDetails({ currentBalance: 0 });
+                    setWalletDetails({ availableBalance: 0 });
+                    setavailableBalance(0);
                 }
             } catch (error) {
                 console.error("Failed to fetch wallet details:", error);
-                setWalletDetails({ currentBalance: 0 });
+                setWalletDetails({ availableBalance: 0 });
                 Alert.alert("Error", "Failed to fetch wallet balance.");
             } finally {
                 setLoading(false);
@@ -59,7 +63,9 @@ const MemberWalletTransfer: React.FC<MemberWalletTransferProps> = ({
 
     if (!memberId) return null;
 
-    const currentBalance = walletDetails?.currentBalance ?? 0;
+    // Use availableBalance state for display, falling back to walletBalance prop or walletDetails
+    const displayBalance = availableBalance || walletBalance || walletDetails?.availableBalance || 0;
+
 
     const requestTransfer = (type: "mpesa" | "paybill" | "wallet") => {
         const amountNum = parseFloat(amount);
@@ -72,14 +78,14 @@ const MemberWalletTransfer: React.FC<MemberWalletTransferProps> = ({
 
         if (type === "mpesa") {
             totalAmount += withdrawalCharge;
-            if (totalAmount > currentBalance) {
+            if (totalAmount > displayBalance) {
                 Alert.alert(
                     "Insufficient Balance",
-                    `You need ${totalAmount} KES (amount + withdrawal charge), but your balance is only ${currentBalance} KES.`
+                    `You need ${totalAmount} KES (amount + withdrawal charge), but your balance is only ${displayBalance} KES.`
                 );
                 return;
             }
-        } else if (amountNum > currentBalance) {
+        } else if (amountNum > displayBalance) {
             Alert.alert(
                 "Insufficient Balance",
                 "Amount exceeds your wallet balance."
@@ -97,7 +103,7 @@ const MemberWalletTransfer: React.FC<MemberWalletTransferProps> = ({
                 Wallet Balance:{" "}
                 {loading
                     ? "Loading..."
-                    : `${walletBalance ?? currentBalance.toFixed(2)} KES`}
+                    : `${walletDetails?.availableBalance.toFixed(2) ?? "unavailable"} KES`}
             </Text>
 
             <TextInput
@@ -152,7 +158,7 @@ const MemberWalletTransfer: React.FC<MemberWalletTransferProps> = ({
                         // ✅ Optimistically update the balance
                         setWalletDetails((prev: any) => ({
                             ...prev,
-                            currentBalance: Math.max(0, (prev?.currentBalance ?? 0) - totalDeduction),
+                            availableBalance: Math.max(0, (prev?.availableBalance ?? 0) - totalDeduction),
                         }));
 
                         setAmount("");

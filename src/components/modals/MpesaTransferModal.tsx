@@ -48,9 +48,12 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
         } else {
             resetModal();
         }
-    }, [visible]);
+    }, [visible, transferType]);
 
     const checkUserRole = async () => {
+        // Only proceed if we have transferType
+        if (!transferType) return;
+
         try {
             const userDataString = await AsyncStorage.getItem("user");
             if (userDataString) {
@@ -67,14 +70,32 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
                 setUserPhoneNumber(userData?.member_details?.primary_phone || userData?.primary_phone || userData?.phone_number || userData?.member_phone || "");
 
                 // Auto-request OTP for wallet transfers or non-members
+                // For member users with M-Pesa, show phone selection first (don't auto-request)
                 if (!memberOnly || transferType === "wallet") {
                     handleRequestOtp();
                 }
             }
         } catch (error) {
             console.error("Error checking user role:", error);
-            // Default to auto-request if error
-            handleRequestOtp();
+            // For member users, don't auto-request on error - let them choose
+            const userGroups = [];
+            try {
+                const userDataString = await AsyncStorage.getItem("user");
+                if (userDataString) {
+                    const userData = JSON.parse(userDataString);
+                    userGroups.push(...(userData?.user_groups || []));
+                }
+            } catch (e) {}
+
+            const memberOnly =
+                !userGroups.includes("transporter") &&
+                !userGroups.includes("employee");
+
+            if (memberOnly && transferType === "mpesa") {
+                // Don't auto-request for member + mpesa on error
+            } else {
+                handleRequestOtp();
+            }
         }
     };
 
@@ -89,6 +110,7 @@ const MpesaTransferModal: React.FC<MpesaTransferModalProps> = ({
         setIsMemberOnly(false);
         setUserPhoneNumber("");
         setUseMyNumber(true);
+        setLoading(false);
     };
 
     const handleRequestOtp = async (phoneNumber?: string) => {
