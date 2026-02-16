@@ -208,7 +208,7 @@ const MemberKilosScreen = () => {
         isScanning: isScanningScale,
         isConnecting: isConnectingScale,
         disconnect: disconnectScale,
-    } = scaleHook;
+    } = scaleHook || {};
 
     // --- Printer hook for printing operations (BLE only) ---
     const printerBluetooth = useBluetoothService({ deviceType: "printer" });
@@ -286,10 +286,13 @@ const MemberKilosScreen = () => {
     // --- Update auto-connect scales to include cleanup and mounted check ---
     useEffect(() => {
         const autoConnectToLastScale = async () => {
-            if (!isMountedRef.current || !scaleSettingsLoaded) return;
+            if (!isMountedRef.current || !scaleSettingsLoaded) {
+                console.log('[MemberKilos] AUTO-CONNECT SCALE: Skipping - not mounted or settings not loaded');
+                return;
+            }
             try {
-                // Skip if already connected
-                if (connectedScaleDevice) {
+                // Skip if already connected or if hook properties are not available
+                if (connectedScaleDevice && scaleHook) {
                     try {
                         let stillConnected = false;
                         if (connectedScaleDevice.type === 'ble' && connectedScaleDevice.bleDevice) {
@@ -335,7 +338,12 @@ const MemberKilosScreen = () => {
                 }
 
                 console.log('[MemberKilos] AUTO-CONNECT SCALE: Starting device scan...');
-                scanForScaleDevices();
+                if (scanForScaleDevices) {
+                    scanForScaleDevices();
+                } else {
+                    console.log('[MemberKilos] AUTO-CONNECT SCALE: scanForScaleDevices not available');
+                    return;
+                }
 
                 // Use AbortController to cancel if component unmounts
                 const abortController = new AbortController();
@@ -351,8 +359,13 @@ const MemberKilosScreen = () => {
                 clearTimeout(timeoutId);
                 console.log('[MemberKilos] AUTO-CONNECT SCALE: Attempting connection...');
                 try {
-                    await connectToScaleDevice(deviceId);
-                    console.log('[MemberKilos] AUTO-CONNECT SCALE: ✓ Connection attempt completed');
+                    if (connectToScaleDevice) {
+                        await connectToScaleDevice(deviceId);
+                        console.log('[MemberKilos] AUTO-CONNECT SCALE: ✓ Connection attempt completed');
+                    } else {
+                        console.log('[MemberKilos] AUTO-CONNECT SCALE: connectToScaleDevice not available');
+                        return;
+                    }
                 } catch (connectError) {
                     console.error('[MemberKilos] AUTO-CONNECT SCALE: Connection error:', connectError);
                     // Clear the stored device if connection fails to prevent repeated failures
@@ -374,7 +387,7 @@ const MemberKilosScreen = () => {
         }, 2000);
 
         return () => clearTimeout(timeout);
-    }, [scaleSettingsLoaded, scaleConnectionType]); // Depend on settings being loaded and connection type
+    }, [scaleSettingsLoaded]); // Only depend on settings being loaded to prevent unnecessary re-runs
 
     // Helper: Persist printer to AsyncStorage (similar to StoreSaleModal)
     const persistLastPrinter = useCallback(async (device: any) => {
@@ -1532,6 +1545,7 @@ const MemberKilosScreen = () => {
                 transporter_id: transporterValue,
                 route_id: routeValue,
                 center_id: centerValue,
+                measuring_can_id: measuringCanValue,
                 shift_id: shiftValue,
                 cans: entries,
                 total_cans: totalCans,
