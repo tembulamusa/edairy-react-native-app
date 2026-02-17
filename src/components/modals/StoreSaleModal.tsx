@@ -767,11 +767,13 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         setValue={setCustomerType}
                         setItems={() => {}} // Read-only items
                         placeholder="Select Customer Type"
+                        placeholderStyle={styles.customerTypeDropdownText}
+                        textStyle={styles.customerTypeDropdownText}
                         listMode="SCROLLVIEW"
                         zIndex={4000}
                         zIndexInverse={500}
-                        style={styles.dropdown}
-                        dropDownContainerStyle={styles.dropdownBox}
+                        style={styles.customerTypeDropdown}
+                        dropDownContainerStyle={styles.customerTypeDropdownBox}
                         scrollViewProps={{ nestedScrollEnabled: true }}
                     />
 
@@ -1286,5 +1288,23 @@ const styles = StyleSheet.create({
     printerButtonText: {
         color: "#fff",
         fontWeight: "600",
+    },
+    customerTypeDropdown: {
+        backgroundColor: "#0f766e",
+        borderWidth: 1,
+        borderColor: "#0f766e",
+        borderRadius: 8,
+        minHeight: 50,
+    },
+    customerTypeDropdownText: {
+        color: "#ffffff",
+        fontSize: 16,
+        fontWeight: "500",
+    },
+    customerTypeDropdownBox: {
+        backgroundColor: "#ffffff",
+        borderWidth: 1,
+        borderColor: "#e5e7eb",
+        borderRadius: 8,
     },
 });
