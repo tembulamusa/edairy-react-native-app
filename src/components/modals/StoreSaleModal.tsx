@@ -772,6 +772,9 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         placeholder="Select Customer Type"
                         placeholderStyle={styles.customerTypeDropdownText}
                         textStyle={styles.customerTypeDropdownText}
+                        labelStyle={styles.customerTypeDropdownText}
+                        listItemLabelStyle={styles.customerTypeListItemText}
+                        selectedItemLabelStyle={styles.customerTypeDropdownText}
                         listMode="SCROLLVIEW"
                         zIndex={4000}
                         zIndexInverse={500}
@@ -1310,5 +1313,16 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: "#e5e7eb",
         borderRadius: 8,
+    },
+    customerTypeListItem: {
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: "#f3f4f6",
+    },
+    customerTypeListItemText: {
+        color: "#374151",
+        fontSize: 16,
+        fontWeight: "500",
     },
 });
