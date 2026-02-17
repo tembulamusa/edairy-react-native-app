@@ -245,21 +245,36 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
     // Load dropdowns whenever commonData or customerType changes
     useEffect(() => {
+        // Clear dropdown first when switching customer types
+        setMemberItems([]);
+        setMemberValue(null);
+        setMemberOpen(false);
+
         // Load member/employee items based on customer type
-        if (customerType === "member" && commonData?.members) {
-            setMemberItems([
-                ...commonData.members.map((m) => ({
-                    label: `${m?.first_name} ${m?.last_name}`,
-                    value: m.id,
-                })),
-            ]);
-        } else if (customerType === "staff" && commonData?.employees) {
-            setMemberItems([
-                ...commonData.employees.map((e) => ({
-                    label: `${e?.first_name} ${e?.last_name}`,
-                    value: e.id,
-                })),
-            ]);
+        if (customerType === "member") {
+            if (commonData?.members) {
+                setMemberItems([
+                    ...commonData.members.map((m) => ({
+                        label: `${m?.first_name} ${m?.last_name}`,
+                        value: m.id,
+                    })),
+                ]);
+            } else {
+                // Members not loaded yet, keep dropdown empty
+                console.log('StoreSaleModal: Members data not available yet');
+            }
+        } else if (customerType === "staff") {
+            if (commonData?.employees) {
+                setMemberItems([
+                    ...commonData.employees.map((e) => ({
+                        label: `${e?.first_name} ${e?.last_name}`,
+                        value: e.id,
+                    })),
+                ]);
+            } else {
+                // Employees not loaded yet, keep dropdown empty
+                console.log('StoreSaleModal: Employees data not available yet');
+            }
         } else if (customerType === "guest") {
             // For guest, show dropdown with "No Member / Guest" option
             setMemberItems([
@@ -308,13 +323,10 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
     // Reset member selection when customer type changes
     useEffect(() => {
-        if (customerType === "guest") {
-            setMemberValue(null);
-            setMemberOpen(false);
-        } else {
-            setMemberValue(null);
-            setMemberOpen(false);
-        }
+        console.log(`StoreSaleModal: Customer type changed to ${customerType}, resetting member selection`);
+        setMemberValue(null);
+        setMemberOpen(false);
+        // Note: memberItems will be updated by the other useEffect
     }, [customerType]);
 
     // Reset payment type if member unselected
