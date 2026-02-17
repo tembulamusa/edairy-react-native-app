@@ -23,12 +23,15 @@ import BluetoothConnectionModal from "./BluetoothConnectionModal";
 import useBluetoothService from "../../hooks/useBluetoothService";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+type CustomerType = "member" | "staff" | "guest";
+
 type StoreSaleModalProps = {
     visible: boolean;
     onClose: () => void;
     onSave: (formData: any) => Promise<void>;
     commonData: {
         members: { id: number; first_name: string; last_name: string }[];
+        employees?: { id: number; first_name: string; last_name: string }[];
         stores: { id: number; description: string }[];
         stock_items: Array<{
             id: number;
@@ -56,6 +59,9 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
     const [transactionDate, setTransactionDate] = useState<Date>(new Date());
     const [saving, setSaving] = useState(false);
     const [showDatePicker, setShowDatePicker] = useState(false);
+
+    // Customer type selection
+    const [customerType, setCustomerType] = useState<CustomerType>("member");
 
     // Members
     const [memberOpen, setMemberOpen] = useState(false);
@@ -237,9 +243,10 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         }
     }, [connectToPrinter, scanForPrinters, connectedPrinter, isConnectingPrinter, persistLastPrinter, connectToAnyAvailablePrinter]);
 
-    // Load dropdowns whenever commonData changes
+    // Load dropdowns whenever commonData or customerType changes
     useEffect(() => {
-        if (commonData?.members) {
+        // Load member/employee items based on customer type
+        if (customerType === "member" && commonData?.members) {
             setMemberItems([
                 { label: "No Member / Guest", value: null },
                 ...commonData.members.map((m) => ({
@@ -247,6 +254,19 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                     value: m.id,
                 })),
             ]);
+        } else if (customerType === "staff" && commonData?.employees) {
+            setMemberItems([
+                { label: "No Staff Selected", value: null },
+                ...commonData.employees.map((e) => ({
+                    label: `${e?.first_name} ${e?.last_name}`,
+                    value: e.id,
+                })),
+            ]);
+        } else if (customerType === "guest") {
+            // For guest, we don't need dropdown items
+            setMemberItems([]);
+            setMemberValue(null);
+            setMemberOpen(false);
         }
         if (commonData?.stores) {
             setStoreItems(
@@ -256,6 +276,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 }))
             );
         }
+    }, [commonData, customerType]);
         if (commonData?.stock_items) {
             setStockItems(
                 commonData.stock_items.map((s) => {
@@ -281,6 +302,12 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             );
         }
     }, [commonData]);
+
+    // Reset member selection when customer type changes
+    useEffect(() => {
+        setMemberValue(null);
+        setMemberOpen(false);
+    }, [customerType]);
 
     // Reset payment type if member unselected
     useEffect(() => {
@@ -596,7 +623,8 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             });
 
             const data: any = {
-                member_id: memberValue,
+                member_id: customerType !== "guest" ? memberValue : null,
+                customer_type: customerType,
                 store_id: storeValue,
                 transaction_date: transactionDate.toISOString().split("T")[0],
                 sale_type: paymentType,
@@ -661,25 +689,78 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         keyboardShouldPersistTaps="handled"
                         showsVerticalScrollIndicator={false}
                 >
-                    {/* Member */}
-                    <Text style={styles.label}>Member</Text>
-                    <DropDownPicker
-                        open={memberOpen}
-                        value={memberValue}
-                        items={memberItems}
-                        setOpen={setMemberOpen}
-                        setValue={setMemberValue}
-                        setItems={setMemberItems}
-                        placeholder="Select Member"
-                        listMode="SCROLLVIEW"
-                        zIndex={3000}
-                        zIndexInverse={1000}
-                        searchable={true}
-                        searchPlaceholder="Search members..."
-                        style={styles.dropdown}
-                        dropDownContainerStyle={styles.dropdownBox}
-                        scrollViewProps={{ nestedScrollEnabled: true }}
-                    />
+                    {/* Customer Type Selection */}
+                    <Text style={styles.label}>Customer Type</Text>
+                    <View style={styles.customerTypeContainer}>
+                        <TouchableOpacity
+                            style={[
+                                styles.customerTypeButton,
+                                customerType === "member" && styles.customerTypeButtonActive
+                            ]}
+                            onPress={() => setCustomerType("member")}
+                        >
+                            <Text style={[
+                                styles.customerTypeButtonText,
+                                customerType === "member" && styles.customerTypeButtonTextActive
+                            ]}>
+                                Member
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.customerTypeButton,
+                                customerType === "staff" && styles.customerTypeButtonActive
+                            ]}
+                            onPress={() => setCustomerType("staff")}
+                        >
+                            <Text style={[
+                                styles.customerTypeButtonText,
+                                customerType === "staff" && styles.customerTypeButtonTextActive
+                            ]}>
+                                Staff
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.customerTypeButton,
+                                customerType === "guest" && styles.customerTypeButtonActive
+                            ]}
+                            onPress={() => setCustomerType("guest")}
+                        >
+                            <Text style={[
+                                styles.customerTypeButtonText,
+                                customerType === "guest" && styles.customerTypeButtonTextActive
+                            ]}>
+                                Guest
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Member/Staff Selection - Hidden for Guest */}
+                    {customerType !== "guest" && (
+                        <>
+                            <Text style={styles.label}>
+                                {customerType === "member" ? "Member" : "Staff"}
+                            </Text>
+                            <DropDownPicker
+                                open={memberOpen}
+                                value={memberValue}
+                                items={memberItems}
+                                setOpen={setMemberOpen}
+                                setValue={setMemberValue}
+                                setItems={setMemberItems}
+                                placeholder={customerType === "member" ? "Select Member" : "Select Staff"}
+                                listMode="SCROLLVIEW"
+                                zIndex={3000}
+                                zIndexInverse={1000}
+                                searchable={true}
+                                searchPlaceholder={customerType === "member" ? "Search members..." : "Search staff..."}
+                                style={styles.dropdown}
+                                dropDownContainerStyle={styles.dropdownBox}
+                                scrollViewProps={{ nestedScrollEnabled: true }}
+                            />
+                        </>
+                    )}
 
                     {/* Pair: Store + Date */}
                     <View style={styles.row}>
@@ -1150,5 +1231,32 @@ const styles = StyleSheet.create({
     printerButtonText: {
         color: "#fff",
         fontWeight: "600",
+    },
+    customerTypeContainer: {
+        flexDirection: "row",
+        marginTop: 8,
+        marginBottom: 16,
+        backgroundColor: "#f3f4f6",
+        borderRadius: 8,
+        padding: 4,
+    },
+    customerTypeButton: {
+        flex: 1,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 6,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    customerTypeButtonActive: {
+        backgroundColor: "#0f766e",
+    },
+    customerTypeButtonText: {
+        fontSize: 14,
+        fontWeight: "600",
+        color: "#6b7280",
+    },
+    customerTypeButtonTextActive: {
+        color: "#ffffff",
     },
 });
