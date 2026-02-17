@@ -300,6 +300,31 @@ const MemberKilosScreen = () => {
         }, [loadScaleSettings])
     );
 
+    // Auto-select route when transporter changes
+    useEffect(() => {
+        if (transporter && commonData.routes && commonData.routes.length > 0) {
+            console.log(`[MemberKilos] 🔄 Transporter changed to: ${transporter.full_names}, checking route_id: ${transporter.route_id}`);
+
+            if (transporter.route_id) {
+                const matchingRoute = commonData.routes.find((r: any) => r.id === transporter.route_id);
+                if (matchingRoute) {
+                    // Only update if the route is different from currently selected
+                    if (routeValue !== matchingRoute.id) {
+                        console.log(`[MemberKilos] ✅ Auto-selecting route: ${matchingRoute.route_name} for transporter: ${transporter.full_names}`);
+                        setRouteValue(matchingRoute.id);
+                        setRoute(matchingRoute);
+                    } else {
+                        console.log(`[MemberKilos] ℹ️ Route already selected: ${matchingRoute.route_name}`);
+                    }
+                } else {
+                    console.log(`[MemberKilos] ⚠️ Transporter ${transporter.full_names} has route_id ${transporter.route_id} but route not found`);
+                }
+            } else {
+                console.log(`[MemberKilos] ℹ️ Transporter ${transporter.full_names} has no route_id`);
+            }
+        }
+    }, [transporter, commonData.routes, routeValue]);
+
     // --- Scale hook ---
     const scaleHook = useBluetoothService({ deviceType: "scale" });
 
@@ -1926,21 +1951,31 @@ const MemberKilosScreen = () => {
                                     items={transporterItems}
                                     setOpen={setTransporterOpen}
                                     setValue={(val: any) => {
+                                        console.log(`[MemberKilos] 🔄 Transporter selected with value:`, val);
                                         setTransporterValue(val as number);
                                         const sel = (commonData.transporters || []).find((t: any) => t.id === val);
                                         if (sel) {
+                                            console.log(`[MemberKilos] ✅ Found transporter: ${sel.full_names} (ID: ${sel.id}), route_id: ${sel.route_id}`);
                                             setTransporter(sel);
+
                                             // Auto-select route based on transporter's route_id
                                             if (sel.route_id && commonData.routes) {
+                                                console.log(`[MemberKilos] 🔍 Looking for route with ID: ${sel.route_id}`);
                                                 const matchingRoute = (commonData.routes || []).find((r: any) => r.id === sel.route_id);
                                                 if (matchingRoute) {
+                                                    console.log(`[MemberKilos] ✅ Found matching route: ${matchingRoute.route_name} (ID: ${matchingRoute.id})`);
                                                     setRouteValue(matchingRoute.id);
                                                     setRoute(matchingRoute);
                                                     console.log(`[MemberKilos] ✅ Auto-selected route: ${matchingRoute.route_name} (ID: ${matchingRoute.id}) for transporter: ${sel.full_names}`);
                                                 } else {
                                                     console.log(`[MemberKilos] ⚠️ Transporter has route_id (${sel.route_id}) but route not found in available routes`);
+                                                    console.log(`[MemberKilos] 📋 Available routes:`, commonData.routes?.map(r => `${r.id}: ${r.route_name}`).join(', '));
                                                 }
+                                            } else {
+                                                console.log(`[MemberKilos] ℹ️ No route_id found for transporter ${sel.full_names} or no routes loaded yet`);
                                             }
+                                        } else {
+                                            console.log(`[MemberKilos] ❌ No transporter found with ID:`, val);
                                         }
                                     }}
                                     setItems={setTransporterItems}
