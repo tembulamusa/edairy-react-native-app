@@ -248,7 +248,6 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         // Load member/employee items based on customer type
         if (customerType === "member" && commonData?.members) {
             setMemberItems([
-                { label: "No Member / Guest", value: null },
                 ...commonData.members.map((m) => ({
                     label: `${m?.first_name} ${m?.last_name}`,
                     value: m.id,
@@ -256,15 +255,16 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             ]);
         } else if (customerType === "staff" && commonData?.employees) {
             setMemberItems([
-                { label: "No Staff Selected", value: null },
                 ...commonData.employees.map((e) => ({
                     label: `${e?.first_name} ${e?.last_name}`,
                     value: e.id,
                 })),
             ]);
         } else if (customerType === "guest") {
-            // For guest, we don't need dropdown items
-            setMemberItems([]);
+            // For guest, show dropdown with "No Member / Guest" option
+            setMemberItems([
+                { label: "No Member / Guest", value: null },
+            ]);
             setMemberValue(null);
             setMemberOpen(false);
         }
@@ -308,8 +308,13 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
     // Reset member selection when customer type changes
     useEffect(() => {
-        setMemberValue(null);
-        setMemberOpen(false);
+        if (customerType === "guest") {
+            setMemberValue(null);
+            setMemberOpen(false);
+        } else {
+            setMemberValue(null);
+            setMemberOpen(false);
+        }
     }, [customerType]);
 
     // Reset payment type if member unselected
@@ -752,15 +757,24 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                 setOpen={setMemberOpen}
                                 setValue={setMemberValue}
                                 setItems={setMemberItems}
-                                placeholder={customerType === "member" ? "Select Member" : "Select Staff"}
+                                placeholder={
+                                    customerType === "member" ? "Select Member" :
+                                    customerType === "staff" ? "Select Staff" :
+                                    "No Member / Guest"
+                                }
                                 listMode="SCROLLVIEW"
                                 zIndex={3000}
                                 zIndexInverse={1000}
-                                searchable={true}
-                                searchPlaceholder={customerType === "member" ? "Search members..." : "Search staff..."}
+                                searchable={customerType !== "guest"}
+                                searchPlaceholder={
+                                    customerType === "member" ? "Search members..." :
+                                    customerType === "staff" ? "Search staff..." :
+                                    ""
+                                }
                                 style={styles.dropdown}
                                 dropDownContainerStyle={styles.dropdownBox}
                                 scrollViewProps={{ nestedScrollEnabled: true }}
+                                disabled={customerType === "guest"}
                             />
                         </>
                     )}
