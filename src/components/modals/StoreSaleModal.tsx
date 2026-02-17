@@ -23,15 +23,18 @@ import BluetoothConnectionModal from "./BluetoothConnectionModal";
 import useBluetoothService from "../../hooks/useBluetoothService";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-type CustomerType = "member" | "staff" | "guest";
+type CustomerType = "member" | "employee" | "vendor" | "transporter" | "supplier" | "guest";
 
 type StoreSaleModalProps = {
     visible: boolean;
     onClose: () => void;
     onSave: (formData: any) => Promise<void>;
     commonData: {
-        members: { id: number; first_name: string; last_name: string }[];
+        members?: { id: number; first_name: string; last_name: string }[];
         employees?: { id: number; first_name: string; last_name: string }[];
+        vendors?: { id: number; first_name: string; last_name: string }[];
+        transporters?: { id: number; first_name: string; last_name: string }[];
+        suppliers?: { id: number; first_name: string; last_name: string }[];
         stores: { id: number; description: string }[];
         stock_items: Array<{
             id: number;
@@ -62,6 +65,15 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
     // Customer type selection
     const [customerType, setCustomerType] = useState<CustomerType>("member");
+    const [customerTypeItems] = useState([
+        { label: "Member", value: "member" },
+        { label: "Employee", value: "employee" },
+        { label: "Vendor", value: "vendor" },
+        { label: "Transporter", value: "transporter" },
+        { label: "Supplier", value: "supplier" },
+        { label: "Guest", value: "guest" },
+    ]);
+    const [customerTypeOpen, setCustomerTypeOpen] = useState(false);
 
     // Members
     const [memberOpen, setMemberOpen] = useState(false);
@@ -250,7 +262,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         setMemberValue(null);
         setMemberOpen(false);
 
-        // Load member/employee items based on customer type
+        // Load customer items based on customer type
         if (customerType === "member") {
             if (commonData?.members) {
                 setMemberItems([
@@ -262,8 +274,9 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             } else {
                 // Members not loaded yet, keep dropdown empty
                 console.log('StoreSaleModal: Members data not available yet');
+                setMemberItems([]);
             }
-        } else if (customerType === "staff") {
+        } else if (customerType === "employee") {
             if (commonData?.employees) {
                 setMemberItems([
                     ...commonData.employees.map((e) => ({
@@ -274,11 +287,48 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             } else {
                 // Employees not loaded yet, keep dropdown empty
                 console.log('StoreSaleModal: Employees data not available yet');
+                setMemberItems([]);
+            }
+        } else if (customerType === "vendor") {
+            if (commonData?.vendors) {
+                setMemberItems([
+                    ...commonData.vendors.map((v) => ({
+                        label: `${v?.first_name} ${v?.last_name}`,
+                        value: v.id,
+                    })),
+                ]);
+            } else {
+                console.log('StoreSaleModal: Vendors data not available yet');
+                setMemberItems([]);
+            }
+        } else if (customerType === "transporter") {
+            if (commonData?.transporters) {
+                setMemberItems([
+                    ...commonData.transporters.map((t) => ({
+                        label: `${t?.first_name} ${t?.last_name}`,
+                        value: t.id,
+                    })),
+                ]);
+            } else {
+                console.log('StoreSaleModal: Transporters data not available yet');
+                setMemberItems([]);
+            }
+        } else if (customerType === "supplier") {
+            if (commonData?.suppliers) {
+                setMemberItems([
+                    ...commonData.suppliers.map((s) => ({
+                        label: `${s?.first_name} ${s?.last_name}`,
+                        value: s.id,
+                    })),
+                ]);
+            } else {
+                console.log('StoreSaleModal: Suppliers data not available yet');
+                setMemberItems([]);
             }
         } else if (customerType === "guest") {
-            // For guest, show dropdown with "No Member / Guest" option
+            // For guest, show dropdown with "No Customer Selected" option
             setMemberItems([
-                { label: "No Member / Guest", value: null },
+                { label: "No Customer Selected", value: null },
             ]);
             setMemberValue(null);
             setMemberOpen(false);
@@ -643,7 +693,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             });
 
             const data: any = {
-                member_id: customerType !== "guest" ? memberValue : null,
+                customer_id: customerType !== "guest" ? memberValue : null,
                 customer_type: customerType,
                 store_id: storeValue,
                 transaction_date: transactionDate.toISOString().split("T")[0],
@@ -711,56 +761,31 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 >
                     {/* Customer Type Selection */}
                     <Text style={styles.label}>Customer Type</Text>
-                    <View style={styles.customerTypeContainer}>
-                        <TouchableOpacity
-                            style={[
-                                styles.customerTypeButton,
-                                customerType === "member" && styles.customerTypeButtonActive
-                            ]}
-                            onPress={() => setCustomerType("member")}
-                        >
-                            <Text style={[
-                                styles.customerTypeButtonText,
-                                customerType === "member" && styles.customerTypeButtonTextActive
-                            ]}>
-                                Member
-                            </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[
-                                styles.customerTypeButton,
-                                customerType === "staff" && styles.customerTypeButtonActive
-                            ]}
-                            onPress={() => setCustomerType("staff")}
-                        >
-                            <Text style={[
-                                styles.customerTypeButtonText,
-                                customerType === "staff" && styles.customerTypeButtonTextActive
-                            ]}>
-                                Staff
-                            </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[
-                                styles.customerTypeButton,
-                                customerType === "guest" && styles.customerTypeButtonActive
-                            ]}
-                            onPress={() => setCustomerType("guest")}
-                        >
-                            <Text style={[
-                                styles.customerTypeButtonText,
-                                customerType === "guest" && styles.customerTypeButtonTextActive
-                            ]}>
-                                Guest
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
+                    <DropDownPicker
+                        open={customerTypeOpen}
+                        value={customerType}
+                        items={customerTypeItems}
+                        setOpen={setCustomerTypeOpen}
+                        setValue={setCustomerType}
+                        setItems={() => {}} // Read-only items
+                        placeholder="Select Customer Type"
+                        listMode="SCROLLVIEW"
+                        zIndex={4000}
+                        zIndexInverse={500}
+                        style={styles.dropdown}
+                        dropDownContainerStyle={styles.dropdownBox}
+                        scrollViewProps={{ nestedScrollEnabled: true }}
+                    />
 
-                    {/* Member/Staff Selection - Hidden for Guest */}
+                    {/* Customer Selection - Hidden for Guest */}
                     {customerType !== "guest" && (
                         <>
                             <Text style={styles.label}>
-                                {customerType === "member" ? "Member" : "Staff"}
+                                {customerType === "member" ? "Select Member" :
+                                 customerType === "employee" ? "Select Employee" :
+                                 customerType === "vendor" ? "Select Vendor" :
+                                 customerType === "transporter" ? "Select Transporter" :
+                                 customerType === "supplier" ? "Select Supplier" : "Select Customer"}
                             </Text>
                             <DropDownPicker
                                 open={memberOpen}
@@ -771,22 +796,49 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                 setItems={setMemberItems}
                                 placeholder={
                                     customerType === "member" ? "Select Member" :
-                                    customerType === "staff" ? "Select Staff" :
-                                    "No Member / Guest"
+                                    customerType === "employee" ? "Select Employee" :
+                                    customerType === "vendor" ? "Select Vendor" :
+                                    customerType === "transporter" ? "Select Transporter" :
+                                    customerType === "supplier" ? "Select Supplier" : "Select Customer"
                                 }
                                 listMode="SCROLLVIEW"
                                 zIndex={3000}
                                 zIndexInverse={1000}
-                                searchable={customerType !== "guest"}
+                                searchable={true}
                                 searchPlaceholder={
                                     customerType === "member" ? "Search members..." :
-                                    customerType === "staff" ? "Search staff..." :
-                                    ""
+                                    customerType === "employee" ? "Search employees..." :
+                                    customerType === "vendor" ? "Search vendors..." :
+                                    customerType === "transporter" ? "Search transporters..." :
+                                    customerType === "supplier" ? "Search suppliers..." : "Search customers..."
                                 }
                                 style={styles.dropdown}
                                 dropDownContainerStyle={styles.dropdownBox}
                                 scrollViewProps={{ nestedScrollEnabled: true }}
-                                disabled={customerType === "guest"}
+                            />
+                        </>
+                    )}
+
+                    {/* Guest Selection */}
+                    {customerType === "guest" && (
+                        <>
+                            <Text style={styles.label}>Customer</Text>
+                            <DropDownPicker
+                                open={memberOpen}
+                                value={memberValue}
+                                items={memberItems}
+                                setOpen={setMemberOpen}
+                                setValue={setMemberValue}
+                                setItems={setMemberItems}
+                                placeholder="No Customer Selected"
+                                listMode="SCROLLVIEW"
+                                zIndex={3000}
+                                zIndexInverse={1000}
+                                searchable={false}
+                                style={styles.dropdown}
+                                dropDownContainerStyle={styles.dropdownBox}
+                                scrollViewProps={{ nestedScrollEnabled: true }}
+                                disabled={true}
                             />
                         </>
                     )}
@@ -1260,32 +1312,5 @@ const styles = StyleSheet.create({
     printerButtonText: {
         color: "#fff",
         fontWeight: "600",
-    },
-    customerTypeContainer: {
-        flexDirection: "row",
-        marginTop: 8,
-        marginBottom: 16,
-        backgroundColor: "#f3f4f6",
-        borderRadius: 8,
-        padding: 4,
-    },
-    customerTypeButton: {
-        flex: 1,
-        paddingVertical: 10,
-        paddingHorizontal: 12,
-        borderRadius: 6,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    customerTypeButtonActive: {
-        backgroundColor: "#0f766e",
-    },
-    customerTypeButtonText: {
-        fontSize: 14,
-        fontWeight: "600",
-        color: "#6b7280",
-    },
-    customerTypeButtonTextActive: {
-        color: "#ffffff",
     },
 });

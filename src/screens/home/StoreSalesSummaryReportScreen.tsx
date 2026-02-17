@@ -103,13 +103,16 @@ const SalesReportScreen = () => {
     useEffect(() => {
         const loadCommonData = async () => {
             try {
-                const [members, employees, stores, stock_items] = await Promise.all([
+                const [members, employees, vendors, transporters, suppliers, stores, stock_items] = await Promise.all([
                     fetchCommonData({ name: 'members' }),
                     fetchCommonData({ name: 'employees' }),
+                    fetchCommonData({ name: 'vendors' }),
+                    fetchCommonData({ name: 'transporters' }),
+                    fetchCommonData({ name: 'suppliers' }),
                     fetchCommonData({ name: 'stores' }),
                     fetchCommonData({ name: 'stock_items' }),
                 ]);
-                const allData = { members, employees, stores, stock_items };
+                const allData = { members, employees, vendors, transporters, suppliers, stores, stock_items };
                 setCommonData(allData);
 
                 setMemberItems(
