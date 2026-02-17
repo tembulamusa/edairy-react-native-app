@@ -326,10 +326,8 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 setMemberItems([]);
             }
         } else if (customerType === "guest") {
-            // For guest, show dropdown with "No Customer Selected" option
-            setMemberItems([
-                { label: "No Customer Selected", value: null },
-            ]);
+            // For guest, no dropdown is shown, so clear items and selection
+            setMemberItems([]);
             setMemberValue(null);
             setMemberOpen(false);
         }
@@ -777,7 +775,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         scrollViewProps={{ nestedScrollEnabled: true }}
                     />
 
-                    {/* Customer Selection - Hidden for Guest */}
+                    {/* Customer Selection - Only shown for non-guest types */}
                     {customerType !== "guest" && (
                         <>
                             <Text style={styles.label}>
@@ -815,30 +813,6 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                 style={styles.dropdown}
                                 dropDownContainerStyle={styles.dropdownBox}
                                 scrollViewProps={{ nestedScrollEnabled: true }}
-                            />
-                        </>
-                    )}
-
-                    {/* Guest Selection */}
-                    {customerType === "guest" && (
-                        <>
-                            <Text style={styles.label}>Customer</Text>
-                            <DropDownPicker
-                                open={memberOpen}
-                                value={memberValue}
-                                items={memberItems}
-                                setOpen={setMemberOpen}
-                                setValue={setMemberValue}
-                                setItems={setMemberItems}
-                                placeholder="No Customer Selected"
-                                listMode="SCROLLVIEW"
-                                zIndex={3000}
-                                zIndexInverse={1000}
-                                searchable={false}
-                                style={styles.dropdown}
-                                dropDownContainerStyle={styles.dropdownBox}
-                                scrollViewProps={{ nestedScrollEnabled: true }}
-                                disabled={true}
                             />
                         </>
                     )}
