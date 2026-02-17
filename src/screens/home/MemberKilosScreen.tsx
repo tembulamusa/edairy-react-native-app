@@ -11,12 +11,115 @@ import {
     ActivityIndicator,
     ScrollView,
 } from "react-native";
+// @ts-ignore - react-native-sqlite-storage doesn't have types
+import SQLite from 'react-native-sqlite-storage';
 import BluetoothConnectionModal from '../../components/modals/BluetoothConnectionModal';
 import useBluetoothService from "../../hooks/useBluetoothService";
 
 // Use require for hooks to avoid import issues
 // const useBLEService = require("../../hooks/useBLEService").default;
 const useClassicService = require("../../hooks/useClassicService").default;
+
+// SQLite database for persistent scale storage
+let scaleDatabase: SQLite.SQLiteDatabase | null = null;
+
+const initScaleDatabase = async (): Promise<void> => {
+    try {
+        scaleDatabase = await SQLite.openDatabase(
+            { name: 'scale_devices.db', location: 'default' },
+            () => console.log('[SQLite] Scale database opened'),
+            (error) => console.error('[SQLite] Error opening database:', error)
+        );
+
+        if (scaleDatabase) {
+            await scaleDatabase.executeSql(
+                `CREATE TABLE IF NOT EXISTS last_scale_device (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL,
+                    device_name TEXT,
+                    device_address TEXT,
+                    connection_type TEXT NOT NULL,
+                    last_connected DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )`,
+                [],
+                () => console.log('[SQLite] Scale devices table created/verified'),
+                (error) => console.error('[SQLite] Error creating table:', error)
+            );
+        }
+    } catch (error) {
+        console.error('[SQLite] Error initializing database:', error);
+    }
+};
+
+const saveLastScaleDevice = async (device: any): Promise<void> => {
+    if (!scaleDatabase || !device) return;
+
+    try {
+        const deviceId = device.id || device.address || device.address_or_id;
+        const deviceName = device.name || 'Unknown Device';
+        const deviceAddress = device.address || deviceId;
+        const connectionType = device.type || 'ble';
+
+        // First, clear any existing entries
+        await scaleDatabase.executeSql(
+            'DELETE FROM last_scale_device',
+            [],
+            () => console.log('[SQLite] Cleared existing scale devices'),
+            (error) => console.error('[SQLite] Error clearing devices:', error)
+        );
+
+        // Then insert the new device
+        await scaleDatabase.executeSql(
+            'INSERT INTO last_scale_device (device_id, device_name, device_address, connection_type, last_connected) VALUES (?, ?, ?, ?, datetime("now"))',
+            [deviceId, deviceName, deviceAddress, connectionType],
+            () => console.log('[SQLite] Scale device saved:', deviceName),
+            (error) => console.error('[SQLite] Error saving device:', error)
+        );
+    } catch (error) {
+        console.error('[SQLite] Error saving scale device:', error);
+    }
+};
+
+const getLastScaleDevice = async (): Promise<any | null> => {
+    if (!scaleDatabase) return null;
+
+    return new Promise((resolve) => {
+        scaleDatabase!.executeSql(
+            'SELECT * FROM last_scale_device ORDER BY last_connected DESC LIMIT 1',
+            [],
+            (results) => {
+                if (results[0].rows.length > 0) {
+                    const device = results[0].rows.item(0);
+                    console.log('[SQLite] Retrieved last scale device:', device.device_name);
+                    resolve(device);
+                } else {
+                    console.log('[SQLite] No saved scale device found');
+                    resolve(null);
+                }
+            },
+            (error) => {
+                console.error('[SQLite] Error retrieving scale device:', error);
+                resolve(null);
+            }
+        );
+    });
+};
+
+const clearLastScaleDevice = async (): Promise<void> => {
+    if (!scaleDatabase) return;
+
+    try {
+        await scaleDatabase.executeSql(
+            'DELETE FROM last_scale_device',
+            [],
+            () => console.log('[SQLite] Cleared last scale device'),
+            (error) => console.error('[SQLite] Error clearing device:', error)
+        );
+    } catch (error) {
+        console.error('[SQLite] Error clearing scale device:', error);
+    }
+};
 
 // Bluetooth setup helper
 const checkBluetoothSetup = async () => {
@@ -156,6 +259,11 @@ const MemberKilosScreen = () => {
     const [scaleConnectionType, setScaleConnectionType] = useState<string>("ble"); // Default to BLE
     const [scaleSettingsLoaded, setScaleSettingsLoaded] = useState<boolean>(false);
 
+    // --- Continuous reconnection state ---
+    const [isContinuousReconnecting, setIsContinuousReconnecting] = useState<boolean>(false);
+    const reconnectionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const lastReconnectionAttempt = useRef<number>(0);
+
     // --- Load scale connection type from settings ---
     const loadScaleSettings = useCallback(async () => {
         try {
@@ -174,6 +282,11 @@ const MemberKilosScreen = () => {
         } finally {
             setScaleSettingsLoaded(true);
         }
+    }, []);
+
+    // Initialize SQLite database for scale storage
+    useEffect(() => {
+        initScaleDatabase();
     }, []);
 
     useEffect(() => {
@@ -282,16 +395,18 @@ const MemberKilosScreen = () => {
         }
     }, [connectedScaleDevice]);
 
-    // Auto-connect scale on load: Check AsyncStorage and connect based on stored type
-    // --- Update auto-connect scales to include cleanup and mounted check ---
-    useEffect(() => {
-        const autoConnectToLastScale = async () => {
-            if (!isMountedRef.current || !scaleSettingsLoaded) {
-                console.log('[MemberKilos] AUTO-CONNECT SCALE: Skipping - not mounted or settings not loaded');
-                return;
-            }
+    // Continuous scale reconnection with SQLite storage
+    const startContinuousReconnection = useCallback(async () => {
+        if (isContinuousReconnecting || !isMountedRef.current) return;
+
+        console.log('[MemberKilos] Starting continuous scale reconnection...');
+        setIsContinuousReconnecting(true);
+
+        const attemptReconnection = async () => {
+            if (!isMountedRef.current) return;
+
             try {
-                // Skip if already connected or if hook properties are not available
+                // Skip if already connected
                 if (connectedScaleDevice && scaleHook) {
                     try {
                         let stillConnected = false;
@@ -301,93 +416,166 @@ const MemberKilosScreen = () => {
                             stillConnected = await connectedScaleDevice.classicDevice.isConnected();
                         }
                         if (stillConnected) {
-                            console.log('[MemberKilos] AUTO-CONNECT SCALE: Already connected, skipping');
-                            return;
-                        } else {
-                            console.log('[MemberKilos] AUTO-CONNECT SCALE: Device appears disconnected, will attempt reconnection');
-                            // Clear the stored device if it's disconnected to prevent repeated failures
-                            await AsyncStorage.removeItem('last_device_scale');
+                            console.log('[MemberKilos] CONTINUOUS RECONNECT: Already connected, stopping reconnection');
+                            stopContinuousReconnection();
                             return;
                         }
                     } catch (error) {
-                        console.log('[MemberKilos] AUTO-CONNECT SCALE: Error checking connection status:', error);
-                        // If we can't check connection, assume disconnected and clear stored device
-                        await AsyncStorage.removeItem('last_device_scale');
-                        return;
+                        console.log('[MemberKilos] CONTINUOUS RECONNECT: Error checking connection:', error);
                     }
                 }
 
-                const lastScale = await AsyncStorage.getItem('last_device_scale');
+                // Get last scale from SQLite
+                const lastScale = await getLastScaleDevice();
                 if (!lastScale) {
-                    console.log('[MemberKilos] AUTO-CONNECT SCALE: No last device found in storage');
+                    console.log('[MemberKilos] CONTINUOUS RECONNECT: No saved scale device found');
+                    // Show connection modal to let user select a device
+                    setTimeout(() => {
+                        if (isMountedRef.current && !connectedScaleDevice) {
+                            console.log('[MemberKilos] CONTINUOUS RECONNECT: Showing connection modal');
+                            setScaleModalVisible(true);
+                        }
+                    }, 1000);
                     return;
                 }
 
-                let deviceData: any = null;
-                try {
-                    deviceData = typeof lastScale === 'string' ? JSON.parse(lastScale) : lastScale;
-                } catch (parseError) {
-                    console.error('[MemberKilos] AUTO-CONNECT SCALE: Error parsing stored device:', parseError);
-                    return;
-                }
-
-                const deviceId = deviceData.id || deviceData.address || deviceData.address_or_id;
+                const deviceId = lastScale.device_id;
                 if (!deviceId) {
-                    console.log('[MemberKilos] AUTO-CONNECT SCALE: No valid device ID found');
+                    console.log('[MemberKilos] CONTINUOUS RECONNECT: No valid device ID found');
                     return;
                 }
 
-                console.log('[MemberKilos] AUTO-CONNECT SCALE: Starting device scan...');
-                if (scanForScaleDevices) {
-                    scanForScaleDevices();
-                } else {
-                    console.log('[MemberKilos] AUTO-CONNECT SCALE: scanForScaleDevices not available');
+                console.log(`[MemberKilos] CONTINUOUS RECONNECT: Attempting to connect to ${lastScale.device_name}...`);
+
+                // Prevent too frequent attempts
+                const now = Date.now();
+                if (now - lastReconnectionAttempt.current < 30000) { // 30 seconds minimum between attempts
                     return;
                 }
+                lastReconnectionAttempt.current = now;
 
-                // Use AbortController to cancel if component unmounts
-                const abortController = new AbortController();
-                const timeoutId = setTimeout(() => {
-                    if (!isMountedRef.current) abortController.abort();
-                }, 18000);
-                await new Promise<void>(r => setTimeout(() => r(), 18000));
-
-                if (!isMountedRef.current) {
-                    clearTimeout(timeoutId);
-                    return;
-                }
-                clearTimeout(timeoutId);
-                console.log('[MemberKilos] AUTO-CONNECT SCALE: Attempting connection...');
                 try {
-                    if (connectToScaleDevice) {
-                        await connectToScaleDevice(deviceId);
-                        console.log('[MemberKilos] AUTO-CONNECT SCALE: ✓ Connection attempt completed');
-                    } else {
-                        console.log('[MemberKilos] AUTO-CONNECT SCALE: connectToScaleDevice not available');
-                        return;
+                    if (scanForScaleDevices) {
+                        scanForScaleDevices();
+                    }
+
+                    // Wait for scan to complete
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+
+                    if (connectToScaleDevice && isMountedRef.current) {
+                        const result = await connectToScaleDevice(deviceId);
+                        if (result) {
+                            console.log('[MemberKilos] CONTINUOUS RECONNECT: ✓ Successfully reconnected!');
+                            // The device should already be saved, but let's ensure it
+                            const deviceInfo = {
+                                id: lastScale.device_id,
+                                name: lastScale.device_name,
+                                address: lastScale.device_address,
+                                type: lastScale.connection_type
+                            };
+                            await persistLastScale(deviceInfo);
+                            stopContinuousReconnection();
+                        }
                     }
                 } catch (connectError) {
-                    console.error('[MemberKilos] AUTO-CONNECT SCALE: Connection error:', connectError);
-                    // Clear the stored device if connection fails to prevent repeated failures
-                    try {
-                        await AsyncStorage.removeItem('last_device_scale');
-                        console.log('[MemberKilos] AUTO-CONNECT SCALE: Cleared stored device due to connection failure');
-                    } catch (clearError) {
-                        console.error('[MemberKilos] AUTO-CONNECT SCALE: Error clearing stored device:', clearError);
-                    }
-                    // Don't show alert for auto-connect failures - user can manually connect later
+                    console.log('[MemberKilos] CONTINUOUS RECONNECT: Connection attempt failed:', connectError.message);
+                    // Continue trying - don't clear the device from storage
                 }
             } catch (error) {
-                console.error('[MemberKilos] AUTO-CONNECT SCALE: Failed:', error);
+                console.error('[MemberKilos] CONTINUOUS RECONNECT: Error during reconnection attempt:', error);
             }
         };
 
-        const timeout = setTimeout(() => {
-            autoConnectToLastScale();
-        }, 2000);
+        // Initial attempt
+        attemptReconnection();
 
-        return () => clearTimeout(timeout);
-    }, [scaleSettingsLoaded]); // Only depend on settings being loaded to prevent unnecessary re-runs
+        // Set up continuous attempts every 60 seconds
+        reconnectionIntervalRef.current = setInterval(attemptReconnection, 60000);
+
+    }, [connectedScaleDevice, scaleHook, scanForScaleDevices, connectToScaleDevice, isContinuousReconnecting]);
+
+    const stopContinuousReconnection = useCallback(() => {
+        console.log('[MemberKilos] Stopping continuous reconnection');
+        setIsContinuousReconnecting(false);
+        if (reconnectionIntervalRef.current) {
+            clearInterval(reconnectionIntervalRef.current);
+            reconnectionIntervalRef.current = null;
+        }
+    }, []);
+
+    // Auto-connect on app load and start continuous reconnection
+    useEffect(() => {
+        if (!scaleSettingsLoaded || !isMountedRef.current) return;
+
+        const initializeScaleConnection = async () => {
+            try {
+                // First, try to connect to the last saved device
+                const lastScale = await getLastScaleDevice();
+                if (lastScale) {
+                    console.log(`[MemberKilos] INITIALIZING: Found saved device ${lastScale.device_name}, attempting connection...`);
+
+                    const deviceId = lastScale.device_id;
+                    if (deviceId && connectToScaleDevice && scanForScaleDevices) {
+                        try {
+                            // Quick scan and connect attempt
+                            scanForScaleDevices();
+                            await new Promise(resolve => setTimeout(resolve, 2000));
+
+                            if (isMountedRef.current) {
+                                const result = await connectToScaleDevice(deviceId);
+                                if (result) {
+                                    console.log('[MemberKilos] INITIALIZING: ✓ Successfully connected to saved device');
+                                    // Ensure the device is saved (should already be, but be safe)
+                                    const deviceInfo = {
+                                        id: lastScale.device_id,
+                                        name: lastScale.device_name,
+                                        address: lastScale.device_address,
+                                        type: lastScale.connection_type
+                                    };
+                                    await persistLastScale(deviceInfo);
+                                    return;
+                                }
+                            }
+                        } catch (error) {
+                            console.log('[MemberKilos] INITIALIZING: Failed to connect to saved device:', error.message);
+                        }
+                    }
+                }
+
+                // If no saved device or connection failed, start continuous reconnection
+                console.log('[MemberKilos] INITIALIZING: Starting continuous reconnection');
+                startContinuousReconnection();
+
+            } catch (error) {
+                console.error('[MemberKilos] INITIALIZING: Error during initialization:', error);
+                startContinuousReconnection();
+            }
+        };
+
+        // Delay initialization to allow hooks to be ready
+        const initTimeout = setTimeout(initializeScaleConnection, 1000);
+
+        return () => clearTimeout(initTimeout);
+    }, [scaleSettingsLoaded, connectToScaleDevice, scanForScaleDevices, startContinuousReconnection]);
+
+    // Cleanup continuous reconnection on unmount
+    useEffect(() => {
+        return () => {
+            stopContinuousReconnection();
+        };
+    }, [stopContinuousReconnection]);
+
+    // Helper: Persist scale to SQLite database
+    const persistLastScale = useCallback(async (device: any) => {
+        if (!device) return;
+        try {
+            console.log("[MemberKilos] persistLastScale: Saving scale device", device.name || device.id);
+            await saveLastScaleDevice(device);
+            console.log("[MemberKilos] persistLastScale: ✓ Scale device saved successfully");
+        } catch (error) {
+            console.error("[MemberKilos] persistLastScale: Failed to save scale", error);
+        }
+    }, []);
 
     // Helper: Persist printer to AsyncStorage (similar to StoreSaleModal)
     const persistLastPrinter = useCallback(async (device: any) => {
@@ -1477,7 +1665,7 @@ const MemberKilosScreen = () => {
     }, [connectToScaleDevice]);
 
     // --- sendMemberKilos: post entries, basic error handling ---
-    const sendMemberKilosDebounced = useRef<NodeJS.Timeout | null>(null);
+    const sendMemberKilosDebounced = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const sendMemberKilos = async () => {
         // Prevent rapid successive calls
@@ -2199,13 +2387,36 @@ const MemberKilosScreen = () => {
             />}
             <BluetoothConnectionModal
                 visible={scaleModalVisible}
-                onClose={() => setScaleModalVisible(false)}
+                onClose={() => {
+                    setScaleModalVisible(false);
+                    // If user closed modal without connecting, keep continuous reconnection running
+                    if (!connectedScaleDevice) {
+                        console.log('[MemberKilos] Scale modal closed without connection, continuing reconnection attempts');
+                    }
+                }}
                 type="device-list"
                 deviceType="scale"
                 title="Select Scale Device"
                 message="Make sure Bluetooth is enabled and location permissions are granted for device scanning."
                 devices={scaleDevices}
-                connectToDevice={connectToScaleDevice}
+                connectToDevice={async (deviceId: string) => {
+                    try {
+                        const result = await connectToScaleDevice(deviceId);
+                        if (result) {
+                            // Find the connected device from the devices list to persist it
+                            const connectedDevice = scaleDevices?.find(d => d.id === deviceId || d.address === deviceId);
+                            if (connectedDevice) {
+                                await persistLastScale(connectedDevice);
+                            }
+                            // Stop continuous reconnection since we have a successful connection
+                            stopContinuousReconnection();
+                        }
+                        return result;
+                    } catch (error) {
+                        console.error('[MemberKilos] Error connecting to scale device:', error);
+                        throw error;
+                    }
+                }}
                 scanForDevices={async () => {
                     // Check setup before scanning
                     const setupOk = await checkBluetoothSetup();
