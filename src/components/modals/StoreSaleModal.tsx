@@ -377,10 +377,13 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         // Note: memberItems will be updated by the other useEffect
     }, [customerType]);
 
-    // Reset payment type if member unselected
+    // Reset payment type based on customer type
     useEffect(() => {
-        if (!memberValue) setPaymentType("cash");
-    }, [memberValue]);
+        // Guests can only use cash, others can choose
+        if (customerType === "guest") {
+            setPaymentType("cash");
+        }
+    }, [customerType]);
 
     const addStockEntry = (stockId: number) => {
         const stock = commonData.stock_items.find((s) => s.id === stockId);
@@ -1010,8 +1013,8 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={styles.radioOption}
-                            onPress={() => memberValue && setPaymentType("credit")}
-                            disabled={!memberValue}
+                            onPress={() => customerType !== "guest" && setPaymentType("credit")}
+                            disabled={customerType === "guest"}
                         >
                             <Icon
                                 name={
@@ -1020,12 +1023,12 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                         : "radio-button-unchecked"
                                 }
                                 size={20}
-                                color={memberValue ? "#007AFF" : "#ccc"}
+                                color={customerType !== "guest" ? "#007AFF" : "#ccc"}
                             />
                             <Text
                                 style={[
                                     styles.radioText,
-                                    { color: memberValue ? "#000" : "#aaa" },
+                                    { color: customerType !== "guest" ? "#000" : "#aaa" },
                                 ]}
                             >
                                 Credit
