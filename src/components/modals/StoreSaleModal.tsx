@@ -277,6 +277,9 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             );
         }
     }, [commonData, customerType]);
+
+    // Load stock items whenever commonData changes
+    useEffect(() => {
         if (commonData?.stock_items) {
             setStockItems(
                 commonData.stock_items.map((s) => {
