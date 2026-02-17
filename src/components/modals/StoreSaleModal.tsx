@@ -775,6 +775,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         labelStyle={styles.customerTypeDropdownText}
                         listItemLabelStyle={styles.customerTypeListItemText}
                         selectedItemLabelStyle={styles.customerTypeDropdownText}
+                        selectedItemContainerStyle={styles.customerTypeSelectedItem}
                         listMode="SCROLLVIEW"
                         zIndex={4000}
                         zIndexInverse={500}
@@ -1324,5 +1325,8 @@ const styles = StyleSheet.create({
         color: "#374151",
         fontSize: 16,
         fontWeight: "500",
+    },
+    customerTypeSelectedItem: {
+        backgroundColor: "#0f766e",
     },
 });
