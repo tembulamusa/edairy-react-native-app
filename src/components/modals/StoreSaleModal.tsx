@@ -758,7 +758,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         showsVerticalScrollIndicator={false}
                 >
                     {/* Customer Type Selection */}
-                    <Text style={styles.label}>Customer Type</Text>
+                    <Text style={styles.customerTypeLabel}>Customer Type</Text>
                     <DropDownPicker
                         open={customerTypeOpen}
                         value={customerType}
@@ -1140,6 +1140,7 @@ const styles = StyleSheet.create({
         paddingBottom: 24,
     },
     label: { marginTop: 12, fontWeight: "600", fontSize: 14 },
+    customerTypeLabel: { marginTop: 12, fontWeight: "700", fontSize: 18, marginBottom: 16 },
     dropdown: {
         marginTop: 6,
         borderWidth: 1,
