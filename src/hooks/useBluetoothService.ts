@@ -1295,16 +1295,22 @@ export default function useBluetoothService({
             return unifiedDevice;
         } catch (e) {
             console.log('[BLE] ========== CONNECT ERROR ==========');
-            const errMsg = (e as any)?.message || String(e);
+            const errMsg = (e as any)?.message || (e as any)?.reason || String(e ?? 'Unknown error');
             console.log('[BLE] CONNECT ERROR:', errMsg);
             console.log('[BLE] CONNECT ERROR stack:', (e as any)?.stack);
 
-            Alert.alert('Connection failed', errMsg);
-            setConnectionFailed(true);
-            setIsConnecting(false);
-
-            // Clear connected device on error
-            setConnectedDevice(null);
+            try {
+                setConnectionFailed(true);
+                setIsConnecting(false);
+                setConnectedDevice(null);
+            } catch (stateErr) {
+                console.warn('[BLE] CONNECT: Error updating state (ignored):', stateErr);
+            }
+            try {
+                Alert.alert('Connection failed', errMsg);
+            } catch (alertErr) {
+                console.warn('[BLE] CONNECT: Alert failed (ignored):', alertErr);
+            }
             return null;
         }
     }, [deviceType, ble]);
@@ -1594,13 +1600,14 @@ export default function useBluetoothService({
                                 console.log("[UNIFIED] CONNECT: ✓✓✓ BLE connection successful");
                                 return result;
                             }
-                            // If BLE connection returns null
+                            // If BLE connection returns null (e.g. scale not available)
                             console.log("[UNIFIED] CONNECT: BLE connection returned null");
+                            if (deviceType === "scale") return null;
                         } catch (bleErr) {
-                            console.log("[UNIFIED] CONNECT: BLE connection failed:", (bleErr as any)?.message);
-                            // For scales, don't fall through to Classic - throw the error
+                            console.log("[UNIFIED] CONNECT: BLE connection failed:", (bleErr as any)?.message ?? (bleErr as any)?.reason);
+                            // For scales, no Classic fallback - return null instead of throwing to avoid crash
                             if (deviceType === "scale") {
-                                throw bleErr;
+                                return null;
                             }
                         }
                     }

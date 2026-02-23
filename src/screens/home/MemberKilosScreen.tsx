@@ -85,24 +85,43 @@ const getLastScaleDevice = async (): Promise<any | null> => {
     if (!scaleDatabase) return null;
 
     return new Promise((resolve) => {
-        scaleDatabase!.executeSql(
-            'SELECT * FROM last_scale_device ORDER BY last_connected DESC LIMIT 1',
-            [],
-            (results) => {
-                if (results[0].rows.length > 0) {
-                    const device = results[0].rows.item(0);
-                    console.log('[SQLite] Retrieved last scale device:', device.device_name);
-                    resolve(device);
-                } else {
-                    console.log('[SQLite] No saved scale device found');
+        try {
+            scaleDatabase!.executeSql(
+                'SELECT * FROM last_scale_device ORDER BY last_connected DESC LIMIT 1',
+                [],
+                (results) => {
+                    try {
+                        // Guard against unexpected result shapes
+                        if (!Array.isArray(results) || results.length === 0) {
+                            console.log('[SQLite] No result sets returned for last_scale_device query');
+                            resolve(null);
+                            return;
+                        }
+
+                        const firstResult = results[0];
+                        if (!firstResult || !firstResult.rows || firstResult.rows.length === 0) {
+                            console.log('[SQLite] No saved scale device found');
+                            resolve(null);
+                            return;
+                        }
+
+                        const device = firstResult.rows.item(0);
+                        console.log('[SQLite] Retrieved last scale device:', device?.device_name);
+                        resolve(device);
+                    } catch (callbackErr) {
+                        console.error('[SQLite] Error processing last_scale_device results:', callbackErr);
+                        resolve(null);
+                    }
+                },
+                (error) => {
+                    console.error('[SQLite] Error retrieving scale device:', error);
                     resolve(null);
                 }
-            },
-            (error) => {
-                console.error('[SQLite] Error retrieving scale device:', error);
-                resolve(null);
-            }
-        );
+            );
+        } catch (outerErr) {
+            console.error('[SQLite] Error executing last_scale_device query:', outerErr);
+            resolve(null);
+        }
     });
 };
 
@@ -121,7 +140,9 @@ const clearLastScaleDevice = async (): Promise<void> => {
     }
 };
 
-// Bluetooth setup helper
+// Show location permission prompt only once per session; after that allow user to proceed (scan will run)
+let hasShownLocationPermissionForScale = false;
+
 const checkBluetoothSetup = async () => {
     const { PermissionsAndroid, Platform, Alert } = require("react-native");
 
@@ -130,12 +151,16 @@ const checkBluetoothSetup = async () => {
     try {
         console.log('[SETUP] Checking Bluetooth setup...');
 
-        // Check location permission (required for Bluetooth scanning)
         const locationGranted = await PermissionsAndroid.check(
             PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
         );
 
         if (!locationGranted) {
+            if (hasShownLocationPermissionForScale) {
+                // Already asked once; let user proceed (scan may still work or show no devices)
+                return true;
+            }
+            hasShownLocationPermissionForScale = true;
             Alert.alert(
                 'Location Permission Required',
                 'Bluetooth device scanning requires location permission. This is used only for finding nearby Bluetooth devices and is not used for GPS tracking.',
@@ -149,25 +174,15 @@ const checkBluetoothSetup = async () => {
                                 );
                                 if (result === PermissionsAndroid.RESULTS.GRANTED) {
                                     console.log('[SETUP] Location permission granted');
-                                    Alert.alert(
-                                        'Permission Granted',
-                                        'Location permission granted. You can now scan for Bluetooth devices.',
-                                        [{ text: 'OK' }]
-                                    );
-                                    return true;
                                 } else {
-                                    Alert.alert(
-                                        'Permission Denied',
-                                        'Location permission is required for Bluetooth scanning. Please enable it in app settings: Settings > Apps > eDairy > Permissions > Location.',
-                                        [{ text: 'OK' }]
-                                    );
+                                    console.log('[SETUP] Location permission denied');
                                 }
                             } catch (e) {
                                 console.error('[SETUP] Error requesting location permission:', e);
                             }
                         }
                     },
-                    { text: 'Cancel', style: 'cancel' }
+                    { text: 'Cancel', style: 'cancel', onPress: () => {} }
                 ]
             );
             return false;
@@ -365,6 +380,7 @@ const MemberKilosScreen = () => {
 
     const printerDevicesRef = useRef<any[]>(printerDevices || []);
     const isMountedRef = useRef(true);
+    const hasShownConnectionFailedRef = useRef(false);
     // Cleanup on unmount
     useEffect(() => {
         return () => {
@@ -420,11 +436,13 @@ const MemberKilosScreen = () => {
         }
     }, [connectedScaleDevice]);
 
-    // Continuous scale reconnection with SQLite storage
+    // Single automatic scale reconnection attempt with SQLite storage
+    // After the first failed automatic attempt, we don't keep retrying;
+    // user can manually select a scale from the modal.
     const startContinuousReconnection = useCallback(async () => {
         if (isContinuousReconnecting || !isMountedRef.current) return;
 
-        console.log('[MemberKilos] Starting continuous scale reconnection...');
+        console.log('[MemberKilos] Starting automatic scale reconnection (single attempt)...');
         setIsContinuousReconnecting(true);
 
         const attemptReconnection = async () => {
@@ -502,20 +520,18 @@ const MemberKilosScreen = () => {
                             stopContinuousReconnection();
                         }
                     }
-                } catch (connectError) {
-                    console.log('[MemberKilos] CONTINUOUS RECONNECT: Connection attempt failed:', connectError.message);
+                } catch (connectError: any) {
+                    console.log('[MemberKilos] CONTINUOUS RECONNECT: Connection attempt failed:', connectError?.message ?? connectError?.reason ?? connectError);
                     // Continue trying - don't clear the device from storage
                 }
-            } catch (error) {
-                console.error('[MemberKilos] CONTINUOUS RECONNECT: Error during reconnection attempt:', error);
+            } catch (error: any) {
+                console.error('[MemberKilos] CONTINUOUS RECONNECT: Error during reconnection attempt:', error?.message ?? error);
             }
         };
 
-        // Initial attempt
-        attemptReconnection();
-
-        // Set up continuous attempts every 60 seconds
-        reconnectionIntervalRef.current = setInterval(attemptReconnection, 60000);
+        // Perform a single automatic attempt, then stop
+        await attemptReconnection();
+        setIsContinuousReconnecting(false);
 
     }, [connectedScaleDevice, scaleHook, scanForScaleDevices, connectToScaleDevice, isContinuousReconnecting]);
 
@@ -561,8 +577,8 @@ const MemberKilosScreen = () => {
                                     return;
                                 }
                             }
-                        } catch (error) {
-                            console.log('[MemberKilos] INITIALIZING: Failed to connect to saved device:', error.message);
+                        } catch (error: any) {
+                            console.log('[MemberKilos] INITIALIZING: Failed to connect to saved device:', error?.message ?? error?.reason ?? error);
                         }
                     }
                 }
@@ -571,8 +587,8 @@ const MemberKilosScreen = () => {
                 console.log('[MemberKilos] INITIALIZING: Starting continuous reconnection');
                 startContinuousReconnection();
 
-            } catch (error) {
-                console.error('[MemberKilos] INITIALIZING: Error during initialization:', error);
+            } catch (error: any) {
+                console.error('[MemberKilos] INITIALIZING: Error during initialization:', error?.message ?? error);
                 startContinuousReconnection();
             }
         };
@@ -770,16 +786,22 @@ const MemberKilosScreen = () => {
         return () => clearTimeout(timeout);
     }, [attemptAutoConnectPrinter, connectedPrinterDevice]); // Include dependencies
 
-    // Show alert if connection failed
+    // Show connection-failed alert only once, then let user proceed
     useEffect(() => {
-        if (scaleHook.connectionFailed && scaleHook.lastConnectionAttempt) {
+        if (!scaleHook) return;
+        if (!scaleHook.connectionFailed || !scaleHook.lastConnectionAttempt) return;
+        if (hasShownConnectionFailedRef.current) return;
+        hasShownConnectionFailedRef.current = true;
+        try {
             Alert.alert(
                 "Connection Failed",
-                `Failed to connect to the last used scale device. Please check if the device is powered on and try connecting manually.`,
+                "Failed to connect to the last used scale device. Please check if the device is powered on and try connecting manually.",
                 [{ text: "OK", style: "default" }]
             );
+        } catch (alertErr) {
+            console.warn("[MemberKilos] Connection failed alert error (ignored):", alertErr);
         }
-    }, [scaleHook.connectionFailed, scaleHook.lastConnectionAttempt]);
+    }, [scaleHook?.connectionFailed, scaleHook?.lastConnectionAttempt]);
 
     const [isCashoutModalVisible, setIsCashoutModalVisible] = useState(false);
     const [selectedMember, setSelectedMember] = useState<any | null>(null);

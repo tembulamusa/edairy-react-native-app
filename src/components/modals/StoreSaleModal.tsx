@@ -30,11 +30,11 @@ type StoreSaleModalProps = {
     onClose: () => void;
     onSave: (formData: any) => Promise<void>;
     commonData: {
-        members?: { id: number; first_name: string; last_name: string }[];
-        employees?: { id: number; first_name: string; last_name: string }[];
-        vendors?: { id: number; first_name: string; last_name: string }[];
-        transporters?: { id: number; first_name: string; last_name: string }[];
-        suppliers?: { id: number; first_name: string; last_name: string }[];
+        members?: { id: number; first_name: string; last_name: string; member_no?: string }[];
+        employees?: { id: number; first_name: string; last_name: string; employee_no?: string }[];
+        vendors?: { id: number; first_name: string; last_name: string; vendor_no?: string }[];
+        transporters?: { id: number; first_name: string; last_name: string; transporter_no?: string }[];
+        suppliers?: { id: number; first_name: string; last_name: string; supplier_no?: string }[];
         stores: { id: number; description: string }[];
         stock_items: Array<{
             id: number;
@@ -116,12 +116,12 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
     // Bluetooth Printer
     const [printerModalVisible, setPrinterModalVisible] = useState(false);
     const [pendingPrintData, setPendingPrintData] = useState<any | null>(null);
-    const { 
-        devices: printerDevices, 
-        connectToDevice: connectToPrinter, 
-        scanForDevices: scanForPrinters, 
-        connectedDevice: connectedPrinter, 
-        isScanning: isScanningPrinters, 
+    const {
+        devices: printerDevices,
+        connectToDevice: connectToPrinter,
+        scanForDevices: scanForPrinters,
+        connectedDevice: connectedPrinter,
+        isScanning: isScanningPrinters,
         isConnecting: isConnectingPrinter,
         printText,
         printRaw
@@ -159,25 +159,25 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         try {
             console.log("[StoreSale] AUTO-CONNECT: Scanning for InnerPrinter...");
             await scanForPrinters();
-            
+
             // Wait a bit for scan to complete
             await new Promise(resolve => setTimeout(resolve, 2000));
-            
+
             // Get the latest devices from the ref (updated by useEffect)
             const devices = printerDevicesRef.current || [];
             console.log("[StoreSale] AUTO-CONNECT: Found", devices.length, "printer devices");
-            
+
             if (devices.length === 0) {
                 console.log("[StoreSale] AUTO-CONNECT: No printers found in scan");
                 return false;
             }
-            
+
             // Filter for InnerPrinter devices first (case-insensitive)
             const innerPrinters = devices.filter(device => {
                 const deviceName = (device.name || '').toLowerCase();
                 return deviceName.includes('innerprinter') || deviceName.includes('inner');
             });
-            
+
             let targetPrinter;
             if (innerPrinters.length > 0) {
                 targetPrinter = innerPrinters[0];
@@ -187,14 +187,14 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 targetPrinter = devices[0];
                 console.log("[StoreSale] AUTO-CONNECT: No InnerPrinter found, using first available printer:", targetPrinter.name || targetPrinter.id);
             }
-            
+
             const deviceId = targetPrinter?.id || targetPrinter?.address || targetPrinter?.address_or_id;
-            
+
             if (!deviceId) {
                 console.log("[StoreSale] AUTO-CONNECT: Target printer missing device id");
                 return false;
             }
-            
+
             console.log("[StoreSale] AUTO-CONNECT: Attempting connection to", targetPrinter.name || deviceId);
             const result = await connectToPrinter(deviceId);
             const success = !!result;
@@ -266,10 +266,11 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         if (customerType === "member") {
             if (commonData?.members) {
                 setMemberItems([
-                    ...commonData.members.map((m) => ({
-                        label: `${m?.first_name} ${m?.last_name}`,
-                        value: m.id,
-                    })),
+                    ...commonData.members.map((m) => {
+                        const name = `${m?.first_name ?? ""} ${m?.last_name ?? ""}`.trim() || "Unknown";
+                        const no = m?.member_no ?? m?.id;
+                        return { label: `${name} (${no})`, value: m.id };
+                    }),
                 ]);
             } else {
                 // Members not loaded yet, keep dropdown empty
@@ -279,10 +280,11 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         } else if (customerType === "employee") {
             if (commonData?.employees) {
                 setMemberItems([
-                    ...commonData.employees.map((e) => ({
-                        label: `${e?.first_name} ${e?.last_name}`,
-                        value: e.id,
-                    })),
+                    ...commonData.employees.map((e) => {
+                        const name = `${e?.first_name ?? ""} ${e?.last_name ?? ""}`.trim() || "Unknown";
+                        const no = e?.employee_no ?? e?.id;
+                        return { label: `${name} (${no})`, value: e.id };
+                    }),
                 ]);
             } else {
                 // Employees not loaded yet, keep dropdown empty
@@ -292,10 +294,11 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         } else if (customerType === "vendor") {
             if (commonData?.vendors) {
                 setMemberItems([
-                    ...commonData.vendors.map((v) => ({
-                        label: `${v?.first_name} ${v?.last_name}`,
-                        value: v.id,
-                    })),
+                    ...commonData.vendors.map((v) => {
+                        const name = `${v?.first_name ?? ""} ${v?.last_name ?? ""}`.trim() || "Unknown";
+                        const no = v?.vendor_no ?? v?.id;
+                        return { label: `${name} (${no})`, value: v.id };
+                    }),
                 ]);
             } else {
                 console.log('StoreSaleModal: Vendors data not available yet');
@@ -304,10 +307,11 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         } else if (customerType === "transporter") {
             if (commonData?.transporters) {
                 setMemberItems([
-                    ...commonData.transporters.map((t) => ({
-                        label: `${t?.first_name} ${t?.last_name}`,
-                        value: t.id,
-                    })),
+                    ...commonData.transporters.map((t) => {
+                        const name = `${t?.first_name ?? ""} ${t?.last_name ?? ""}`.trim() || "Unknown";
+                        const no = t?.transporter_no ?? t?.id;
+                        return { label: `${name} (${no})`, value: t.id };
+                    }),
                 ]);
             } else {
                 console.log('StoreSaleModal: Transporters data not available yet');
@@ -316,10 +320,11 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         } else if (customerType === "supplier") {
             if (commonData?.suppliers) {
                 setMemberItems([
-                    ...commonData.suppliers.map((s) => ({
-                        label: `${s?.first_name} ${s?.last_name}`,
-                        value: s.id,
-                    })),
+                    ...commonData.suppliers.map((s) => {
+                        const name = `${s?.first_name ?? ""} ${s?.last_name ?? ""}`.trim() || "Unknown";
+                        const no = s?.supplier_no ?? s?.id;
+                        return { label: `${name} (${no})`, value: s.id };
+                    }),
                 ]);
             } else {
                 console.log('StoreSaleModal: Suppliers data not available yet');
@@ -349,17 +354,17 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                     const itemName = s?.item?.description
                         ? String(s.item.description)
                         : s?.name
-                        ? String(s.name)
-                        : `Item ${s.id}`;
-                    
+                            ? String(s.name)
+                            : `Item ${s.id}`;
+
                     // Get available stock quantity (check multiple possible field names)
                     const stockQty = s?.quantity ?? s?.stock ?? s?.available_quantity ?? s?.stock_quantity ?? s?.available_stock ?? null;
-                    
+
                     // Add quantity in brackets if available (remove decimals)
                     const label = stockQty !== null && stockQty !== undefined
                         ? `${itemName} (${Math.floor(Number(stockQty))})`
                         : itemName;
-                    
+
                     return {
                         label,
                         value: s.id,
@@ -371,7 +376,6 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
     // Reset member selection when customer type changes
     useEffect(() => {
-        console.log(`StoreSaleModal: Customer type changed to ${customerType}, resetting member selection`);
         setMemberValue(null);
         setMemberOpen(false);
         // Note: memberItems will be updated by the other useEffect
@@ -390,7 +394,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         if (stock && !entries.find((e) => e.id === stock.id)) {
             // Get available stock quantity (check multiple possible field names)
             const availableStock = stock?.quantity ?? stock?.stock ?? stock?.available_quantity ?? stock?.stock_quantity ?? stock?.available_stock ?? null;
-            
+
             setEntries([
                 ...entries,
                 {
@@ -437,40 +441,40 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
     // Format receipt for printing
     const formatReceipt = useCallback(
         (saleData: any) => {
-        const selectedStore = commonData.stores?.find(s => s.id === storeValue);
-        const selectedMember = commonData.members?.find(m => m.id === memberValue);
-        
-        let receipt = "";
-        receipt += "================================\n";
-        receipt += "        STORE SALE RECEIPT\n";
-        receipt += "================================\n";
-        receipt += `Store: ${selectedStore?.description || 'N/A'}\n`;
-        receipt += `Date: ${transactionDate.toISOString().split("T")[0]}\n`;
-        receipt += `Member: ${selectedMember ? `${selectedMember.first_name} ${selectedMember.last_name}` : 'Guest'}\n`;
-        receipt += `Payment: ${paymentType.toUpperCase()}\n`;
-        receipt += "--------------------------------\n";
-        
-        entries.forEach((item, index) => {
-            const qty = parseFloat(item?.quantity || "0");
-            const safeQty = Number.isFinite(qty) ? qty : 0;
-            const price = getEntryPrice(item);
-            const lineTotal = safeQty * price;
-            const itemName =
-                item?.item?.description ||
-                item?.name ||
-                item?.label ||
-                `Item ${index + 1}`;
+            const selectedStore = commonData.stores?.find(s => s.id === storeValue);
+            const selectedMember = commonData.members?.find(m => m.id === memberValue);
 
-            receipt += `${index + 1}. ${itemName}\n`;
-            receipt += `   Qty: ${formatAmount(safeQty)} x ${formatAmount(price)} = ${formatAmount(lineTotal)}\n`;
-        });
-        
-        receipt += "--------------------------------\n";
-        receipt += `TOTAL: ${formatAmount(overallTotal)} KES\n`;
-        receipt += "================================\n";
-        receipt += "Thank you for your business!\n";
-        receipt += "================================\n\n\n";
-        
+            let receipt = "";
+            receipt += "================================\n";
+            receipt += "        STORE SALE RECEIPT\n";
+            receipt += "================================\n";
+            receipt += `Store: ${selectedStore?.description || 'N/A'}\n`;
+            receipt += `Date: ${transactionDate.toISOString().split("T")[0]}\n`;
+            receipt += `Member: ${selectedMember ? `${selectedMember.first_name} ${selectedMember.last_name}` : 'Guest'}\n`;
+            receipt += `Payment: ${paymentType.toUpperCase()}\n`;
+            receipt += "--------------------------------\n";
+
+            entries.forEach((item, index) => {
+                const qty = parseFloat(item?.quantity || "0");
+                const safeQty = Number.isFinite(qty) ? qty : 0;
+                const price = getEntryPrice(item);
+                const lineTotal = safeQty * price;
+                const itemName =
+                    item?.item?.description ||
+                    item?.name ||
+                    item?.label ||
+                    `Item ${index + 1}`;
+
+                receipt += `${index + 1}. ${itemName}\n`;
+                receipt += `   Qty: ${formatAmount(safeQty)} x ${formatAmount(price)} = ${formatAmount(lineTotal)}\n`;
+            });
+
+            receipt += "--------------------------------\n";
+            receipt += `TOTAL: ${formatAmount(overallTotal)} KES\n`;
+            receipt += "================================\n";
+            receipt += "Thank you for your business!\n";
+            receipt += "================================\n\n\n";
+
             return receipt;
         },
         [commonData, storeValue, transactionDate, memberValue, paymentType, entries, formatAmount, overallTotal]
@@ -570,7 +574,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         console.log('[StoreSale] AUTO-CONNECT PRINTER: Scanning for InnerPrinter...');
                         await scanForPrinters();
                         await new Promise<void>(r => setTimeout(() => r(), 2000));
-                        
+
                         const innerPrinters = printerDevicesRef.current.filter(device => {
                             const deviceName = (device.name || '').toLowerCase();
                             return deviceName.includes('innerprinter') || deviceName.includes('inner');
@@ -660,12 +664,12 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             Alert.alert("Validation", "Please complete store, date, and items.");
             return;
         }
-        
+
         // Validate quantities don't exceed available stock
         for (const entry of entries) {
             const requestedQty = parseFloat(entry?.quantity || "0");
             const availableStock = entry?.available_stock ?? entry?.quantity ?? entry?.stock ?? entry?.available_quantity ?? entry?.stock_quantity ?? null;
-            
+
             if (availableStock !== null && availableStock !== undefined) {
                 const maxQty = parseFloat(String(availableStock)) || 0;
                 if (requestedQty > maxQty) {
@@ -678,7 +682,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 }
             }
         }
-        
+
         setSaving(true);
         setErrors({});
         try {
@@ -707,6 +711,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 data,
             });
 
+            Alert?.alert("Debug Info", `Status: ${status}\nResponse: ${JSON.stringify(response)} \nData Sent: ${JSON.stringify(data)}`);
             if (![200, 201].includes(status)) {
                 if (!response?.errors) {
                     Alert.alert("Error", response?.message || "Failed to save sale");
@@ -718,9 +723,9 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 return;
             } else {
                 Alert.alert("Success", "Sale recorded successfully");
-                
+
                 await handlePrintAfterSale(response?.data);
-                
+
                 setEntries([]);
                 setMemberValue(null);
                 setStoreValue(null);
@@ -759,351 +764,351 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                         contentContainerStyle={styles.contentContainer}
                         keyboardShouldPersistTaps="handled"
                         showsVerticalScrollIndicator={false}
-                >
-                    {/* Customer Type Selection */}
-                    <Text style={styles.customerTypeLabel}>Customer Type</Text>
-                    <DropDownPicker
-                        open={customerTypeOpen}
-                        value={customerType}
-                        items={customerTypeItems}
-                        setOpen={setCustomerTypeOpen}
-                        setValue={setCustomerType}
-                        setItems={() => {}} // Read-only items
-                        placeholder="Select Customer Type"
-                        placeholderStyle={styles.customerTypeDropdownText}
-                        textStyle={styles.customerTypeDropdownText}
-                        labelStyle={styles.customerTypeDropdownText}
-                        listItemLabelStyle={styles.customerTypeListItemText}
-                        selectedItemLabelStyle={styles.customerTypeDropdownText}
-                        selectedItemContainerStyle={styles.customerTypeSelectedItem}
-                        listMode="SCROLLVIEW"
-                        zIndex={4000}
-                        zIndexInverse={500}
-                        style={styles.customerTypeDropdown}
-                        dropDownContainerStyle={styles.customerTypeDropdownBox}
-                        scrollViewProps={{ nestedScrollEnabled: true }}
-                    />
+                    >
+                        {/* Customer Type Selection */}
+                        <Text style={styles.customerTypeLabel}>Customer Type</Text>
+                        <DropDownPicker
+                            open={customerTypeOpen}
+                            value={customerType}
+                            items={customerTypeItems}
+                            setOpen={setCustomerTypeOpen}
+                            setValue={setCustomerType}
+                            setItems={() => { }} // Read-only items
+                            placeholder="Select Customer Type"
+                            placeholderStyle={styles.customerTypeDropdownText}
+                            textStyle={styles.customerTypeDropdownText}
+                            labelStyle={styles.customerTypeDropdownText}
+                            listItemLabelStyle={styles.customerTypeListItemText}
+                            selectedItemLabelStyle={styles.customerTypeDropdownText}
+                            selectedItemContainerStyle={styles.customerTypeSelectedItem}
+                            listMode="SCROLLVIEW"
+                            zIndex={4000}
+                            zIndexInverse={500}
+                            style={styles.customerTypeDropdown}
+                            dropDownContainerStyle={styles.customerTypeDropdownBox}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
+                        />
 
-                    {/* Customer Selection - Only shown for non-guest types */}
-                    {customerType !== "guest" && (
-                        <>
-                            <Text style={styles.label}>
-                                {customerType === "member" ? "Select Member" :
-                                 customerType === "employee" ? "Select Employee" :
-                                 customerType === "vendor" ? "Select Vendor" :
-                                 customerType === "transporter" ? "Select Transporter" :
-                                 customerType === "supplier" ? "Select Supplier" : "Select Customer"}
-                            </Text>
-                            <DropDownPicker
-                                open={memberOpen}
-                                value={memberValue}
-                                items={memberItems}
-                                setOpen={setMemberOpen}
-                                setValue={setMemberValue}
-                                setItems={setMemberItems}
-                                placeholder={
-                                    customerType === "member" ? "Select Member" :
-                                    customerType === "employee" ? "Select Employee" :
-                                    customerType === "vendor" ? "Select Vendor" :
-                                    customerType === "transporter" ? "Select Transporter" :
-                                    customerType === "supplier" ? "Select Supplier" : "Select Customer"
-                                }
-                                listMode="SCROLLVIEW"
-                                zIndex={3000}
-                                zIndexInverse={1000}
-                                searchable={true}
-                                searchPlaceholder={
-                                    customerType === "member" ? "Search members..." :
-                                    customerType === "employee" ? "Search employees..." :
-                                    customerType === "vendor" ? "Search vendors..." :
-                                    customerType === "transporter" ? "Search transporters..." :
-                                    customerType === "supplier" ? "Search suppliers..." : "Search customers..."
-                                }
-                                style={styles.dropdown}
-                                dropDownContainerStyle={styles.dropdownBox}
-                                scrollViewProps={{ nestedScrollEnabled: true }}
-                            />
-                        </>
-                    )}
-
-                    {/* Pair: Store + Date */}
-                    <View style={styles.row}>
-                        <View style={styles.half}>
-                            <Text style={styles.label}>Store</Text>
-                            <DropDownPicker
-                                open={storeOpen}
-                                value={storeValue}
-                                items={storeItems}
-                                setOpen={setStoreOpen}
-                                setValue={setStoreValue}
-                                setItems={setStoreItems}
-                                placeholder="Select Store"
-                                listMode="SCROLLVIEW"
-                                zIndex={2500}
-                                zIndexInverse={2000}
-                                searchable={true}
-                                searchPlaceholder="Search stores..."
-                                style={styles.dropdown}
-                                dropDownContainerStyle={styles.dropdownBox}
-                                scrollViewProps={{ nestedScrollEnabled: true }}
-                            />
-                        </View>
-
-                        <View style={styles.half}>
-                            <Text style={styles.label}>Transaction Date</Text>
-                            <TouchableOpacity
-                                style={styles.datePicker}
-                                onPress={() => setShowDatePicker(true)}
-                            >
-                                <Text style={styles.dateText}>{transactionDate.toISOString().split("T")[0]}</Text>
-                                <Icon name="date-range" size={20} color="#333" />
-                            </TouchableOpacity>
-                            <DateTimePickerModal
-                                isVisible={showDatePicker}
-                                mode="date"
-                                date={transactionDate}
-                                maximumDate={new Date()}
-                                onConfirm={(date) => {
-                                    setTransactionDate(date);
-                                    setShowDatePicker(false);
-                                }}
-                                onCancel={() => setShowDatePicker(false)}
-                            />
-                        </View>
-                    </View>
-
-                    {/* // Stock selection */}
-                    <Text style={styles.label}>Add Stock Item</Text>
-
-                    <DropDownPicker
-                        open={stockOpen}
-                        value={stockValue}
-                        items={stockItems}
-                        setOpen={setStockOpen}
-                        setValue={setStockValue}
-                        setItems={setStockItems}
-                        placeholder="Select Stock Item"
-                        listMode="SCROLLVIEW"
-                        searchable={true}
-                        searchPlaceholder="Search stock..."
-                        onChangeValue={(val) => {
-                            setStockValue(val);
-                            if (val) {
-                                addStockEntry(val);  // ✅ Add entry when selected
-                            }
-                        }}
-                        renderListItem={renderDropdownItem as any}
-                        zIndex={1000}
-                        zIndexInverse={2000}
-                        style={styles.dropdown}
-                        dropDownContainerStyle={styles.dropdownBox}
-                        scrollViewProps={{ nestedScrollEnabled: true }}
-                    />
-
-                    {/* Entries list */}
-                    <Text style={[styles.label, { marginTop: 12 }]}>Selected items</Text>
-                    <FlatList
-                        data={entries}
-                        keyExtractor={(item) => item.id.toString()}
-                        nestedScrollEnabled
-                        scrollEnabled={false}
-                        style={styles.entriesList}
-                        contentContainerStyle={
-                            entries.length === 0 ? styles.emptyEntriesContainer : undefined
-                        }
-                        ListEmptyComponent={
-                            <Text style={styles.emptyEntriesText}>No items added yet.</Text>
-                        }
-                        renderItem={({ item, index }) => {
-                            const itemName = item?.item?.description || item?.name || item?.label || `Item ${index + 1}`;
-                            // Get available stock quantity (check multiple possible field names)
-                            const availableStock = item?.available_stock ?? item?.quantity ?? item?.stock ?? item?.available_quantity ?? item?.stock_quantity ?? null;
-                            // Add quantity in brackets if available (remove decimals)
-                            const displayName = availableStock !== null && availableStock !== undefined
-                                ? `${itemName} (${Math.floor(Number(availableStock))})`
-                                : itemName;
-                            
-                            return (
-                            <View style={styles.entry}>
-                                <Text style={styles.entryDescription}>
-                                    {displayName}
+                        {/* Customer Selection - Only shown for non-guest types */}
+                        {customerType !== "guest" && (
+                            <>
+                                <Text style={styles.label}>
+                                    {customerType === "member" ? "Select Member" :
+                                        customerType === "employee" ? "Select Employee" :
+                                            customerType === "vendor" ? "Select Vendor" :
+                                                customerType === "transporter" ? "Select Transporter" :
+                                                    customerType === "supplier" ? "Select Supplier" : "Select Customer"}
                                 </Text>
-                                <TextInput
-                                    style={[
-                                        styles.entryInput,
-                                        saving && { backgroundColor: "#f5f5f5", color: "#888" },
-                                    ]}
-                                    keyboardType="numeric"
-                                    placeholder="1"
-                                    value={item.quantity?.toString() ?? "1"}
-                                    onChangeText={(val) => {
-                                        if (!saving) {
-                                            // Get available stock for this item
-                                            const availableStock = item?.available_stock ?? item?.quantity ?? item?.stock ?? item?.available_quantity ?? item?.stock_quantity ?? null;
-                                            
-                                            // Allow empty string for clearing the input
-                                            if (val === '' || val === '.') {
-                                                const updated = [...entries];
-                                                updated[index].quantity = val;
-                                                setEntries(updated);
-                                                return;
-                                            }
-                                            
-                                            // Parse input value
-                                            const inputQty = parseFloat(val);
-                                            
-                                            // Validate: don't allow quantity to exceed available stock
-                                            if (availableStock !== null && availableStock !== undefined && !isNaN(inputQty)) {
-                                                const maxQty = parseFloat(String(availableStock)) || 0;
-                                                if (inputQty > maxQty) {
-                                                    // Silently cap at max available quantity
-                                                    val = String(maxQty);
-                                                }
-                                            }
-                                            
-                                            const updated = [...entries];
-                                            updated[index].quantity = val;
-                                            setEntries(updated);
-                                        }
-                                    }}
-                                    editable={!saving}   // ✅ disable editing
-                                />
-                                <Text style={styles.priceText}>
-                                    @ {getEntryPrice(item).toFixed(2)} ={" "}
-                                    {(() => {
-                                        const qty = parseFloat(item?.quantity || "0");
-                                        const price = getEntryPrice(item);
-                                        const total = qty * price;
-                                        return Number.isFinite(total) ? total.toFixed(2) : "0.00";
-                                    })()}
-                                </Text>
-                                <TouchableOpacity
-                                    onPress={() =>
-                                        !saving &&
-                                        setEntries(entries.filter((e) => e.id !== item.id))
+                                <DropDownPicker
+                                    open={memberOpen}
+                                    value={memberValue}
+                                    items={memberItems}
+                                    setOpen={setMemberOpen}
+                                    setValue={setMemberValue}
+                                    setItems={setMemberItems}
+                                    placeholder={
+                                        customerType === "member" ? "Select Member" :
+                                            customerType === "employee" ? "Select Employee" :
+                                                customerType === "vendor" ? "Select Vendor" :
+                                                    customerType === "transporter" ? "Select Transporter" :
+                                                        customerType === "supplier" ? "Select Supplier" : "Select Customer"
                                     }
-                                    style={[styles.removeButton, saving && { opacity: 0.4 }]}
-                                    disabled={saving}   // ✅ disable deleting
-                                >
-                                    <Icon name="delete" size={22} color="#d11a2a" />
-                                </TouchableOpacity>
+                                    listMode="SCROLLVIEW"
+                                    zIndex={3000}
+                                    zIndexInverse={1000}
+                                    searchable={true}
+                                    searchPlaceholder={
+                                        customerType === "member" ? "Search members..." :
+                                            customerType === "employee" ? "Search employees..." :
+                                                customerType === "vendor" ? "Search vendors..." :
+                                                    customerType === "transporter" ? "Search transporters..." :
+                                                        customerType === "supplier" ? "Search suppliers..." : "Search customers..."
+                                    }
+                                    style={styles.dropdown}
+                                    dropDownContainerStyle={styles.dropdownBox}
+                                    scrollViewProps={{ nestedScrollEnabled: true }}
+                                />
+                            </>
+                        )}
+
+                        {/* Pair: Store + Date */}
+                        <View style={styles.row}>
+                            <View style={styles.half}>
+                                <Text style={styles.label}>Store</Text>
+                                <DropDownPicker
+                                    open={storeOpen}
+                                    value={storeValue}
+                                    items={storeItems}
+                                    setOpen={setStoreOpen}
+                                    setValue={setStoreValue}
+                                    setItems={setStoreItems}
+                                    placeholder="Select Store"
+                                    listMode="SCROLLVIEW"
+                                    zIndex={2500}
+                                    zIndexInverse={2000}
+                                    searchable={true}
+                                    searchPlaceholder="Search stores..."
+                                    style={styles.dropdown}
+                                    dropDownContainerStyle={styles.dropdownBox}
+                                    scrollViewProps={{ nestedScrollEnabled: true }}
+                                />
                             </View>
-                            );
-                        }}
-                    />
-                    {/* Overall Total */}
-                    <View style={styles.totalRow}>
-                        <Text style={styles.totalLabel}>Overall Total:</Text>
-                        <Text style={styles.totalValue}>{overallTotal.toFixed(2)}</Text>
-                    </View>
 
-                    {/* Payment type */}
-                    <Text style={styles.label}>Payment Type</Text>
-                    <View style={styles.radioGroup}>
-                        <TouchableOpacity
-                            style={styles.radioOption}
-                            onPress={() => setPaymentType("cash")}
-                        >
-                            <Icon
-                                name={
-                                    paymentType === "cash"
-                                        ? "radio-button-checked"
-                                        : "radio-button-unchecked"
-                                }
-                                size={20}
-                                color="#007AFF"
-                            />
-                            <Text style={styles.radioText}>Cash</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.radioOption}
-                            onPress={() => customerType !== "guest" && setPaymentType("credit")}
-                            disabled={customerType === "guest"}
-                        >
-                            <Icon
-                                name={
-                                    paymentType === "credit"
-                                        ? "radio-button-checked"
-                                        : "radio-button-unchecked"
-                                }
-                                size={20}
-                                color={customerType !== "guest" ? "#007AFF" : "#ccc"}
-                            />
-                            <Text
-                                style={[
-                                    styles.radioText,
-                                    { color: customerType !== "guest" ? "#000" : "#aaa" },
-                                ]}
-                            >
-                                Credit
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    {/* Printer Connection Section */}
-                    {!connectedPrinter && (
-                        <View style={styles.printerSection}>
-                            <Text style={styles.label}>Printer</Text>
-                            <View style={styles.printerStatusContainer}>
-                                <View style={styles.printerDisconnected}>
-                                    <View style={[styles.printerStatusIndicator, { backgroundColor: '#ef4444' }]} />
-                                    <Text style={styles.printerStatusText}>
-                                        {isConnectingPrinter
-                                            ? "Connecting to InnerPrinter..."
-                                            : "No printer connected"}
-                                    </Text>
-                                </View>
+                            <View style={styles.half}>
+                                <Text style={styles.label}>Transaction Date</Text>
                                 <TouchableOpacity
-                                    style={[styles.printerButton, isConnectingPrinter && { opacity: 0.6 }]}
-                                    onPress={() => setPrinterModalVisible(true)}
-                                    disabled={isConnectingPrinter}
+                                    style={styles.datePicker}
+                                    onPress={() => setShowDatePicker(true)}
                                 >
-                                    <Text style={styles.printerButtonText}>
-                                        {isConnectingPrinter ? "Connecting..." : "Connect Printer"}
-                                    </Text>
+                                    <Text style={styles.dateText}>{transactionDate.toISOString().split("T")[0]}</Text>
+                                    <Icon name="date-range" size={20} color="#333" />
                                 </TouchableOpacity>
+                                <DateTimePickerModal
+                                    isVisible={showDatePicker}
+                                    mode="date"
+                                    date={transactionDate}
+                                    maximumDate={new Date()}
+                                    onConfirm={(date) => {
+                                        setTransactionDate(date);
+                                        setShowDatePicker(false);
+                                    }}
+                                    onCancel={() => setShowDatePicker(false)}
+                                />
                             </View>
                         </View>
-                    )}
 
-                </ScrollView>
+                        {/* // Stock selection */}
+                        <Text style={styles.label}>Add Stock Item</Text>
 
-                {/* Buttons */}
-                <View style={styles.actions}>
-                    <TouchableOpacity
-                        style={[styles.button, styles.cancelButton]}
-                        onPress={onClose}
-                        disabled={saving}
-                    >
-                        <Text style={styles.buttonText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.button, styles.saveButton]}
-                        onPress={handleSave}
-                        disabled={saving}
-                    >
-                        {saving ? (
-                            <ActivityIndicator color="#fff" />
-                        ) : (
-                            <Text style={styles.buttonText}>submit</Text>
+                        <DropDownPicker
+                            open={stockOpen}
+                            value={stockValue}
+                            items={stockItems}
+                            setOpen={setStockOpen}
+                            setValue={setStockValue}
+                            setItems={setStockItems}
+                            placeholder="Select Stock Item"
+                            listMode="SCROLLVIEW"
+                            searchable={true}
+                            searchPlaceholder="Search stock..."
+                            onChangeValue={(val) => {
+                                setStockValue(val);
+                                if (val) {
+                                    addStockEntry(val);  // ✅ Add entry when selected
+                                }
+                            }}
+                            renderListItem={renderDropdownItem as any}
+                            zIndex={1000}
+                            zIndexInverse={2000}
+                            style={styles.dropdown}
+                            dropDownContainerStyle={styles.dropdownBox}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
+                        />
+
+                        {/* Entries list */}
+                        <Text style={[styles.label, { marginTop: 12 }]}>Selected items</Text>
+                        <FlatList
+                            data={entries}
+                            keyExtractor={(item) => item.id.toString()}
+                            nestedScrollEnabled
+                            scrollEnabled={false}
+                            style={styles.entriesList}
+                            contentContainerStyle={
+                                entries.length === 0 ? styles.emptyEntriesContainer : undefined
+                            }
+                            ListEmptyComponent={
+                                <Text style={styles.emptyEntriesText}>No items added yet.</Text>
+                            }
+                            renderItem={({ item, index }) => {
+                                const itemName = item?.item?.description || item?.name || item?.label || `Item ${index + 1}`;
+                                // Get available stock quantity (check multiple possible field names)
+                                const availableStock = item?.available_stock ?? item?.quantity ?? item?.stock ?? item?.available_quantity ?? item?.stock_quantity ?? null;
+                                // Add quantity in brackets if available (remove decimals)
+                                const displayName = availableStock !== null && availableStock !== undefined
+                                    ? `${itemName} (${Math.floor(Number(availableStock))})`
+                                    : itemName;
+
+                                return (
+                                    <View style={styles.entry}>
+                                        <Text style={styles.entryDescription}>
+                                            {displayName}
+                                        </Text>
+                                        <TextInput
+                                            style={[
+                                                styles.entryInput,
+                                                saving && { backgroundColor: "#f5f5f5", color: "#888" },
+                                            ]}
+                                            keyboardType="numeric"
+                                            placeholder="1"
+                                            value={item.quantity?.toString() ?? "1"}
+                                            onChangeText={(val) => {
+                                                if (!saving) {
+                                                    // Get available stock for this item
+                                                    const availableStock = item?.available_stock ?? item?.quantity ?? item?.stock ?? item?.available_quantity ?? item?.stock_quantity ?? null;
+
+                                                    // Allow empty string for clearing the input
+                                                    if (val === '' || val === '.') {
+                                                        const updated = [...entries];
+                                                        updated[index].quantity = val;
+                                                        setEntries(updated);
+                                                        return;
+                                                    }
+
+                                                    // Parse input value
+                                                    const inputQty = parseFloat(val);
+
+                                                    // Validate: don't allow quantity to exceed available stock
+                                                    if (availableStock !== null && availableStock !== undefined && !isNaN(inputQty)) {
+                                                        const maxQty = parseFloat(String(availableStock)) || 0;
+                                                        if (inputQty > maxQty) {
+                                                            // Silently cap at max available quantity
+                                                            val = String(maxQty);
+                                                        }
+                                                    }
+
+                                                    const updated = [...entries];
+                                                    updated[index].quantity = val;
+                                                    setEntries(updated);
+                                                }
+                                            }}
+                                            editable={!saving}   // ✅ disable editing
+                                        />
+                                        <Text style={styles.priceText}>
+                                            @ {getEntryPrice(item).toFixed(2)} ={" "}
+                                            {(() => {
+                                                const qty = parseFloat(item?.quantity || "0");
+                                                const price = getEntryPrice(item);
+                                                const total = qty * price;
+                                                return Number.isFinite(total) ? total.toFixed(2) : "0.00";
+                                            })()}
+                                        </Text>
+                                        <TouchableOpacity
+                                            onPress={() =>
+                                                !saving &&
+                                                setEntries(entries.filter((e) => e.id !== item.id))
+                                            }
+                                            style={[styles.removeButton, saving && { opacity: 0.4 }]}
+                                            disabled={saving}   // ✅ disable deleting
+                                        >
+                                            <Icon name="delete" size={22} color="#d11a2a" />
+                                        </TouchableOpacity>
+                                    </View>
+                                );
+                            }}
+                        />
+                        {/* Overall Total */}
+                        <View style={styles.totalRow}>
+                            <Text style={styles.totalLabel}>Overall Total:</Text>
+                            <Text style={styles.totalValue}>{overallTotal.toFixed(2)}</Text>
+                        </View>
+
+                        {/* Payment type */}
+                        <Text style={styles.label}>Payment Type</Text>
+                        <View style={styles.radioGroup}>
+                            <TouchableOpacity
+                                style={styles.radioOption}
+                                onPress={() => setPaymentType("cash")}
+                            >
+                                <Icon
+                                    name={
+                                        paymentType === "cash"
+                                            ? "radio-button-checked"
+                                            : "radio-button-unchecked"
+                                    }
+                                    size={20}
+                                    color="#007AFF"
+                                />
+                                <Text style={styles.radioText}>Cash</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.radioOption}
+                                onPress={() => customerType !== "guest" && setPaymentType("credit")}
+                                disabled={customerType === "guest"}
+                            >
+                                <Icon
+                                    name={
+                                        paymentType === "credit"
+                                            ? "radio-button-checked"
+                                            : "radio-button-unchecked"
+                                    }
+                                    size={20}
+                                    color={customerType !== "guest" ? "#007AFF" : "#ccc"}
+                                />
+                                <Text
+                                    style={[
+                                        styles.radioText,
+                                        { color: customerType !== "guest" ? "#000" : "#aaa" },
+                                    ]}
+                                >
+                                    Credit
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Printer Connection Section */}
+                        {!connectedPrinter && (
+                            <View style={styles.printerSection}>
+                                <Text style={styles.label}>Printer</Text>
+                                <View style={styles.printerStatusContainer}>
+                                    <View style={styles.printerDisconnected}>
+                                        <View style={[styles.printerStatusIndicator, { backgroundColor: '#ef4444' }]} />
+                                        <Text style={styles.printerStatusText}>
+                                            {isConnectingPrinter
+                                                ? "Connecting to InnerPrinter..."
+                                                : "No printer connected"}
+                                        </Text>
+                                    </View>
+                                    <TouchableOpacity
+                                        style={[styles.printerButton, isConnectingPrinter && { opacity: 0.6 }]}
+                                        onPress={() => setPrinterModalVisible(true)}
+                                        disabled={isConnectingPrinter}
+                                    >
+                                        <Text style={styles.printerButtonText}>
+                                            {isConnectingPrinter ? "Connecting..." : "Connect Printer"}
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
                         )}
-                    </TouchableOpacity>
-                </View>
 
-                {/* Bluetooth Printer Connection Modal */}
-                <BluetoothConnectionModal
-                    visible={printerModalVisible}
-                    onClose={() => setPrinterModalVisible(false)}
-                    type="device-list"
-                    deviceType="printer"
-                    title="Select Printer Device"
-                    devices={printerDevices}
-                    connectToDevice={connectToPrinter}
-                    scanForDevices={scanForPrinters}
-                    isScanning={isScanningPrinters}
-                    isConnecting={isConnectingPrinter}
-                    connectedDevice={connectedPrinter}
-                />
+                    </ScrollView>
+
+                    {/* Buttons */}
+                    <View style={styles.actions}>
+                        <TouchableOpacity
+                            style={[styles.button, styles.cancelButton]}
+                            onPress={onClose}
+                            disabled={saving}
+                        >
+                            <Text style={styles.buttonText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.button, styles.saveButton]}
+                            onPress={handleSave}
+                            disabled={saving}
+                        >
+                            {saving ? (
+                                <ActivityIndicator color="#fff" />
+                            ) : (
+                                <Text style={styles.buttonText}>submit</Text>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Bluetooth Printer Connection Modal */}
+                    <BluetoothConnectionModal
+                        visible={printerModalVisible}
+                        onClose={() => setPrinterModalVisible(false)}
+                        type="device-list"
+                        deviceType="printer"
+                        title="Select Printer Device"
+                        devices={printerDevices}
+                        connectToDevice={connectToPrinter}
+                        scanForDevices={scanForPrinters}
+                        isScanning={isScanningPrinters}
+                        isConnecting={isConnectingPrinter}
+                        connectedDevice={connectedPrinter}
+                    />
                 </View>
             </KeyboardAvoidingView>
         </Modal>
