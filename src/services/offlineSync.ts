@@ -36,18 +36,17 @@ const loginWithStoredCredentials = async (): Promise<boolean> => {
             return false;
         }
 
-        const { phone_number, password } = creds;
+        const { email, password } = creds;
 
-        if (!phone_number || !password) {
+        if (!email || !password) {
             console.log('[SYNC] Incomplete offline credentials');
             return false;
         }
 
-        // Attempt login
         const [status, response] = await makeRequest({
             url: 'auth/login',
             method: 'POST',
-            data: { phone_number, password },
+            data: { email, password },
         });
 
         if ([200, 201].includes(status) && response?.token) {
@@ -543,9 +542,9 @@ const performOfflineReAuthentication = async (triggerSync: () => Promise<{ succe
             url: 'member-token',
             method: 'POST',
             data: {
-                phone_number: offlineCreds.phone_number,
-                password: offlineCreds.password
-            }
+                email: offlineCreds.email,
+                password: offlineCreds.password,
+            },
         });
 
         if ([200, 201].includes(status) && response?.access_token) {

@@ -1,36 +1,24 @@
 import { Alert } from "react-native";
 import { getItem } from "./local-storage";
 import NetInfo from '@react-native-community/netinfo';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Network alert state management - prevents multiple alerts when offline
 let hasShownNetworkAlert = false;
-let networkAlertCount = 0; // Track how many times we've alerted about network issues
+let networkAlertCount = 0;
 
-// Default fallback URL
-const DEFAULT_BASE_URL = "https://dev.edairy.africa";
+const DEFAULT_BASE_URL = "https://api.arithi.edairy.africa";
 
-// Get dynamic server URL
 const getServerUrl = async (): Promise<string> => {
-    try {
-        const serverConfig = await AsyncStorage.getItem('@edairyApp:server_config');
-        if (serverConfig) {
-            const config = JSON.parse(serverConfig);
-            if (config.domain && config.domain.trim()) {
-                // Ensure the domain has a protocol
-                let domain = config.domain.trim();
-                if (!domain.startsWith('http://') && !domain.startsWith('https://')) {
-                    domain = `https://${domain}`;
-                }
-                // Remove trailing slash if present
-                domain = domain.replace(/\/$/, '');
-                return `${domain}/api/`;
-            }
-        }
-    } catch (error) {
-        console.warn('Failed to load server config, using default:', error);
-    }
     return `${DEFAULT_BASE_URL}/api/`;
+};
+
+type MakeRequestOptions = {
+    url: string;
+    method: string;
+    data?: any;
+    use_jwt?: boolean;
+    responseType?: string;
+    isFormData?: boolean;
+    skipAuth?: boolean;
 };
 
 const makeRequest = async ({
@@ -40,13 +28,14 @@ const makeRequest = async ({
     use_jwt = false,
     responseType = "json",
     isFormData = false,
-}) => {
-    // Check internet connectivity before making request
+    skipAuth = false,
+}: MakeRequestOptions) => {
+    const endpoint = url;
     const netInfo = await NetInfo.fetch();
-    const isCurrentlyConnected = netInfo.isConnected && netInfo.isInternetReachable;
+    const isCurrentlyConnected =
+        netInfo.isConnected === true && netInfo.isInternetReachable !== false;
 
     if (!isCurrentlyConnected) {
-        // Only show alert once when connection is lost - increment counter to prevent multiple alerts
         if (!hasShownNetworkAlert) {
             hasShownNetworkAlert = true;
             networkAlertCount++;
@@ -58,9 +47,8 @@ const makeRequest = async ({
                     {
                         text: "Retry",
                         onPress: () => {
-                            // Retry the request after user confirms
                             setTimeout(() => {
-                                makeRequest({ url, method, data, use_jwt, responseType, isFormData });
+                                makeRequest({ url: endpoint, method, data, use_jwt, responseType, isFormData, skipAuth });
                             }, 10000);
                         },
                     },
@@ -68,16 +56,15 @@ const makeRequest = async ({
             );
         }
         return [503, { message: "No internet connection" }];
-    } else {
-        // Reset alert flag when connection is restored - allow new alerts when offline again
-        hasShownNetworkAlert = false;
-        networkAlertCount = 0;
     }
 
-    // Get dynamic server URL
+    hasShownNetworkAlert = false;
+    networkAlertCount = 0;
+
     const baseUrl = await getServerUrl();
-    url = baseUrl + url;
-    let headers: any = {
+    const fullUrl = `${baseUrl}${endpoint}`;
+
+    const headers: Record<string, string> = {
         accept: "application/json",
     };
 
@@ -85,15 +72,16 @@ const makeRequest = async ({
         headers["content-type"] = "application/json";
     }
 
-    const user = await getItem("user");
-    const token = user?.access_token;
-    // Alert.alert(token);
-    // if (use_jwt && token) {
-    headers.Authorization = `Bearer ${token}`;
-    // }
+    if (!skipAuth) {
+        const user = await getItem("user");
+        const token = user?.access_token || user?.token;
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+        }
+    }
 
     try {
-        const request: any = {
+        const request: RequestInit = {
             method,
             headers,
         };
@@ -102,8 +90,9 @@ const makeRequest = async ({
             request.body = isFormData ? data : JSON.stringify(data);
         }
 
-        const response = await fetch(url, request);
-        let result;
+        const response = await fetch(fullUrl, request);
+        let result: any;
+
         try {
             result =
                 responseType === "text"
@@ -115,16 +104,13 @@ const makeRequest = async ({
 
         return [response.status, result];
     } catch (err: any) {
-
         console.error("Fetch error:", err);
 
-        // Check if it's a network error
         const isNetworkError = err.message?.includes('Network request failed') ||
             err.message?.includes('fetch') ||
             err.code === 'NETWORK_ERROR';
 
         if (isNetworkError) {
-            // Only show network error alert if we haven't already alerted about connectivity issues
             if (!hasShownNetworkAlert) {
                 hasShownNetworkAlert = true;
                 networkAlertCount++;
@@ -137,7 +123,7 @@ const makeRequest = async ({
                             text: "Retry",
                             onPress: () => {
                                 setTimeout(() => {
-                                    makeRequest({ url, method, data, use_jwt, responseType, isFormData });
+                                    makeRequest({ url: endpoint, method, data, use_jwt, responseType, isFormData, skipAuth });
                                 }, 1000);
                             },
                         },
@@ -145,7 +131,6 @@ const makeRequest = async ({
                 );
             }
         } else {
-            // Non-network errors should always show alerts (these are different from connectivity issues)
             Alert.alert("Error", "An unexpected error occurred. Please try again.");
         }
 
@@ -155,10 +140,6 @@ const makeRequest = async ({
 
 export default makeRequest;
 
-/**
- * Fetches user profile data from the API
- * @returns Promise with profile data or null if error
- */
 export const fetchUserProfile = async () => {
     try {
         const [status, response] = await makeRequest({
@@ -168,10 +149,10 @@ export const fetchUserProfile = async () => {
 
         if ([200, 201].includes(status)) {
             return response?.data || response || null;
-        } else {
-            console.error('Failed to fetch profile:', response?.message || 'Unknown error');
-            return null;
         }
+
+        console.error('Failed to fetch profile:', response?.message || 'Unknown error');
+        return null;
     } catch (error) {
         console.error('Error fetching user profile:', error);
         return null;

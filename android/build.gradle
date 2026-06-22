@@ -20,6 +20,12 @@ buildscript {
 
 apply plugin: "com.facebook.react.rootproject"
 
+tasks.register("run-android") {
+    group = "application"
+    description = "Installs the debug Android app on a connected device or emulator."
+    dependsOn(":app:installDebug")
+}
+
 // Force all Android library modules to use our compile/target SDK levels
 subprojects { subproject ->
     if (subproject.hasProperty('android')) {

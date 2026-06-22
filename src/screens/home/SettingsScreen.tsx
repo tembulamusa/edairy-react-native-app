@@ -27,13 +27,20 @@ import {
     saveMeasuringCans,
     saveTransporterStatus
 } from "../../services/offlineDatabase";
+import {
+    USER_PREFERENCES_KEY,
+    DEFAULT_DAIRY_NAME,
+    saveDairyName,
+} from "../../utils/userPreferences";
+import { notifyHeaderRefresh } from "../../utils/headerRefresh";
 
 type PreferenceKey =
     | "notifications_enabled"
     | "biometrics_enabled"
     | "dark_mode_enabled"
     | "auto_print_enabled"
-    | "scale_connection_type";
+    | "scale_connection_type"
+    | "dairy_name";
 
 const preferenceDefaults: Record<PreferenceKey, boolean | string> = {
     notifications_enabled: true,
@@ -41,6 +48,7 @@ const preferenceDefaults: Record<PreferenceKey, boolean | string> = {
     dark_mode_enabled: false,
     auto_print_enabled: true,
     scale_connection_type: "ble", // Default to BLE
+    dairy_name: DEFAULT_DAIRY_NAME,
 };
 
 const SettingsScreen: React.FC = () => {
@@ -77,8 +85,10 @@ const SettingsScreen: React.FC = () => {
     // Data clearing states
     const [clearingData, setClearingData] = useState(false);
 
-    const preferenceStorageKey = "@edairyApp:user_preferences";
     const serverConfigStorageKey = "@edairyApp:server_config";
+
+    const [dairyNameInput, setDairyNameInput] = useState(DEFAULT_DAIRY_NAME);
+    const [dairyNameSaving, setDairyNameSaving] = useState(false);
 
     const loadSettings = useCallback(async () => {
         try {
@@ -102,15 +112,19 @@ const SettingsScreen: React.FC = () => {
                 setUser(null);
             }
 
-            const storedPrefs = await AsyncStorage.getItem(preferenceStorageKey);
+            const storedPrefs = await AsyncStorage.getItem(USER_PREFERENCES_KEY);
             if (storedPrefs) {
                 const parsed = JSON.parse(storedPrefs);
                 setPreferences({
                     ...preferenceDefaults,
                     ...parsed,
                 });
+                setDairyNameInput(
+                    (parsed.dairy_name || DEFAULT_DAIRY_NAME).trim() || DEFAULT_DAIRY_NAME
+                );
             } else {
                 setPreferences(preferenceDefaults);
+                setDairyNameInput(DEFAULT_DAIRY_NAME);
             }
 
             // Load server configuration
@@ -303,16 +317,39 @@ const SettingsScreen: React.FC = () => {
         checkAndFetchOfflineData();
     }, [loadSettings, checkAndFetchOfflineData]);
 
-    const handleToggle = async (key: PreferenceKey, value: boolean) => {
+    const handleToggle = async (key: PreferenceKey, value: boolean | string) => {
         try {
             setSaving(true);
             const nextPrefs = { ...preferences, [key]: value };
             setPreferences(nextPrefs);
-            await AsyncStorage.setItem(preferenceStorageKey, JSON.stringify(nextPrefs));
+            await AsyncStorage.setItem(USER_PREFERENCES_KEY, JSON.stringify(nextPrefs));
         } catch (error) {
             Alert.alert("Error", "Failed to save preference. Please try again.");
         } finally {
             setSaving(false);
+        }
+    };
+
+    const handleSaveDairyName = async () => {
+        const trimmed = dairyNameInput.trim();
+        if (!trimmed) {
+            Alert.alert("Error", "Please enter a dairy name.");
+            return;
+        }
+
+        try {
+            setDairyNameSaving(true);
+            await saveDairyName(trimmed);
+            const nextPrefs = { ...preferences, dairy_name: trimmed };
+            setPreferences(nextPrefs);
+            setDairyNameInput(trimmed);
+            notifyHeaderRefresh();
+            Alert.alert("Saved", "Dairy name updated. It will appear in the app header.");
+        } catch (error) {
+            console.error("[Settings] Error saving dairy name:", error);
+            Alert.alert("Error", "Failed to save dairy name.");
+        } finally {
+            setDairyNameSaving(false);
         }
     };
 
@@ -557,6 +594,35 @@ const SettingsScreen: React.FC = () => {
             <View style={styles.section}>
                 <Text style={styles.sectionTitle}>App Preferences</Text>
                 <View style={styles.card}>
+                    <View style={{ marginBottom: 16 }}>
+                        <Text style={styles.listTitle}>Dairy Name</Text>
+                        <Text style={styles.listSubtitle}>
+                            Shown in the app header below your first name (replaces the default dairy title).
+                        </Text>
+                        <TextInput
+                            style={styles.serverInput}
+                            value={dairyNameInput}
+                            onChangeText={setDairyNameInput}
+                            placeholder={DEFAULT_DAIRY_NAME}
+                            placeholderTextColor="#94a3b8"
+                            autoCapitalize="words"
+                            autoCorrect={false}
+                        />
+                        <TouchableOpacity
+                            style={[styles.saveServerButton, dairyNameSaving && { opacity: 0.6 }]}
+                            onPress={handleSaveDairyName}
+                            disabled={dairyNameSaving}
+                        >
+                            {dairyNameSaving ? (
+                                <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                                <Icon name="save" size={18} color="#fff" />
+                            )}
+                            <Text style={styles.saveServerButtonText}>
+                                {dairyNameSaving ? "Saving..." : "Save Dairy Name"}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
                     <View style={styles.preferenceRow}>
                         <View style={{ flex: 1 }}>
                             <Text style={styles.listTitle}>Notifications</Text>

@@ -329,6 +329,7 @@ function useBLEService({
                                     const deviceId = scannedDevice.id.toLowerCase();
                                     const deviceAddress = (scannedDevice as any).localName?.toLowerCase() || '';
 
+                                    console.log("I have reached the enhanced scale detection logic");
                                     // Known scale devices by ID/name - comprehensive list
                                     const knownScaleDevices = [
                                         // Specific device IDs mentioned by user
@@ -404,7 +405,6 @@ function useBLEService({
                                     }
 
                                     console.log(`[BLE] SCAN: Added device to list: ${deviceName}`);
-
                                     // Special logging for known devices like XH2507024006
                                     if (deviceId.includes('xh2507024006') || deviceName.includes('xh2507024006')) {
                                         console.log(`[BLE] 🎯 FOUND KNOWN SCALE: XH2507024006`);

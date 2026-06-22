@@ -1,5 +1,6 @@
 // src/services/offlineDatabase.ts
 import SQLite from 'react-native-sqlite-storage';
+import { normalizeEmail } from '../utils/loginCredentials';
 
 SQLite.DEBUG(true);
 SQLite.enablePromise(true);
@@ -94,6 +95,8 @@ const createTables = async () => {
         // Verify and add offline credential columns if they don't exist
         const requiredColumns = [
             'offline_phone_number',
+            'offline_username',
+            'offline_email',
             'offline_password',
             'offline_token',
             'offline_user_data',
@@ -678,7 +681,9 @@ export const hasMeasuringCans = async (): Promise<boolean> => {
 
 // Offline Credentials Management
 export interface OfflineCredentials {
-    phone_number: string;
+    phone_number?: string;
+    username?: string;
+    email?: string;
     password: string;
     token: string;
     user_data: any;
@@ -690,7 +695,7 @@ export const saveOfflineCredentials = async (data: OfflineCredentials): Promise<
     try {
         console.log('[DB] Initializing database for credential storage...');
         const db = database || await initDatabase();
-        console.log('[DB] Database ready, saving offline credentials for:', data.phone_number);
+        console.log('[DB] Database ready, saving offline credentials for:', data.phone_number || data.username || data.email);
 
         // Check if we have any existing settings records
         console.log('[DB] Checking existing records...');
@@ -704,14 +709,18 @@ export const saveOfflineCredentials = async (data: OfflineCredentials): Promise<
             await db.executeSql(`
                 INSERT INTO settings (
                     offline_phone_number,
+                    offline_username,
+                    offline_email,
                     offline_password,
                     offline_token,
                     offline_user_data,
                     offline_credentials_updated_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             `, [
-                data.phone_number,
+                data.phone_number || null,
+                data.username || null,
+                data.email || null,
                 data.password,
                 data.token,
                 JSON.stringify(data.user_data),
@@ -725,6 +734,8 @@ export const saveOfflineCredentials = async (data: OfflineCredentials): Promise<
             await db.executeSql(`
                 UPDATE settings
                 SET offline_phone_number = ?,
+                    offline_username = ?,
+                    offline_email = ?,
                     offline_password = ?,
                     offline_token = ?,
                     offline_user_data = ?,
@@ -732,7 +743,9 @@ export const saveOfflineCredentials = async (data: OfflineCredentials): Promise<
                     updated_at = ?
                 WHERE id = (SELECT MIN(id) FROM settings)
             `, [
-                data.phone_number,
+                data.phone_number || null,
+                data.username || null,
+                data.email || null,
                 data.password,
                 data.token,
                 JSON.stringify(data.user_data),
@@ -746,15 +759,18 @@ export const saveOfflineCredentials = async (data: OfflineCredentials): Promise<
 
         // Verify the save worked
         const verifyResult = await db.executeSql(`
-            SELECT offline_phone_number, offline_credentials_updated_at
+            SELECT offline_phone_number, offline_username, offline_email, offline_credentials_updated_at
             FROM settings
             WHERE offline_phone_number IS NOT NULL
+               OR offline_username IS NOT NULL
+               OR offline_email IS NOT NULL
             ORDER BY offline_credentials_updated_at DESC
             LIMIT 1
         `);
         console.log('[DB] Verification query result:', verifyResult[0].rows.length, 'rows found');
         if (verifyResult[0].rows.length > 0) {
-            console.log('[DB] Verification: phone =', verifyResult[0].rows.item(0).offline_phone_number);
+            const row = verifyResult[0].rows.item(0);
+            console.log('[DB] Verification: phone =', row.offline_phone_number, 'username =', row.offline_username, 'email =', row.offline_email);
         }
 
     } catch (error) {
@@ -782,9 +798,11 @@ export const getOfflineCredentials = async (): Promise<OfflineCredentials | null
         }
 
         const result = await db.executeSql(`
-            SELECT offline_phone_number, offline_password, offline_token, offline_user_data, offline_credentials_updated_at
+            SELECT offline_phone_number, offline_username, offline_email, offline_password, offline_token, offline_user_data, offline_credentials_updated_at
             FROM settings
             WHERE offline_phone_number IS NOT NULL
+               OR offline_username IS NOT NULL
+               OR offline_email IS NOT NULL
             ORDER BY offline_credentials_updated_at DESC
             LIMIT 1
         `);
@@ -793,10 +811,12 @@ export const getOfflineCredentials = async (): Promise<OfflineCredentials | null
 
         if (result[0].rows.length > 0) {
             const row = result[0].rows.item(0);
-            console.log('[DB] Found credentials for:', row.offline_phone_number);
+            console.log('[DB] Found credentials for:', row.offline_phone_number || row.offline_username || row.offline_email);
             console.log('[DB] Token exists:', !!row.offline_token);
             return {
-                phone_number: row.offline_phone_number,
+                phone_number: row.offline_phone_number || undefined,
+                username: row.offline_username || undefined,
+                email: row.offline_email || undefined,
                 password: row.offline_password,
                 token: row.offline_token,
                 user_data: JSON.parse(row.offline_user_data || '{}'),
@@ -824,7 +844,10 @@ export const hasOfflineCredentials = async (): Promise<boolean> => {
 };
 
 // Validate offline login against stored credentials
-export const validateOfflineCredentials = async (phoneNumber: string, password: string): Promise<{ valid: boolean; userData?: any; token?: string }> => {
+export const validateOfflineCredentials = async (
+    email: string,
+    password: string
+): Promise<{ valid: boolean; userData?: any; token?: string }> => {
     try {
         const credentials = await getOfflineCredentials();
 
@@ -832,7 +855,6 @@ export const validateOfflineCredentials = async (phoneNumber: string, password: 
             return { valid: false };
         }
 
-        // Check if credentials are not too old (30 days)
         const storedAt = new Date(credentials.stored_at);
         const now = new Date();
         const hoursDiff = (now.getTime() - storedAt.getTime()) / (1000 * 60 * 60);
@@ -842,10 +864,13 @@ export const validateOfflineCredentials = async (phoneNumber: string, password: 
             return { valid: false };
         }
 
-        // Validate phone number and password
-        const isValid = credentials.phone_number === phoneNumber && credentials.password === password;
+        const normalizedEmail = normalizeEmail(email);
+        const passwordMatches = credentials.password === password;
+        const emailMatches =
+            credentials.email === normalizedEmail ||
+            credentials.email === email.trim();
 
-        if (isValid) {
+        if (passwordMatches && emailMatches) {
             return {
                 valid: true,
                 userData: credentials.user_data,
@@ -865,7 +890,7 @@ export const clearOfflineCredentials = async (): Promise<void> => {
     try {
         const db = database || await initDatabase();
 
-        await db.executeSql('UPDATE settings SET offline_phone_number = NULL, offline_password = NULL, offline_token = NULL, offline_user_data = NULL, offline_credentials_updated_at = NULL');
+        await db.executeSql('UPDATE settings SET offline_phone_number = NULL, offline_username = NULL, offline_email = NULL, offline_password = NULL, offline_token = NULL, offline_user_data = NULL, offline_credentials_updated_at = NULL');
 
         console.log('[DB] Offline credentials cleared');
     } catch (error) {

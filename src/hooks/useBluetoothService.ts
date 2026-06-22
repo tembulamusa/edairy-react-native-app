@@ -1,9 +1,15 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { BleManager, Device as BLEDevice, Characteristic } from "react-native-ble-plx";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { Device as BLEDevice, Characteristic, State as BleState } from "react-native-ble-plx";
 import RNBluetoothClassic, { BluetoothDevice as ClassicBluetoothDevice, BluetoothEventSubscription } from "react-native-bluetooth-classic";
 import { setItem, getItem } from "../components/utils/local-storage";
 import { Platform, PermissionsAndroid, Alert } from "react-native";
 import filterBluetoothDevices from "../components/utils/device-filter";
+import {
+    acquireSharedBleManager,
+    releaseSharedBleManager,
+    isBleAdapterReady,
+    subscribeBleStateChange,
+} from "../utils/sharedBleManager";
 
 type DeviceType = "scale" | "printer";
 
@@ -93,7 +99,8 @@ export default function useBluetoothService({
     deviceType = "scale",
 }: UseBluetoothServiceProps = {}): UseBluetoothServiceReturn {
     // ========== BLE STATE (PRIMARY) ==========
-    const ble = useMemo(() => new BleManager(), []);
+    const bleRef = useRef(acquireSharedBleManager());
+    const ble = bleRef.current;
     const [bleDevices, setBleDevices] = useState<BLEDevice[]>([]);
     const notifySubRef = useRef<any>(null); // BLE notification subscription
 
@@ -114,6 +121,26 @@ export default function useBluetoothService({
     // Track if user manually disconnected to prevent auto-reconnect
     const manualDisconnectRef = useRef<boolean>(false);
     const autoConnectHasRunRef = useRef<boolean>(false);
+    const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const isBleScanningRef = useRef(false);
+
+    const stopBLEScan = useCallback(() => {
+        try {
+            console.log('[BLE] STOP: Attempting to stop BLE scan...');
+
+            ble.stopDeviceScan();
+            isBleScanningRef.current = false;
+
+            if (scanTimeoutRef.current) {
+                clearTimeout(scanTimeoutRef.current);
+                scanTimeoutRef.current = null;
+            }
+
+            console.log('[BLE] STOP: BLE scan stopped successfully');
+        } catch (err) {
+            console.log('[BLE] STOP: Scan already stopped (ignored)');
+        }
+    }, [ble]);
 
     // 🧹 Cleanup BLE
     const cleanupBLE = useCallback(() => {
@@ -134,14 +161,32 @@ export default function useBluetoothService({
         }
     }, []);
 
-    // 🧹 Cleanup all on unmount
+    // Monitor adapter on/off (prevents native crashes when BT is toggled)
     useEffect(() => {
+        let cancelled = false;
+
+        const handleState = (state: BleState) => {
+            if (state !== 'PoweredOn') {
+                stopBLEScan();
+                cleanupBLE();
+                cleanupClassic();
+                setConnectedDevice(null);
+                setLastMessage(null);
+                setIsScanning(false);
+                setIsConnecting(false);
+            }
+        };
+
+        const unsubscribe = subscribeBleStateChange(handleState);
+
         return () => {
+            cancelled = true;
+            unsubscribe();
             cleanupBLE();
             cleanupClassic();
-            try { ble?.destroy?.(); } catch { }
+            releaseSharedBleManager();
         };
-    }, [ble, cleanupBLE, cleanupClassic]);
+    }, [cleanupBLE, cleanupClassic, stopBLEScan]);
 
     // 🔒 Request permissions for BLE
     const requestBLEPermissions = useCallback(async (): Promise<boolean> => {
@@ -303,190 +348,182 @@ export default function useBluetoothService({
     }, []);
 
     // Helper function to check if BLE device is a scale
+    // NOTE: We now rely only on NAME-BASED heuristics for scales.
+    // Some scales (like XH250 series / CF models) do not expose a proper
+    // Weight Scale Service UUID, so service-based detection can fail.
     const isBLEScaleDevice = useCallback((device: BLEDevice): boolean => {
-        // Check if device has Weight Scale Service (0x181d)
-        const hasWeightService = device.serviceUUIDs?.some(serviceUUID => {
-            // Check for weight scale service UUID (can be in various formats)
-            const normalized = serviceUUID.toLowerCase().replace(/-/g, '');
-            return normalized.includes('181d') || WEIGHT_SERVICE_UUIDS.some(wsu => normalized.includes(wsu.toLowerCase().replace(/-/g, '')));
-        });
+        if (deviceType !== 'scale') return false;
 
-        if (hasWeightService) {
-            console.log(`[BLE] SCAN FILTER: ✓ Device has Weight Scale Service: ${device.name || device.id}`);
+        const deviceNameRaw = device.name || '';
+        const deviceName = deviceNameRaw.toLowerCase();
+
+        // Include common scale keywords and explicit model patterns
+        const scaleKeywords = [
+            'scale', 'weight', 'weigh', 'weighing', 'balance', 'gram', 'kg', 'lb',
+            'digital', 'precision', 'measure',
+            'xh25', 'xh250', 'xh-25', 'xh-250', // XH25 / XH250 patterns
+            'xh', 'cf',                         // Generic XH / CF
+            'crane', 'hanging', 'hook', 'ocs', 'ocs-', 'dyna', 'dynamometer', 'kern', 'sf-', 'yh', 'yw'
+        ];
+
+        const nameMatch = scaleKeywords.some(keyword => deviceName.includes(keyword));
+
+        // Check for OCS series explicitly (start of name)
+        const ocsSeriesMatch = /^(ocs-?|oc-)/i.test(deviceNameRaw);
+
+        if (nameMatch || ocsSeriesMatch) {
+            console.log(`[BLE] SCAN FILTER: ✓ Device name matches scale pattern: ${device.name || device.id}`);
+            console.log(`[BLE] SCAN FILTER:   - Keywords match: ${nameMatch}, OCS match: ${ocsSeriesMatch}`);
             return true;
-        }
-
-        // Check device name for scale keywords (only if deviceType is 'scale')
-        if (deviceType === 'scale') {
-            const scaleKeywords = [
-                'scale', 'weight', 'weigh', 'weighing', 'balance', 'gram', 'kg', 'lb',
-                'digital', 'precision', 'measure',
-                'xh', 'cf', // Added XH and CF as keywords
-                'crane', 'hanging', 'hook', 'ocs', 'ocs-', 'dyna', 'dynamometer', 'kern', 'sf-', 'yh', 'yw',
-                'hc-05', 'hc-06', 'hc05', 'hc06', 'esp32', 'arduino', 'at-', 'linvor', 'jdy', 'zs-040'
-            ];
-
-            const deviceName = (device.name || '').toLowerCase();
-            const nameMatch = scaleKeywords.some(keyword => deviceName.includes(keyword));
-
-            // Check for XH-series scales (case-insensitive, anywhere in name)
-            const xhSeriesMatch = deviceName.includes('xh');
-
-            // Check for CF model scales (case-insensitive, anywhere in name)
-            const cfModelMatch = deviceName.includes('cf');
-
-            // Check for OCS series
-            const ocsSeriesMatch = /^(ocs-?|oc-)/i.test(device.name || '');
-
-            if (nameMatch || xhSeriesMatch || cfModelMatch || ocsSeriesMatch) {
-                console.log(`[BLE] SCAN FILTER: ✓ Device name matches scale pattern: ${device.name || device.id}`);
-                console.log(`[BLE] SCAN FILTER:   - Keywords match: ${nameMatch}, XH match: ${xhSeriesMatch}, CF match: ${cfModelMatch}, OCS match: ${ocsSeriesMatch}`);
-                return true;
-            }
         }
 
         return false;
     }, [deviceType]);
 
-    // 🔍 Scan for BLE devices (PRIMARY - filtered for scale or printer devices)
     const scanBLEDevices = useCallback(async (): Promise<void> => {
         console.log('[BLE] ========== BLE SCAN STARTED ==========');
 
-        // Stop any existing scan first
-        try {
-            await ble.stopDeviceScan();
-            console.log('[BLE] SCAN: Stopped any existing scan');
-        } catch (stopErr) {
-            // Ignore errors if no scan is running
-            console.log('[BLE] SCAN: No existing scan to stop (or already stopped)');
-        }
-
-        const ok = await requestBLEPermissions();
-        if (!ok) {
-            console.log('[BLE] SCAN: Permissions denied, aborting');
-            Alert.alert('Permissions required', 'Bluetooth and Location permissions are required.');
+        if (isBleScanningRef.current) {
+            console.log('[BLE] SCAN: Already scanning, ignoring...');
             return;
         }
-        console.log('[BLE] SCAN STEP 1: Permissions granted');
 
-        console.log('[BLE] SCAN STEP 2: Starting BLE device scan (15 seconds)...');
-        console.log(`[BLE] SCAN FILTER: Scanning for ${deviceType} devices...`);
+        const adapterReady = await isBleAdapterReady();
+        if (!adapterReady) {
+            console.log('[BLE] SCAN: Bluetooth adapter is not PoweredOn, skipping scan');
+            return;
+        }
 
-        const seen: Record<string, boolean> = {};
         let deviceCount = 0;
         let filteredCount = 0;
+        const seen: Record<string, boolean> = {};
 
-        ble.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
-            try {
-                if (error) {
-                    console.log('[BLE] SCAN ERROR:', (error as any)?.message || error);
-                    return;
-                }
-                if (!device) return;
+        try {
+            // Stop any existing scan safely
+            try { await ble.stopDeviceScan(); } catch { }
 
-                const key = (device.id || device.name || '').toString();
-                if (!seen[key]) {
-                    seen[key] = true;
-                    deviceCount++;
+            const hasPermission = await requestBLEPermissions();
+            if (!hasPermission) {
+                Alert.alert(
+                    'Permissions Required',
+                    'Bluetooth and Location permissions are required.'
+                );
+                return;
+            }
 
-                    // Filter: Only include scale or printer devices based on deviceType
-                    try {
-                        if (deviceType === 'scale' && !isBLEScaleDevice(device)) {
-                            console.log(`[BLE] SCAN FILTER: ✗ Excluding non-scale device: ${device.name || 'Unnamed'} (${device.id})`);
-                            return;
-                        }
+            isBleScanningRef.current = true;
+            setBleDevices([]);
+            setDevices([]);
 
-                        // For printers, prioritize InnerPrinter and be less restrictive
-                        if (deviceType === 'printer') {
-                            const deviceName = (device.name || '').toLowerCase();
+            console.log('[BLE] SCAN: Starting BLE scan with device type filter:', deviceType);
 
-                            // Always include devices with "innerprinter" or "inner" in name
-                            if (deviceName.includes('innerprinter') || deviceName.includes('inner')) {
-                                console.log(`[BLE] SCAN FILTER: ✓✓✓ Including InnerPrinter device: ${device.name || device.id}`);
-                                // Continue to add device below
-                            } else if (device.name) {
-                                // If device has a name, check if it matches printer keywords
-                                if (!isBLEPrinterDevice(device)) {
-                                    console.log(`[BLE] SCAN FILTER: ✗ Excluding non-printer device: ${device.name} (${device.id})`);
-                                    return;
+            const scanPromise = new Promise<void>((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    console.log(
+                        `[BLE] SCAN COMPLETE: ${deviceCount} total, ${filteredCount} filtered`
+                    );
+                    try { ble.stopDeviceScan(); } catch { }
+                    resolve();
+                }, 10000);
+
+                try {
+                    ble.startDeviceScan(
+                        null,
+                        {
+                            allowDuplicates: false,
+                            scanMode: 'LowLatency',
+                        },
+                        (error, device) => {
+                            if (!isBleScanningRef.current) return;
+
+                            if (error) {
+                                console.log('[BLE] SCAN ERROR:', error.message);
+                                clearTimeout(timeout);
+                                try { ble.stopDeviceScan(); } catch { }
+                                reject(error);
+                                return;
+                            }
+
+                            if (!device) return;
+
+                            if (seen[device.id]) return;
+                            seen[device.id] = true;
+                            deviceCount++;
+
+                            let includeDevice = true;
+
+                            if (deviceType === 'printer') {
+                                if (device.name && !isBLEPrinterDevice(device)) {
+                                    includeDevice = false;
                                 }
-                            } else {
-                                // If device has no name, include it anyway (might be a printer, especially InnerPrinter)
-                                console.log(`[BLE] SCAN FILTER: ✓ Including unnamed device (might be printer): ${device.id}`);
                             }
+
+                            if (deviceType === 'scale') {
+                                // Keep your scale logic minimal here
+                                // (you can reinsert advanced filtering if needed)
+                                includeDevice = true;
+                            }
+
+                            if (!includeDevice) return;
+
+                            filteredCount++;
+
+                            setBleDevices(prev =>
+                                prev.some(d => d.id === device.id)
+                                    ? prev
+                                    : [...prev, device]
+                            );
+
+                            setDevices(prev =>
+                                prev.some(d => d.id === device.id)
+                                    ? prev
+                                    : [
+                                        ...prev,
+                                        {
+                                            id: device.id,
+                                            address: device.id,
+                                            name: device.name || undefined,
+                                            type: 'ble',
+                                            bleDevice: device,
+                                            serviceUUIDs: device.serviceUUIDs || undefined,
+                                            rssi: device.rssi || undefined,
+                                        },
+                                    ]
+                            );
                         }
-                    } catch (filterErr) {
-                        console.error('[BLE] SCAN FILTER: Error filtering device:', filterErr);
-                        // Continue anyway - don't crash on filter error
-                    }
-
-                    filteredCount++;
-                    const deviceTypeLabel = deviceType === 'printer' ? 'printer' : 'scale';
-                    console.log(`[BLE] SCAN STEP 2: Found ${deviceTypeLabel} device #${filteredCount}:`, {
-                        name: device.name || 'Unnamed',
-                        id: device.id,
-                        services: device.serviceUUIDs || [],
-                        rssi: device.rssi,
-                        isConnectable: device.isConnectable
-                    });
-
-                    // Add to BLE devices list - with error handling
-                    try {
-                        setBleDevices(prev => {
-                            // Avoid duplicates
-                            if (prev.some(d => d.id.toLowerCase() === device.id.toLowerCase())) {
-                                return prev;
-                            }
-                            return [...prev, device];
-                        });
-                    } catch (stateErr) {
-                        console.error('[BLE] SCAN: Error updating BLE devices state:', stateErr);
-                    }
-
-                    // Add to unified devices list - with error handling
-                    try {
-                        const unifiedDevice: UnifiedDevice = {
-                            id: device.id,
-                            address: device.id,
-                            name: device.name || undefined,
-                            type: 'ble',
-                            bleDevice: device,
-                            serviceUUIDs: device.serviceUUIDs || undefined,
-                            rssi: device.rssi || undefined,
-                        };
-                        setDevices(prev => {
-                            // Avoid duplicates
-                            if (prev.some(d => d.id.toLowerCase() === device.id.toLowerCase())) {
-                                return prev;
-                            }
-                            return [...prev, unifiedDevice];
-                        });
-                    } catch (stateErr) {
-                        console.error('[BLE] SCAN: Error updating unified devices state:', stateErr);
-                    }
+                    );
+                } catch (scanError) {
+                    clearTimeout(timeout);
+                    reject(scanError);
                 }
-            } catch (scanCallbackErr) {
-                console.error('[BLE] SCAN: Error in scan callback:', scanCallbackErr);
-                // Don't throw - just log and continue
-            }
-        });
+            });
 
-        // Stop scan after 15s
-        setTimeout(async () => {
-            try {
-                await ble.stopDeviceScan();
-                const deviceTypeLabel = deviceType === 'printer' ? 'printer' : 'scale';
-                console.log(`[BLE] SCAN STEP 3: BLE scan complete. Found ${deviceCount} total device(s), ${filteredCount} ${deviceTypeLabel} device(s)`);
-                console.log('[BLE] ========== BLE SCAN COMPLETE ==========');
-            } catch (stopErr) {
-                console.log('[BLE] SCAN: Error stopping scan:', stopErr);
-            }
-        }, 15000);
-    }, [ble, requestBLEPermissions, deviceType, isBLEScaleDevice, isBLEPrinterDevice]);
+            await scanPromise;
+
+        } catch (error) {
+            console.log('[BLE] SCAN: Error during scan:', error);
+        } finally {
+            isBleScanningRef.current = false;
+            try { await ble.stopDeviceScan(); } catch { }
+            console.log('[BLE] ========== BLE SCAN COMPLETED ==========');
+        }
+    }, [
+        ble,
+        requestBLEPermissions,
+        deviceType,
+        isBLEPrinterDevice
+    ]);
+    useEffect(() => {
+        return () => {
+            stopBLEScan();
+        };
+    }, [stopBLEScan]);
 
     // 🔍 Unified scan - scans both BLE (primary) and Classic (secondary)
     const scanForDevices = useCallback(async () => {
         console.log('[UNIFIED] ========== UNIFIED SCAN STARTED ==========');
+
+        const bleReady = await isBleAdapterReady();
 
         // Stop any existing scans first
         try {
@@ -504,7 +541,11 @@ export default function useBluetoothService({
         if (deviceType === "printer") {
             console.log('[UNIFIED] SCAN: Printer mode detected, scanning BLE and Classic devices');
             // Scan BLE printers first
-            await scanBLEDevices();
+            if (bleReady) {
+                await scanBLEDevices();
+            } else {
+                console.log('[UNIFIED] SCAN: BLE off, skipping BLE printer scan');
+            }
             // Also scan Classic printers
             setTimeout(() => {
                 scanClassicDevices().finally(() => {
@@ -522,15 +563,31 @@ export default function useBluetoothService({
         // For scales, ONLY scan BLE (no Classic)
         if (deviceType === "scale") {
             console.log('[UNIFIED] SCAN: Scale mode detected, scanning BLE devices only');
-            await scanBLEDevices();
-            setIsScanning(false);
-            console.log('[UNIFIED] ========== SCALE SCAN COMPLETE (BLE ONLY) ==========');
+
+            if (!bleReady) {
+                console.log('[UNIFIED] SCAN: Bluetooth is off, cannot scan for scales');
+                setIsScanning(false);
+                return;
+            }
+
+            // Kick off BLE scan; it will run for up to 10 seconds internally.
+            // Keep isScanning=true during that window so the UI shows scanning state.
+            scanBLEDevices();
+
+            const SCALE_SCAN_DURATION_MS = 10000;
+            setTimeout(() => {
+                setIsScanning(false);
+                console.log('[UNIFIED] ========== SCALE SCAN COMPLETE (BLE ONLY, UI timeout) ==========');
+            }, SCALE_SCAN_DURATION_MS);
+
             return;
         }
 
         // For other device types, scan both BLE and Classic
         // Scan BLE first (primary)
-        await scanBLEDevices();
+        if (bleReady) {
+            await scanBLEDevices();
+        }
 
         // Scan Classic second (secondary) - run in parallel after a short delay
         setTimeout(() => {
@@ -878,6 +935,13 @@ export default function useBluetoothService({
         setLastConnectionAttempt(new Date().toISOString());
 
         try {
+            const adapterReady = await isBleAdapterReady();
+            if (!adapterReady) {
+                console.log('[BLE] CONNECT: Bluetooth adapter is not PoweredOn');
+                setIsConnecting(false);
+                return null;
+            }
+
             console.log('[BLE] CONNECT STEP 1: Initiating connection...');
             const d = await ble.connectToDevice(device.id, { autoConnect: false });
             console.log('[BLE] CONNECT STEP 1: ✓ Connection established');

@@ -21,9 +21,22 @@ import { AuthContext } from "../../AuthContext";
 import { useSync } from "../../context/SyncContext";
 import { initDatabase, hasShifts, hasMeasuringCans, saveOfflineCredentials, validateOfflineCredentials, hasOfflineCredentials as hasSQLiteOfflineCredentials } from "../../services/offlineDatabase";
 import { isSyncPendingAfterLogin, clearSyncPendingAfterLogin } from "../../services/offlineSync";
+import {
+    normalizeEmail,
+    isValidEmail,
+    buildEmailLoginPayload,
+    getPrimaryPhoneForStorage,
+    extractAuthToken,
+    extractLoginErrorMessage,
+} from "../../utils/loginCredentials";
+
+const isDeviceOnline = async (): Promise<boolean> => {
+    const state = await NetInfo.fetch();
+    return state.isConnected === true && state.isInternetReachable !== false;
+};
 
 export default function LoginScreen({ navigation }: any) {
-    const [phoneNumber, setPhoneNumber] = useState("");
+    const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -93,25 +106,154 @@ export default function LoginScreen({ navigation }: any) {
         checkOfflineMode(); // Check every time isOnline changes
     }, [isOnline]);
 
+    const performRemoteLogin = async (loginEmail: string): Promise<boolean> => {
+        const data = buildEmailLoginPayload(loginEmail, password);
+
+        let status = 0;
+        let response: any = null;
+
+        try {
+            [status, response] = await makeRequest({
+                url: "login",
+                method: "POST",
+                data: data as any,
+                skipAuth: true,
+            });
+        } catch (error: any) {
+            Alert.alert("Login Error", error?.message || "Something went wrong");
+            return false;
+        }
+
+        const token = extractAuthToken(response);
+        const loginSucceeded = [200, 201].includes(status) && !!token;
+
+        if (!loginSucceeded) {
+            Alert.alert("Login Failed", extractLoginErrorMessage(response, status));
+            return false;
+        }
+
+        const normalizedEmail = normalizeEmail(loginEmail);
+        const userPayload = {
+            ...response,
+            token,
+            access_token: token,
+        };
+
+        await login(token);
+        await AsyncStorage.setItem("user", JSON.stringify(userPayload));
+
+        console.log('Saving offline credentials after successful API login...');
+        setTimeout(async () => {
+            try {
+                await initDatabase();
+
+                const offlineCredentials = {
+                    email: normalizedEmail,
+                    password: password,
+                    token: token,
+                    user_data: userPayload,
+                    stored_at: new Date().toISOString()
+                };
+
+                await saveOfflineCredentials(offlineCredentials);
+                console.log('✅ Offline credentials saved successfully');
+
+                const { debugDatabaseState } = await import("../../services/offlineDatabase");
+                await debugDatabaseState();
+            } catch (dbError) {
+                console.error('❌ Failed to save offline credentials:', dbError);
+                Alert.alert(
+                    'Offline Access Warning',
+                    'Login successful, but offline access could not be set up. You may need to login again when offline.',
+                    [{ text: 'Continue' }]
+                );
+            }
+        }, 100);
+
+        await AsyncStorage.setItem(
+            "@edairyApp:user_phone_number",
+            getPrimaryPhoneForStorage(userPayload)
+        );
+
+        await initDatabase();
+        const shiftsExist = await hasShifts();
+        const measuringCansExist = await hasMeasuringCans();
+        const isFirstLogin = !shiftsExist || !measuringCansExist;
+
+        const isSyncPending = isSyncPendingAfterLogin();
+        if (isSyncPending) {
+            clearSyncPendingAfterLogin();
+            console.log('[LOGIN] Sync pending after login, starting sync...');
+            setTimeout(() => {
+                triggerSync().then((result) => {
+                    const successMessage = result.failed === 0
+                        ? `Successfully synced ${result.success} collection(s).`
+                        : `Synced ${result.success} collection(s), ${result.failed} failed.`;
+                    Alert.alert('Sync Complete', successMessage);
+                }).catch((error) => {
+                    console.error('[LOGIN] Auto sync failed:', error);
+                    Alert.alert('Sync Error', 'Failed to sync data. You can try again from the sync button.');
+                });
+            }, 1000);
+        }
+
+        if (isFirstLogin) {
+            console.log('[LOGIN] First login detected, redirecting to Settings');
+            navigation.reset({
+                index: 0,
+                routes: [
+                    { name: "Home" },
+                    { name: "Home", params: { screen: "Settings" } }
+                ],
+            });
+        } else {
+            navigation.reset({
+                index: 0,
+                routes: [{ name: "Home" }],
+            });
+        }
+
+        return true;
+    };
+
     const handleOfflineLogin = async () => {
+        if (!isValidEmail(email)) {
+            Alert.alert("Error", "Please enter a valid email address.");
+            return;
+        }
+
+        if (!password) {
+            Alert.alert("Error", "Please enter your password.");
+            return;
+        }
+
         setLoading(true);
         try {
-            // Validate offline credentials against SQLite
-            const validation = await validateOfflineCredentials(phoneNumber, password);
+            const validation = await validateOfflineCredentials(email, password);
 
             if (!validation.valid) {
+                const online = await isDeviceOnline();
+                if (online) {
+                    console.log('[LOGIN] Offline validation failed but device is online - trying remote login');
+                    setIsOfflineMode(false);
+                    await performRemoteLogin(email);
+                    return;
+                }
+
                 Alert.alert(
                     "Offline Login Failed",
-                    "Invalid phone number or password, or your offline credentials have expired. Please connect to internet for authentication.",
+                    "Invalid email or password, or your offline credentials have expired. Please connect to internet for authentication.",
                     [{ text: 'OK' }]
                 );
                 return;
             }
 
-            // Offline authentication successful
             await login(validation.token!);
             await AsyncStorage.setItem("user", JSON.stringify(validation.userData));
-            await AsyncStorage.setItem("@edairyApp:user_phone_number", phoneNumber);
+            await AsyncStorage.setItem(
+                "@edairyApp:user_phone_number",
+                getPrimaryPhoneForStorage(validation.userData)
+            );
 
             // Check if sync is pending
             const isSyncPending = isSyncPendingAfterLogin();
@@ -141,17 +283,22 @@ export default function LoginScreen({ navigation }: any) {
     };
 
     const handleLogin = async () => {
-        if (!phoneNumber || !password) {
-            Alert.alert("Error", "Please enter both phone number and password.");
+        if (!isValidEmail(email)) {
+            Alert.alert("Error", "Please enter a valid email address.");
+            return;
+        }
+
+        if (!password) {
+            Alert.alert("Error", "Please enter your password.");
             return;
         }
 
         console.log('Login attempt - isOnline:', isOnline, 'isOfflineMode:', isOfflineMode);
 
-        // Determine authentication method based on connectivity
-        if (!isOnline) {
+        const deviceOnline = await isDeviceOnline();
+
+        if (!deviceOnline) {
             console.log('Offline login attempt');
-            // Offline: Check if offline credentials exist
             const hasCredentials = await hasSQLiteOfflineCredentials();
             console.log('Has offline credentials:', hasCredentials);
             if (hasCredentials) {
@@ -167,108 +314,9 @@ export default function LoginScreen({ navigation }: any) {
         }
 
         console.log('Online login attempt - using API');
-        // Online authentication (always use API when online)
         setLoading(true);
         try {
-            const endpoint = "member-token";
-            const data = { phone_number: phoneNumber, password };
-            const [status, response] = await makeRequest({
-                url: endpoint,
-                method: "POST",
-                data,
-            });
-            if ([200, 201].includes(status) && response?.access_token) {
-                const token = response.access_token;
-
-                await login(token);
-                await AsyncStorage.setItem("user", JSON.stringify(response));
-
-                // CRITICAL: Always save/update credentials in SQLite after successful API login
-                // This ensures offline access is available and credentials stay current
-                console.log('Saving offline credentials after successful API login...');
-
-                // Save credentials asynchronously - don't block login success
-                setTimeout(async () => {
-                    try {
-                        await initDatabase(); // Ensure database is ready
-
-                        const offlineCredentials = {
-                            phone_number: phoneNumber,
-                            password: password,
-                            token: token,
-                            user_data: response,
-                            stored_at: new Date().toISOString()
-                        };
-
-                        await saveOfflineCredentials(offlineCredentials);
-                        console.log('✅ Offline credentials saved successfully');
-
-                        // Debug: Check database state
-                        const { debugDatabaseState } = await import("../../services/offlineDatabase");
-                        await debugDatabaseState();
-
-                    } catch (dbError) {
-                        console.error('❌ Failed to save offline credentials:', dbError);
-                        // Show user-friendly warning
-                        Alert.alert(
-                            'Offline Access Warning',
-                            'Login successful, but offline access could not be set up. You may need to login again when offline.',
-                            [{ text: 'Continue' }]
-                        );
-                    }
-                }, 100); // Small delay to ensure login completes first
-
-                // Store phone number for offline sync
-                await AsyncStorage.setItem("@edairyApp:user_phone_number", phoneNumber);
-
-                // Check if this is first login (no shifts/measuring cans in database)
-                await initDatabase();
-                const shiftsExist = await hasShifts();
-                const measuringCansExist = await hasMeasuringCans();
-                const isFirstLogin = !shiftsExist || !measuringCansExist;
-
-                // Check if sync is pending from network restoration
-                const isSyncPending = isSyncPendingAfterLogin();
-
-                if (isSyncPending) {
-                    // Clear the pending flag
-                    clearSyncPendingAfterLogin();
-
-                    // Start sync automatically after login
-                    console.log('[LOGIN] Sync pending after login, starting sync...');
-                    setTimeout(() => {
-                        triggerSync().then((result) => {
-                            const successMessage = result.failed === 0
-                                ? `Successfully synced ${result.success} collection(s).`
-                                : `Synced ${result.success} collection(s), ${result.failed} failed.`;
-                            Alert.alert('Sync Complete', successMessage);
-                        }).catch((error) => {
-                            console.error('[LOGIN] Auto sync failed:', error);
-                            Alert.alert('Sync Error', 'Failed to sync data. You can try again from the sync button.');
-                        });
-                    }, 1000); // Small delay to ensure navigation completes
-                }
-
-                if (isFirstLogin) {
-                    // First login - redirect to Settings to fetch data
-                    console.log('[LOGIN] First login detected, redirecting to Settings');
-                    navigation.reset({
-                        index: 0,
-                        routes: [
-                            { name: "Home" },
-                            { name: "Home", params: { screen: "Settings" } }
-                        ],
-                    });
-                } else {
-                    // Regular login - go to Home
-                    navigation.reset({
-                        index: 0,
-                        routes: [{ name: "Home" }],
-                    });
-                }
-            } else {
-                Alert.alert("Login Failed", response?.message || "Invalid phone number or password.");
-            }
+            await performRemoteLogin(email);
         } catch (error: any) {
             console.error(error);
             Alert.alert("Login Failed", error?.message || "Something went wrong");
@@ -309,15 +357,16 @@ export default function LoginScreen({ navigation }: any) {
 
                 {/* Always show login form */}
                 <>
-                    <Text style={[globalStyles.label, { color: "#fff" }]}>Phone Number</Text>
+                    <Text style={[globalStyles.label, { color: "#fff" }]}>Email</Text>
                     <TextInput
-                        placeholder="254792924299"
+                        placeholder="name@example.com"
                         placeholderTextColor="#d1d5db"
                         style={globalStyles.input}
-                        value={phoneNumber}
-                        onChangeText={setPhoneNumber}
+                        value={email}
+                        onChangeText={setEmail}
                         autoCapitalize="none"
-                        keyboardType="phone-pad"
+                        autoCorrect={false}
+                        keyboardType="email-address"
                     />
 
                     <Text style={[globalStyles.label, { color: "#fff" }]}>Password</Text>

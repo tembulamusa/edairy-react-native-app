@@ -1,18 +1,65 @@
-import React, { useState, useContext, useRef, useEffect } from 'react';
+import React, { useState, useContext, useRef, useEffect, useCallback } from 'react';
 import { View, Text, Image, StyleSheet, TouchableOpacity, Modal, ScrollView, ActivityIndicator, Alert } from 'react-native';
-import { Header } from '@react-navigation/stack'; // For React Navigation integration
-import Icon from 'react-native-vector-icons/FontAwesome'; // For the bell icon
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
+import Icon from 'react-native-vector-icons/FontAwesome';
 import { AuthContext } from '../AuthContext';
 import { useSync } from '../context/SyncContext';
 import { syncWithConfirmation } from '../services/offlineSync';
 import { getUnsyncedCollections } from '../services/offlineDatabase';
+import { getDairyName, DEFAULT_DAIRY_NAME } from '../utils/userPreferences';
+import { subscribeHeaderRefresh } from '../utils/headerRefresh';
 
 const CustomHeader = ({ scene, previous, navigation }) => {
     const [dropdownVisible, setDropdownVisible] = useState(false);
+    const [firstName, setFirstName] = useState('');
+    const [dairyName, setDairyName] = useState(DEFAULT_DAIRY_NAME);
     const { logout } = useContext(AuthContext);
     const { isSyncing, lastSyncResult, lastSyncTime, syncError, triggerSync } = useSync();
     const [hasPendingSync, setHasPendingSync] = useState(false);
     const bellIconRef = useRef(null);
+
+    const loadHeaderInfo = useCallback(async () => {
+        try {
+            const storedUser = await AsyncStorage.getItem('user');
+            if (storedUser) {
+                const userData = JSON.parse(storedUser);
+                const name =
+                    userData?.first_name ||
+                    userData?.member_details?.first_name ||
+                    (userData?.member_details?.full_name || '').split(' ')[0] ||
+                    userData?.username ||
+                    '';
+                setFirstName(String(name).trim());
+            } else {
+                setFirstName('');
+            }
+
+            const savedDairyName = await getDairyName();
+            setDairyName(savedDairyName);
+        } catch (error) {
+            console.error('[Header] Failed to load header info:', error);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadHeaderInfo();
+        return subscribeHeaderRefresh(loadHeaderInfo);
+    }, [loadHeaderInfo]);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadHeaderInfo();
+        }, [loadHeaderInfo])
+    );
+
+    useEffect(() => {
+        if (!navigation?.addListener) {
+            return;
+        }
+        const unsubscribe = navigation.addListener('focus', loadHeaderInfo);
+        return unsubscribe;
+    }, [navigation, loadHeaderInfo]);
 
     const handleLogout = async () => {
         console.log('Logout button pressed, closing dropdown...');
@@ -48,22 +95,18 @@ const CustomHeader = ({ scene, previous, navigation }) => {
     const handleSyncPress = async () => {
         try {
             console.log('[SYNC] Sync button pressed, checking for pending collections...');
-            // Check if there are pending syncs
             const pendingCollections = await getUnsyncedCollections();
             console.log('[SYNC] Found pending collections:', pendingCollections.length);
             if (pendingCollections.length > 0) {
-                // If there are pending syncs, automatically start sync
                 console.log('[SYNC] Starting sync process...');
                 const result = await triggerSync();
 
-                // Show result
                 if (result.success > 0 && result.failed === 0) {
                     Alert.alert('Sync Complete', `Successfully synced ${result.success} collection(s).`);
                 } else if (result.failed > 0) {
                     Alert.alert('Sync Partially Failed', `Successfully synced ${result.success} collection(s), but ${result.failed} failed.`);
                 }
             } else {
-                // No pending syncs - show success message
                 Alert.alert('All Synced', 'All your offline collections are already synced.');
             }
         } catch (error) {
@@ -75,19 +118,21 @@ const CustomHeader = ({ scene, previous, navigation }) => {
 
     return (
         <View style={styles.header}>
-            {/* Profile Image */}
             <Image
-                source={require('../assets/images/profile.png')} // Replace with your image path
+                source={require('../assets/images/profile.png')}
                 style={styles.profileImage}
             />
 
-            {/* Text */}
-            <View style={{ flex: 1 }}>
-                <Text style={{ opacity: 0.7, color: '#FFFFFF' }}>Goodmorning</Text>
-                <Text style={styles.headerText}>Maziwai Dairy</Text>
+            <View style={styles.headerTextBlock}>
+                <Text style={styles.greetingLine} numberOfLines={1}>
+                    {firstName || 'Hello'}
+                </Text>
+                <Text style={styles.headerText} numberOfLines={1}>
+                    {dairyName}
+                </Text>
+                <Text style={styles.brandLine}>eDairy</Text>
             </View>
 
-            {/* Sync Status Indicator */}
             <TouchableOpacity
                 style={[styles.iconContainer, isSyncing && styles.iconContainerDisabled]}
                 onPress={handleSyncPress}
@@ -116,7 +161,6 @@ const CustomHeader = ({ scene, previous, navigation }) => {
                 )}
             </TouchableOpacity>
 
-            {/* Bell Icon with Badge */}
             <TouchableOpacity
                 ref={bellIconRef}
                 style={styles.iconContainer}
@@ -128,7 +172,6 @@ const CustomHeader = ({ scene, previous, navigation }) => {
                 </View>
             </TouchableOpacity>
 
-            {/* Dropdown Modal */}
             <Modal
                 visible={dropdownVisible}
                 transparent={true}
@@ -149,7 +192,6 @@ const CustomHeader = ({ scene, previous, navigation }) => {
                         </View>
                         
                         <ScrollView style={styles.notificationsList}>
-                            {/* Sample notification - replace with actual notifications */}
                             <View style={styles.notificationItem}>
                                 <Icon name="info-circle" size={16} color="#26A69A" style={styles.notificationIcon} />
                                 <View style={styles.notificationContent}>
@@ -158,13 +200,11 @@ const CustomHeader = ({ scene, previous, navigation }) => {
                                 </View>
                             </View>
                             
-                            {/* Add more notifications here */}
                             <View style={styles.emptyNotifications}>
                                 <Text style={styles.emptyText}>No more notifications</Text>
                             </View>
                         </ScrollView>
 
-                        {/* Logout Button at Bottom */}
                         <TouchableOpacity 
                             style={styles.logoutButton}
                             onPress={handleLogout}
@@ -183,22 +223,37 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#26A69A', // Teal/green shade from the image
+        backgroundColor: '#26A69A',
         paddingHorizontal: 10,
         paddingVertical: 20,
-        // height: 60, // Adjust height as needed
     },
     profileImage: {
         width: 40,
         height: 40,
-        borderRadius: 20, // Circular image
+        borderRadius: 20,
         marginRight: 10,
     },
-    headerText: {
+    headerTextBlock: {
         flex: 1,
+        minWidth: 0,
+    },
+    greetingLine: {
+        color: '#FFFFFF',
+        fontSize: 13,
+        opacity: 0.85,
+    },
+    headerText: {
         color: '#FFFFFF',
         fontSize: 18,
         fontWeight: 'bold',
+        marginTop: 2,
+    },
+    brandLine: {
+        color: '#FFFFFF',
+        fontSize: 12,
+        opacity: 0.75,
+        marginTop: 2,
+        fontWeight: '600',
     },
     iconContainer: {
         position: 'relative',
@@ -211,7 +266,7 @@ const styles = StyleSheet.create({
         position: 'absolute',
         right: 2,
         top: 5,
-        backgroundColor: '#F44336', // Red badge
+        backgroundColor: '#F44336',
         borderRadius: 6,
         width: 12,
         height: 12,
@@ -227,7 +282,7 @@ const styles = StyleSheet.create({
         position: 'absolute',
         right: 2,
         top: 5,
-        backgroundColor: '#4CAF50', // Green for success
+        backgroundColor: '#4CAF50',
         borderRadius: 6,
         width: 12,
         height: 12,
@@ -235,7 +290,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     syncBadgeError: {
-        backgroundColor: '#F44336', // Red for errors/failures
+        backgroundColor: '#F44336',
     },
     syncBadgeText: {
         color: '#FFFFFF',
@@ -246,7 +301,7 @@ const styles = StyleSheet.create({
         position: 'absolute',
         right: 2,
         top: 5,
-        backgroundColor: '#EF4444', // Red for pending sync
+        backgroundColor: '#EF4444',
         borderRadius: 6,
         width: 12,
         height: 12,

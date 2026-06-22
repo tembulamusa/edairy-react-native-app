@@ -81,7 +81,6 @@ const AcceptanceModal: React.FC<AcceptanceModalProps> = ({
     // 🔹 Request OTP
     const handleRequestOtp = async () => {
         if (!activeCashout?.uuid) return;
-
         try {
             setLoading(true);
             setMessage("");
