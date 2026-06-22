@@ -87,36 +87,15 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
       setShowOfflineBanner(false);
     }
 
-    // Show offline banner and alert when connection is lost
+    // Offline — banner only; OfflineModeRedirect sends the user to offline collection.
     if (!state.isConnected || !state.isInternetReachable) {
       setShowOfflineBanner(true);
 
-      // Always show alert when going offline (except on very first app load)
-      const shouldShowAlert = wasConnected || wasInternetReachable ||
-        (!hasShownInitialAlert && !state.isConnected);
-
-      if (shouldShowAlert) {
+      if (wasConnected || wasInternetReachable) {
         setHasShownInitialAlert(true);
-
-        // Use setTimeout to ensure alert shows after state updates
-        setTimeout(() => {
-          Alert.alert(
-            'No Internet Connection',
-            'Your internet connection is not available. Some features may not work properly.',
-            [
-              {
-                text: 'OK',
-                onPress: () => { },
-              },
-              {
-                text: 'Retry',
-                onPress: () => {
-                  checkConnectivity();
-                },
-              },
-            ]
-          );
-        }, 1000);
+        console.log('[Connectivity] Connection lost — offline mode will activate');
+      } else if (!hasShownInitialAlert && !state.isConnected) {
+        setHasShownInitialAlert(true);
       }
     } else {
       // Connection restored - show "back online" notification

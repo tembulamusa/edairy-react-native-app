@@ -6,7 +6,7 @@ SQLite.DEBUG(true);
 SQLite.enablePromise(true);
 
 const DATABASE_NAME = 'edairy_offline.db';
-const DATABASE_VERSION = '1.1';
+const DATABASE_VERSION = '1.2';
 const DATABASE_DISPLAY_NAME = 'eDairy Offline Database';
 const DATABASE_SIZE = 200000;
 
@@ -142,6 +142,64 @@ const createTables = async () => {
                 tare_weight REAL NOT NULL,
                 transporter_id INTEGER,
                 created_at TEXT NOT NULL
+            );
+        `);
+
+        await database.executeSql(`
+            CREATE TABLE IF NOT EXISTS transporters (
+                id INTEGER PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL
+            );
+        `);
+
+        await database.executeSql(`
+            CREATE TABLE IF NOT EXISTS members (
+                id INTEGER PRIMARY KEY,
+                member_no TEXT,
+                data_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL
+            );
+        `);
+
+        await database.executeSql(`
+            CREATE INDEX IF NOT EXISTS idx_members_member_no ON members(member_no);
+        `);
+
+        await database.executeSql(`
+            CREATE TABLE IF NOT EXISTS routes (
+                id INTEGER PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL
+            );
+        `);
+
+        await database.executeSql(`
+            CREATE TABLE IF NOT EXISTS route_centers (
+                id INTEGER PRIMARY KEY,
+                route_id INTEGER NOT NULL,
+                data_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL
+            );
+        `);
+
+        await database.executeSql(`
+            CREATE INDEX IF NOT EXISTS idx_route_centers_route_id ON route_centers(route_id);
+        `);
+
+        await database.executeSql(`
+            CREATE TABLE IF NOT EXISTS reference_sync (
+                key TEXT PRIMARY KEY,
+                synced_at TEXT NOT NULL,
+                record_counts TEXT
+            );
+        `);
+
+        await database.executeSql(`
+            CREATE TABLE IF NOT EXISTS offline_collection_drafts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
         `);
 
@@ -379,6 +437,84 @@ export const clearSyncedCollections = async (): Promise<number> => {
         return rowsAffected;
     } catch (error) {
         console.error('[DB] Error clearing synced collections:', error);
+        throw error;
+    }
+};
+
+export type OfflineCollectionDraftSession = {
+    transporterValue: number | null;
+    shiftValue: number | null;
+    routeValue: number | null;
+    centerValue: number | null;
+    measuringCanValue: number | null;
+    memberValue: number | null;
+    journalCode: string;
+    batchNo: string;
+    entries: any[];
+    totalCans: number;
+    totalQuantity: number;
+};
+
+export const saveOfflineCollectionDraft = async (
+    session: OfflineCollectionDraftSession
+): Promise<void> => {
+    try {
+        const db = database || await initDatabase();
+        const now = new Date().toISOString();
+        const sessionJson = JSON.stringify(session);
+
+        await db.executeSql('DELETE FROM offline_collection_drafts');
+        await db.executeSql(
+            'INSERT INTO offline_collection_drafts (session_json, updated_at) VALUES (?, ?)',
+            [sessionJson, now]
+        );
+    } catch (error) {
+        console.error('[DB] Error saving offline collection draft:', error);
+        throw error;
+    }
+};
+
+export const getOfflineCollectionDraft = async (): Promise<OfflineCollectionDraftSession | null> => {
+    try {
+        const db = database || await initDatabase();
+        const result = await db.executeSql(
+            'SELECT session_json FROM offline_collection_drafts ORDER BY updated_at DESC LIMIT 1'
+        );
+
+        if (result[0].rows.length === 0) {
+            return null;
+        }
+
+        const parsed = JSON.parse(result[0].rows.item(0).session_json);
+        if (!parsed || typeof parsed !== 'object') {
+            return null;
+        }
+
+        return {
+            transporterValue: parsed.transporterValue ?? null,
+            shiftValue: parsed.shiftValue ?? null,
+            routeValue: parsed.routeValue ?? null,
+            centerValue: parsed.centerValue ?? null,
+            measuringCanValue: parsed.measuringCanValue ?? null,
+            memberValue: parsed.memberValue ?? null,
+            journalCode: parsed.journalCode ?? '',
+            batchNo: parsed.batchNo ?? '',
+            entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+            totalCans: Number(parsed.totalCans ?? 0),
+            totalQuantity: Number(parsed.totalQuantity ?? 0),
+        };
+    } catch (error) {
+        console.error('[DB] Error loading offline collection draft:', error);
+        return null;
+    }
+};
+
+export const clearOfflineCollectionDraft = async (): Promise<void> => {
+    try {
+        const db = database || await initDatabase();
+        await db.executeSql('DELETE FROM offline_collection_drafts');
+    } catch (error) {
+        console.error('[DB] Error clearing offline collection draft:', error);
         throw error;
     }
 };
@@ -625,9 +761,16 @@ export const saveMeasuringCans = async (measuringCans: any[]): Promise<void> => 
 
         // Insert new measuring cans
         for (const can of measuringCans) {
+            const tareWeight = Number(can.weight ?? can.tare_weight ?? 0);
             await db.executeSql(
                 'INSERT INTO measuring_cans (id, can_id, tare_weight, transporter_id, created_at) VALUES (?, ?, ?, ?, ?)',
-                [can.id, can.can_id || `Can ${can.id}`, can.tare_weight || 0, can.transporter_id || null, now]
+                [
+                    can.id,
+                    can.can_id || can.name || `Can ${can.id}`,
+                    Number.isFinite(tareWeight) ? tareWeight : 0,
+                    can.transporter_id || null,
+                    now,
+                ]
             );
         }
 
@@ -678,6 +821,267 @@ export const hasMeasuringCans = async (): Promise<boolean> => {
         return false;
     }
 };
+
+const MEMBER_KILOS_SYNC_KEY = 'member_kilos';
+
+function getMemberNumberFromRecord(member: any): string {
+    return String(
+        member?.member_no || member?.membership_no || member?.membershipNo || ''
+    ).trim();
+}
+
+function parseJsonRows(result: any): any[] {
+    const rows: any[] = [];
+    for (let i = 0; i < result[0].rows.length; i++) {
+        const row = result[0].rows.item(i);
+        rows.push(JSON.parse(row.data_json || '{}'));
+    }
+    return rows;
+}
+
+async function replaceJsonReferenceTable(
+    tableName: 'transporters' | 'members' | 'routes',
+    records: any[],
+    options?: { includeMemberNo?: boolean }
+): Promise<number> {
+    const db = database || await initDatabase();
+    const now = new Date().toISOString();
+
+    await db.executeSql(`DELETE FROM ${tableName}`);
+
+    for (const record of records) {
+        if (options?.includeMemberNo) {
+            await db.executeSql(
+                `INSERT INTO ${tableName} (id, member_no, data_json, synced_at) VALUES (?, ?, ?, ?)`,
+                [
+                    record.id,
+                    getMemberNumberFromRecord(record) || null,
+                    JSON.stringify(record),
+                    now,
+                ]
+            );
+            continue;
+        }
+
+        await db.executeSql(
+            `INSERT INTO ${tableName} (id, data_json, synced_at) VALUES (?, ?, ?)`,
+            [record.id, JSON.stringify(record), now]
+        );
+    }
+
+    return records.length;
+}
+
+export async function saveTransporters(transporters: any[]): Promise<void> {
+    const count = await replaceJsonReferenceTable('transporters', transporters || []);
+    console.log('[DB] Saved', count, 'transporters');
+}
+
+export async function getTransporters(): Promise<any[]> {
+    try {
+        const db = database || await initDatabase();
+        const result = await db.executeSql('SELECT data_json FROM transporters ORDER BY id ASC');
+        return parseJsonRows(result);
+    } catch (error) {
+        console.error('[DB] Error getting transporters:', error);
+        return [];
+    }
+}
+
+export async function saveMembers(members: any[]): Promise<void> {
+    const count = await replaceJsonReferenceTable('members', members || [], {
+        includeMemberNo: true,
+    });
+    console.log('[DB] Saved', count, 'members');
+}
+
+export async function getMembers(): Promise<any[]> {
+    try {
+        const db = database || await initDatabase();
+        const result = await db.executeSql('SELECT data_json FROM members ORDER BY id ASC');
+        return parseJsonRows(result);
+    } catch (error) {
+        console.error('[DB] Error getting members:', error);
+        return [];
+    }
+}
+
+export async function findMemberByNumber(memberNo: string): Promise<any | null> {
+    try {
+        if (!memberNo.trim()) {
+            return null;
+        }
+
+        const db = database || await initDatabase();
+        const normalized = memberNo.trim().toLowerCase();
+        const result = await db.executeSql(
+            'SELECT data_json FROM members WHERE LOWER(member_no) = ? LIMIT 1',
+            [normalized]
+        );
+
+        if (result[0].rows.length === 0) {
+            const members = await getMembers();
+            return (
+                members.find((member) => {
+                    const candidate = getMemberNumberFromRecord(member).toLowerCase();
+                    return candidate === normalized;
+                }) ?? null
+            );
+        }
+
+        return JSON.parse(result[0].rows.item(0).data_json || '{}');
+    } catch (error) {
+        console.error('[DB] Error finding member by number:', error);
+        return null;
+    }
+}
+
+export async function saveRoutes(routes: any[]): Promise<void> {
+    const count = await replaceJsonReferenceTable('routes', routes || []);
+    console.log('[DB] Saved', count, 'routes');
+}
+
+export async function getRoutes(): Promise<any[]> {
+    try {
+        const db = database || await initDatabase();
+        const result = await db.executeSql('SELECT data_json FROM routes ORDER BY id ASC');
+        return parseJsonRows(result);
+    } catch (error) {
+        console.error('[DB] Error getting routes:', error);
+        return [];
+    }
+}
+
+export async function saveRouteCentersForRoute(
+    routeId: number,
+    routeCenters: any[]
+): Promise<void> {
+    try {
+        const db = database || await initDatabase();
+        const now = new Date().toISOString();
+
+        await db.executeSql('DELETE FROM route_centers WHERE route_id = ?', [routeId]);
+
+        for (const center of routeCenters || []) {
+            await db.executeSql(
+                'INSERT INTO route_centers (id, route_id, data_json, synced_at) VALUES (?, ?, ?, ?)',
+                [center.id, routeId, JSON.stringify(center), now]
+            );
+        }
+
+        console.log(
+            '[DB] Saved',
+            routeCenters?.length || 0,
+            'route centers for route',
+            routeId
+        );
+    } catch (error) {
+        console.error('[DB] Error saving route centers:', error);
+        throw error;
+    }
+}
+
+export async function getRouteCenters(routeId?: number): Promise<any[]> {
+    try {
+        const db = database || await initDatabase();
+        const result =
+            routeId != null
+                ? await db.executeSql(
+                      'SELECT data_json FROM route_centers WHERE route_id = ? ORDER BY id ASC',
+                      [routeId]
+                  )
+                : await db.executeSql('SELECT data_json FROM route_centers ORDER BY route_id ASC, id ASC');
+
+        return parseJsonRows(result);
+    } catch (error) {
+        console.error('[DB] Error getting route centers:', error);
+        return [];
+    }
+}
+
+async function saveReferenceSyncMeta(
+    key: string,
+    recordCounts: Record<string, number>
+): Promise<void> {
+    const db = database || await initDatabase();
+    const now = new Date().toISOString();
+
+    await db.executeSql(
+        `INSERT OR REPLACE INTO reference_sync (key, synced_at, record_counts) VALUES (?, ?, ?)`,
+        [key, now, JSON.stringify(recordCounts)]
+    );
+}
+
+export async function getReferenceDataSyncInfo(
+    key: string = MEMBER_KILOS_SYNC_KEY
+): Promise<{ synced_at: string; record_counts: Record<string, number> } | null> {
+    try {
+        const db = database || await initDatabase();
+        const result = await db.executeSql(
+            'SELECT synced_at, record_counts FROM reference_sync WHERE key = ? LIMIT 1',
+            [key]
+        );
+
+        if (result[0].rows.length === 0) {
+            return null;
+        }
+
+        const row = result[0].rows.item(0);
+        return {
+            synced_at: row.synced_at,
+            record_counts: JSON.parse(row.record_counts || '{}'),
+        };
+    } catch (error) {
+        console.error('[DB] Error getting reference sync info:', error);
+        return null;
+    }
+}
+
+export async function saveMemberKilosReferenceData(data: {
+    transporters?: any[];
+    members?: any[];
+    routes?: any[];
+    shifts?: any[];
+    cans?: any[];
+}): Promise<void> {
+    const transporters = Array.isArray(data.transporters) ? data.transporters : [];
+    const members = Array.isArray(data.members) ? data.members : [];
+    const routes = Array.isArray(data.routes) ? data.routes : [];
+    const shifts = Array.isArray(data.shifts) ? data.shifts : [];
+    const cans = Array.isArray(data.cans) ? data.cans : [];
+
+    await initDatabase();
+
+    if (transporters.length > 0) {
+        await saveTransporters(transporters);
+    }
+
+    if (members.length > 0) {
+        await saveMembers(members);
+    }
+
+    if (routes.length > 0) {
+        await saveRoutes(routes);
+    }
+
+    if (shifts.length > 0) {
+        await saveShifts(shifts);
+    }
+
+    if (cans.length > 0) {
+        await saveMeasuringCans(cans);
+    }
+
+    await saveReferenceSyncMeta(MEMBER_KILOS_SYNC_KEY, {
+        transporters: transporters.length,
+        members: members.length,
+        routes: routes.length,
+        shifts: shifts.length,
+        cans: cans.length,
+    });
+
+    console.log('[DB] Member Kilos reference data cached for offline use');
+}
 
 // Offline Credentials Management
 export interface OfflineCredentials {

@@ -9,12 +9,14 @@ import Icon from "react-native-vector-icons/FontAwesome";
 import Store from "./src/context/store";
 import { GlobalProvider } from "./src/context/GlobalContext";
 import { AuthProvider, AuthContext } from "./src/AuthContext";
-import { ConnectivityProvider } from "./src/context/ConnectivityContext";
+import { ConnectivityProvider, useConnectivity } from "./src/context/ConnectivityContext";
 import { SyncProvider, useSync } from "./src/context/SyncContext";
 import ConnectivityDebugger from "./src/components/ConnectivityDebugger";
+import OfflineModeRedirect from "./src/components/OfflineModeRedirect";
 import SyncLoadingOverlay from "./src/components/SyncLoadingOverlay";
 import { initDatabase } from "./src/services/offlineDatabase";
-import { startAutoSync, setupNetworkListener, setupNetworkListenerWithSync } from "./src/services/offlineSync";
+import { isOnOfflineCollectionScreen, navigateToOfflineCollection, bindAppNavigationRef, navigateToDashboard } from "./src/services/offlineNavigation";
+import { isNetworkOnlineFromFlags } from "./src/utils/networkState";
 import LaunchScreen from "./src/components/LaunchScreen";
 
 import {
@@ -81,7 +83,7 @@ function AuthStack() {
           options={{
             headerShown: true,
             headerTitle: "Offline Collection",
-            headerStyle: { backgroundColor: '#1b7f74' },
+            headerStyle: { backgroundColor: '#dc2626' },
             headerTintColor: '#fff',
             headerTitleStyle: { fontWeight: '600' },
             contentStyle: { backgroundColor: '#fff' },
@@ -114,7 +116,17 @@ function MembersStackNavigator() {
       <MembersStack.Screen name="LivenessCheck" component={WebViewScreen} />
       <MembersStack.Screen name="UserBalanceSummary" component={UserBalanceSummaryScreen} />
       <MembersStack.Screen name="ScaleTest" component={ScaleTestScreen} />
-      <MembersStack.Screen name="OfflineMilkCollection" component={OfflineMilkCollectionScreen} />
+        <MembersStack.Screen
+          name="OfflineMilkCollection"
+          component={OfflineMilkCollectionScreen}
+          options={{
+            headerShown: true,
+            headerTitle: "Milk Collection",
+            headerStyle: { backgroundColor: "#dc2626" },
+            headerTintColor: "#fff",
+            headerTitleStyle: { fontWeight: "600" },
+          }}
+        />
     </MembersStack.Navigator>
   );
 }
@@ -174,37 +186,94 @@ function HomeStack() {
   );
 }
 
-function AppContent({ navigationRef }: { navigationRef: React.RefObject<any> }) {
-  const { isUIBlocked, isSyncing, isInitialLoading, triggerSync } = useSync();
-  const { setNavigationRef } = React.useContext(AuthContext);
+function AppContent({
+  navigationRef,
+  appReady,
+}: {
+  navigationRef: React.RefObject<any>;
+  appReady: boolean;
+}) {
+  const { isSyncing, handleOnlineReconnect } = useSync();
+  const { setNavigationRef, userToken, loading: authLoading } = React.useContext(AuthContext);
+  const { isConnected, isInternetReachable } = useConnectivity();
+  const isOnline = isNetworkOnlineFromFlags(isConnected, isInternetReachable);
+  const isOnlineRef = React.useRef(isOnline);
+  const userTokenRef = React.useRef(userToken);
+  const wasOnlineRef = React.useRef(isOnline);
+  isOnlineRef.current = isOnline;
+  userTokenRef.current = userToken;
 
-  // Set navigation ref for AuthContext
+  const handleNavigationStateChange = React.useCallback(() => {
+    if (isOnlineRef.current || authLoading || !appReady) {
+      return;
+    }
+
+    const nav = navigationRef.current;
+    if (!nav?.isReady() || isOnOfflineCollectionScreen(nav)) {
+      return;
+    }
+
+    if (userTokenRef.current) {
+      navigateToOfflineCollection(nav);
+    }
+  }, [navigationRef, authLoading, appReady]);
+
   React.useEffect(() => {
     if (navigationRef.current) {
       setNavigationRef(navigationRef);
+      bindAppNavigationRef(navigationRef.current);
     }
   }, [navigationRef, setNavigationRef]);
 
-  // Removed automatic sync on network connection - sync should be user-initiated only
-  // React.useEffect(() => {
-  //   const unsubscribe = setupNetworkListenerWithSync(triggerSync);
-  //   return unsubscribe;
-  // }, [triggerSync]);
+  React.useEffect(() => {
+    if (!appReady || authLoading || !userToken) {
+      wasOnlineRef.current = isOnline;
+      return;
+    }
+
+    const cameOnline = isOnline && !wasOnlineRef.current;
+    wasOnlineRef.current = isOnline;
+
+    if (!cameOnline) {
+      return;
+    }
+
+    const runAutoSyncOnReconnect = async () => {
+      try {
+        const result = await handleOnlineReconnect();
+        if (result?.success) {
+          navigateToDashboard(navigationRef.current);
+        }
+      } catch (error) {
+        console.error("[APP] Auto-sync on reconnect failed:", error);
+      }
+    };
+
+    void runAutoSyncOnReconnect();
+  }, [
+    isOnline,
+    appReady,
+    authLoading,
+    userToken,
+    handleOnlineReconnect,
+    navigationRef,
+  ]);
 
   return (
     <>
       <ConnectivityDebugger />
-      <NavigationContainer ref={navigationRef}>
+      <NavigationContainer
+        ref={navigationRef}
+        onStateChange={handleNavigationStateChange}
+      >
+        <OfflineModeRedirect navigationRef={navigationRef} appReady={appReady} />
         <RootStack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Auth">
           <RootStack.Screen name="Auth" component={AuthStack} />
           <RootStack.Screen name="Home" component={HomeStack} />
         </RootStack.Navigator>
       </NavigationContainer>
 
-      <SyncLoadingOverlay
-        visible={isSyncing}
-        message="Syncing data..."
-      />
+      <SyncLoadingOverlay visible={isSyncing} message="Syncing..." />
     </>
   );
 }
@@ -258,7 +327,7 @@ export default function App() {
           <GlobalProvider>
             <ConnectivityProvider>
               <AuthProvider>
-                <AppContent navigationRef={navigationRef} />
+                <AppContent navigationRef={navigationRef} appReady={!isLaunching} />
               </AuthProvider>
             </ConnectivityProvider>
           </GlobalProvider>

@@ -268,10 +268,18 @@ export default function LoginScreen({ navigation }: any) {
                 }, 1000);
             }
 
-            // Navigate to dashboard
+            // Navigate to offline milk collection after offline login
             navigation.reset({
                 index: 0,
-                routes: [{ name: "Home" }],
+                routes: [
+                    {
+                        name: "Home",
+                        params: {
+                            screen: "Members",
+                            params: { screen: "OfflineMilkCollection" },
+                        },
+                    },
+                ],
             });
 
         } catch (error) {

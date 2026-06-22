@@ -58,6 +58,62 @@ export function buildJournalCode(transporter: any, journalDate: string): string 
     return `jrn-${getTransporterJournalCode(transporter)}-${formatJournalDateCompact(journalDate)}`;
 }
 
+export function findTransporterById(
+    transporters: any[] | undefined,
+    transporterId: number | null | undefined
+): any | null {
+    if (transporterId == null || !Array.isArray(transporters)) {
+        return null;
+    }
+
+    return (
+        transporters.find((item) => Number(item?.id) === Number(transporterId)) ?? null
+    );
+}
+
+export function findRouteById(
+    routes: any[] | undefined,
+    routeId: number | null | undefined
+): any | null {
+    if (routeId == null || !Array.isArray(routes)) {
+        return null;
+    }
+
+    return routes.find((item) => Number(item?.id) === Number(routeId)) ?? null;
+}
+
+export function resolveJournalCode(
+    transporterId: number | null | undefined,
+    transporters: any[] | undefined,
+    transporter?: any | null,
+    journalDate: string | Date = new Date()
+): string {
+    const resolved =
+        transporter ?? findTransporterById(transporters, transporterId);
+    if (!resolved) {
+        return "";
+    }
+
+    const journal_date =
+        typeof journalDate === "string" ? journalDate : formatJournalDate(journalDate);
+
+    return buildJournalCode(resolved, journal_date);
+}
+
+export function resolveBatchNo(
+    routeId: number | null | undefined,
+    routes: any[] | undefined,
+    route?: any | null,
+    batchIndex = 1
+): string {
+    const resolved = route ?? findRouteById(routes, routeId);
+    if (!resolved) {
+        return "";
+    }
+
+    return buildBatchNo(resolved, batchIndex);
+}
+
 /** e.g. PAGE-001 from route code/name */
 export function buildBatchNo(route: any, batchIndex = 1): string {
     const code = route?.code?.trim() || route?.route_code?.trim();

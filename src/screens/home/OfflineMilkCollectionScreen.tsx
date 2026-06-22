@@ -1,5 +1,5 @@
 // src/screens/home/OfflineMilkCollectionScreen.tsx
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from "react";
 import {
     View,
     Text,
@@ -9,9 +9,10 @@ import {
     TextInput,
     ActivityIndicator,
     ScrollView,
-    FlatList,
+    Modal,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 // @ts-ignore
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import NetInfo from '@react-native-community/netinfo';
@@ -22,31 +23,263 @@ import { globalStyles } from "../../styles";
 import {
     initDatabase,
     insertOfflineCollection,
-    getUnsyncedCount,
     getAllCollections,
     getMeasuringCan,
     getShifts,
     getMeasuringCans,
+    saveOfflineCollectionDraft,
+    getOfflineCollectionDraft,
+    clearOfflineCollectionDraft,
 } from "../../services/offlineDatabase";
-import { syncAllCollections, checkConnectivity, syncWithConfirmation } from "../../services/offlineSync";
+import {
+    getMembers,
+    getRouteCenters,
+    getRoutes,
+    getTransporters,
+} from "../../services/offlineReferenceData";
+import { checkConnectivity } from "../../services/offlineSync";
+import { navigateToDashboard } from "../../services/offlineNavigation";
+import { useSync } from "../../context/SyncContext";
 import DropDownPicker from "react-native-dropdown-picker";
 import { renderDropdownItem } from "../../assets/styles/all";
+import { getTransporterDisplayName } from "../../utils/transporter";
+import { getRouteDisplayName, getRouteCenterDisplayName } from "../../utils/route";
+import {
+    buildMemberKilosJournalPayload,
+    findRouteById,
+    findTransporterById,
+    resolveBatchNo,
+    resolveJournalCode,
+} from "../../utils/memberKilosJournalPayload";
+import {
+    buildOfflineCollectionReceipts,
+    getPendingReceiptsStorageKey,
+} from "../../utils/memberKilosJournalReceipts";
+
+const OFFLINE_HEADER_ONLINE = "#1b7f74";
+const OFFLINE_HEADER_OFFLINE = "#dc2626";
+
+const DROPDOWN_STACK = {
+    transporter: { zIndex: 8000, zIndexInverse: 1000 },
+    shift: { zIndex: 7500, zIndexInverse: 1500 },
+    route: { zIndex: 7000, zIndexInverse: 2000 },
+    center: { zIndex: 6500, zIndexInverse: 2500 },
+    can: { zIndex: 6000, zIndexInverse: 3000 },
+    measuringCan: { zIndex: 5500, zIndexInverse: 3500 },
+    member: { zIndex: 5000, zIndexInverse: 4000 },
+} as const;
+
+const getDropdownColStyle = (zIndex: number) => ({
+    zIndex,
+    elevation: zIndex / 1000,
+});
+
+const getMilkCanLabel = (can: any) =>
+    can?.can_id || can?.name || `Can ${can?.id ?? ""}`;
+
+const toMilkCanDropdownItems = (cans: any[]) =>
+    (cans || []).map((c: any) => ({
+        label: getMilkCanLabel(c),
+        value: c.id,
+    }));
+
+const getMemberNumber = (member: any): string =>
+    String(member?.member_no || member?.membership_no || member?.membershipNo || "").trim();
+
+const getMemberDisplayName = (member: any): string => {
+    if (!member) {
+        return "";
+    }
+    const name = `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim();
+    return name || member.name || member.full_name || "";
+};
+
+const toMemberDropdownItems = (members: any[]) =>
+    (members || []).map((m: any) => {
+        const memberNo = getMemberNumber(m);
+        const name = getMemberDisplayName(m);
+        return {
+            label: memberNo ? `${name} (${memberNo})` : name,
+            value: m.id,
+        };
+    });
+
+const filterMemberDropdownItems = (
+    items: { label: string; value: number }[],
+    members: any[],
+    searchText: string
+) => {
+    const normalized = searchText.trim().toLowerCase();
+    if (!normalized) {
+        return items;
+    }
+
+    return items.filter((item) => {
+        const member = members.find((m: any) => m.id === item.value);
+        if (!member) {
+            return item.label.toLowerCase().includes(normalized);
+        }
+
+        const memberNo = getMemberNumber(member).toLowerCase();
+        const firstName = String(member.first_name ?? "").toLowerCase();
+        const lastName = String(member.last_name ?? "").toLowerCase();
+        const fullName = `${firstName} ${lastName}`.trim();
+
+        return (
+            item.label.toLowerCase().includes(normalized) ||
+            memberNo.includes(normalized) ||
+            firstName.includes(normalized) ||
+            lastName.includes(normalized) ||
+            fullName.includes(normalized)
+        );
+    });
+};
+
+const autoSelectRouteForTransporter = (
+    selectedTransporter: any,
+    routes: any[],
+    setRouteValue: (value: number) => void,
+    setRoute: (route: any) => void
+) => {
+    if (!selectedTransporter?.route_id || !routes?.length) {
+        return;
+    }
+
+    const matchingRoute = routes.find((route: any) => route.id === selectedTransporter.route_id);
+    if (matchingRoute) {
+        setRouteValue(matchingRoute.id);
+        setRoute(matchingRoute);
+    }
+};
+
+const getCanTare = (can: any): number => {
+    const fromWeight = can?.weight;
+    if (fromWeight !== null && fromWeight !== undefined && fromWeight !== "") {
+        const parsed = parseFloat(String(fromWeight));
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+
+    const tare = can?.tare_weight ?? 0;
+    const parsedTare = parseFloat(String(tare));
+    return Number.isFinite(parsedTare) ? parsedTare : 0;
+};
+
+const normalizeCachedCans = (cans: any[]) =>
+    (cans || []).map((can) => ({
+        ...can,
+        weight: can.weight ?? can.tare_weight ?? 0,
+    }));
+
+const formatReferenceSyncLabel = (
+    syncInfo: { synced_at: string; record_counts: Record<string, number> } | null
+): string | null => {
+    if (!syncInfo?.synced_at) {
+        return null;
+    }
+
+    const syncedAt = new Date(syncInfo.synced_at);
+    const when = Number.isNaN(syncedAt.getTime())
+        ? syncInfo.synced_at
+        : syncedAt.toLocaleString();
+
+    const counts = syncInfo.record_counts || {};
+    const parts = [
+        counts.members != null ? `${counts.members} members` : null,
+        counts.transporters != null ? `${counts.transporters} transporters` : null,
+        counts.routes != null ? `${counts.routes} routes` : null,
+        counts.shifts != null ? `${counts.shifts} shifts` : null,
+        counts.cans != null ? `${counts.cans} cans` : null,
+    ].filter(Boolean);
+
+    return parts.length > 0
+        ? `Stored locally ${when} (${parts.join(", ")})`
+        : `Stored locally ${when}`;
+};
+
+const gateSyncHint = (unsyncedCount: number): string => {
+    if (unsyncedCount > 0) {
+        return ` (${unsyncedCount} pending collection${unsyncedCount === 1 ? "" : "s"})`;
+    }
+    return "";
+};
 
 const OfflineMilkCollectionScreen = () => {
-    // Basic states
-    const [memberNumber, setMemberNumber] = useState<string>("");
-    const [canNumber, setCanNumber] = useState<string>("");
+    const navigation = useNavigation<any>();
+    const {
+        isSyncing,
+        performMandatoryOfflineSync,
+        collectionGate,
+        mandatorySyncError,
+        gateCheckEnabled,
+        refreshCollectionGate,
+        enableCollectionGateCheck,
+        setMandatorySyncError,
+    } = useSync();
+
+    const unsyncedCount = collectionGate.unsyncedCount;
+    const requiresSync = collectionGate.requiresSync;
+    const referenceSyncLabel = useMemo(
+        () => formatReferenceSyncLabel(collectionGate.syncInfo),
+        [collectionGate.syncInfo]
+    );
+
+    const [commonData, setCommonData] = useState<any>({
+        transporters: [],
+        members: [],
+        routes: [],
+        shifts: [],
+        cans: [],
+        route_centers: [],
+    });
+    const [journalCode, setJournalCode] = useState("");
+    const [batchNo, setBatchNo] = useState("");
     const [scaleWeight, setScaleWeight] = useState<number | null>(null);
     const [scaleWeightText, setScaleWeightText] = useState<string>("");
-    const [tareWeight, setTareWeight] = useState<string>("0");
     const [measuringCan, setMeasuringCan] = useState<any | null>(null);
+    const [can, setCan] = useState<any | null>(null);
+    const [transporter, setTransporter] = useState<any | null>(null);
+    const [route, setRoute] = useState<any | null>(null);
+    const [center, setCenter] = useState<any | null>(null);
+    const [member, setMember] = useState<any | null>(null);
     const [entries, setEntries] = useState<any[]>([]);
     const [totalCans, setTotalCans] = useState<number>(0);
     const [totalQuantity, setTotalQuantity] = useState<number>(0);
     const [loading, setLoading] = useState(false);
-    const [unsyncedCount, setUnsyncedCount] = useState<number>(0);
     const [isOnline, setIsOnline] = useState<boolean>(false);
-    const [isSyncing, setIsSyncing] = useState(false);
+
+    const lastMandatorySyncAttemptRef = useRef(0);
+    const MANDATORY_SYNC_RETRY_MS = 30000;
+
+    const [transporterOpen, setTransporterOpen] = useState(false);
+    const [transporterValue, setTransporterValue] = useState<number | null>(null);
+    const [transporterItems, setTransporterItems] = useState<any[]>([]);
+
+    const [shiftOpen, setShiftOpen] = useState(false);
+    const [shiftValue, setShiftValue] = useState<number | null>(null);
+    const [shiftItems, setShiftItems] = useState<any[]>([]);
+
+    const [routeOpen, setRouteOpen] = useState(false);
+    const [routeValue, setRouteValue] = useState<number | null>(null);
+    const [routeItems, setRouteItems] = useState<any[]>([]);
+
+    const [centerOpen, setCenterOpen] = useState(false);
+    const [centerValue, setCenterValue] = useState<number | null>(null);
+    const [centerItems, setCenterItems] = useState<any[]>([]);
+
+    const [canOpen, setCanOpen] = useState(false);
+    const [canValue, setCanValue] = useState<number | null>(null);
+    const [canItems, setCanItems] = useState<any[]>([]);
+
+    const [measuringCanOpen, setMeasuringCanOpen] = useState(false);
+    const [measuringCanValue, setMeasuringCanValue] = useState<number | null>(null);
+    const [measuringCanItems, setMeasuringCanItems] = useState<any[]>([]);
+
+    const [memberOpen, setMemberOpen] = useState(false);
+    const [memberValue, setMemberValue] = useState<number | null>(null);
+    const [memberItems, setMemberItems] = useState<any[]>([]);
+    const [allMemberItems, setAllMemberItems] = useState<any[]>([]);
 
     // Modal states
     const [scaleModalVisible, setScaleModalVisible] = useState(false);
@@ -56,19 +289,217 @@ const OfflineMilkCollectionScreen = () => {
     const [collectionHistory, setCollectionHistory] = useState<any[]>([]);
     const [isPrinting, setIsPrinting] = useState(false);
 
-    // Shift states
-    const [shiftOpen, setShiftOpen] = useState(false);
-    const [shiftValue, setShiftValue] = useState<number | null>(null);
-    const [shiftItems, setShiftItems] = useState<any[]>([]);
-    const [shifts, setShifts] = useState<any[]>([]);
-
-    // Measuring can selection states
-    const [measuringCanOpen, setMeasuringCanOpen] = useState(false);
-    const [measuringCanValue, setMeasuringCanValue] = useState<number | null>(null);
-    const [measuringCanItems, setMeasuringCanItems] = useState<any[]>([]);
-    const [measuringCans, setMeasuringCans] = useState<any[]>([]);
-
     const isMountedRef = useRef(true);
+    const isRestoringDraftRef = useRef(false);
+    const isCollectionBlocked = isSyncing || requiresSync;
+
+    const applyCachedReferenceData = useCallback(
+        (
+            transporters: any[],
+            members: any[],
+            routes: any[],
+            shifts: any[],
+            cans: any[],
+            options?: { autoSelectDefaults?: boolean }
+        ) => {
+            const autoSelectDefaults = options?.autoSelectDefaults ?? false;
+
+            setCommonData((prev: any) => ({
+                ...prev,
+                transporters,
+                members,
+                routes,
+                shifts,
+                cans,
+            }));
+
+            setTransporterItems(
+                transporters.map((t: any) => ({
+                    label: getTransporterDisplayName(t),
+                    value: t.id,
+                }))
+            );
+            setRouteItems(
+                routes.map((r: any) => ({
+                    label: getRouteDisplayName(r),
+                    value: r.id,
+                }))
+            );
+            setShiftItems(
+                shifts.map((s: any) => ({
+                    label: s.name,
+                    value: s.id,
+                }))
+            );
+            setCanItems(toMilkCanDropdownItems(cans));
+            setMeasuringCanItems(toMilkCanDropdownItems(cans));
+
+            const memberDropdownItems = toMemberDropdownItems(members);
+            setAllMemberItems(memberDropdownItems);
+            setMemberItems(memberDropdownItems);
+
+            if (autoSelectDefaults && transporters.length === 1) {
+                const onlyTransporter = transporters[0];
+                setTransporterValue(onlyTransporter.id);
+                setTransporter(onlyTransporter);
+                autoSelectRouteForTransporter(
+                    onlyTransporter,
+                    routes,
+                    setRouteValue,
+                    setRoute
+                );
+            }
+
+            if (autoSelectDefaults && shifts.length > 0) {
+                const currentTime = new Date();
+                const currentHours = currentTime.getHours();
+                let currentPeriod: string;
+                if (currentHours >= 6 && currentHours < 12) {
+                    currentPeriod = "morning";
+                } else if (currentHours >= 12 && currentHours < 18) {
+                    currentPeriod = "afternoon";
+                } else {
+                    currentPeriod = "evening";
+                }
+
+                const matchingShift = shifts.find((s: any) => {
+                    if (!s.time) {
+                        return false;
+                    }
+                    const shiftTime = s.time.toString().trim().toLowerCase();
+                    return (
+                        shiftTime === currentPeriod ||
+                        shiftTime.includes(currentPeriod) ||
+                        currentPeriod.includes(shiftTime)
+                    );
+                });
+
+                if (matchingShift) {
+                    setShiftValue(matchingShift.id);
+                }
+            }
+        },
+        []
+    );
+
+    const loadCachedReferenceData = useCallback(
+        async (autoSelectDefaults = false) => {
+            const [
+                savedTransporters,
+                savedMembers,
+                savedRoutes,
+                savedShifts,
+                savedMeasuringCans,
+            ] = await Promise.all([
+                getTransporters(),
+                getMembers(),
+                getRoutes(),
+                getShifts(),
+                getMeasuringCans(),
+            ]);
+
+            const cans = normalizeCachedCans(savedMeasuringCans || []);
+            const transporters = savedTransporters || [];
+            const members = savedMembers || [];
+            const routes = savedRoutes || [];
+            const shifts = savedShifts || [];
+
+            if (!isMountedRef.current) {
+                return;
+            }
+
+            applyCachedReferenceData(
+                transporters,
+                members,
+                routes,
+                shifts,
+                cans,
+                { autoSelectDefaults }
+            );
+
+            if (autoSelectDefaults && cans.length > 0) {
+                const storedUser = await AsyncStorage.getItem("user");
+                if (storedUser) {
+                    const userData = JSON.parse(storedUser);
+                    const savedCan = await getMeasuringCan(userData.member_id);
+                    if (savedCan) {
+                        const matchingCan = cans.find((c: any) => c.id === savedCan.id);
+                        if (matchingCan) {
+                            setMeasuringCanValue(matchingCan.id);
+                            setMeasuringCan(matchingCan);
+                        }
+                    }
+                }
+            }
+        },
+        [applyCachedReferenceData]
+    );
+
+    const runMandatorySync = useCallback(
+        async (force = false) => {
+            const now = Date.now();
+            if (!force && now - lastMandatorySyncAttemptRef.current < MANDATORY_SYNC_RETRY_MS) {
+                return;
+            }
+
+            lastMandatorySyncAttemptRef.current = now;
+            setMandatorySyncError(null);
+
+            try {
+                const online = await checkConnectivity();
+                if (!online) {
+                    setMandatorySyncError(
+                        "You have pending collections. Turn on WiFi or mobile data to sync before continuing."
+                    );
+                    return;
+                }
+
+                enableCollectionGateCheck();
+                const result = await performMandatoryOfflineSync(force);
+                if (!result.success) {
+                    await refreshCollectionGate();
+                    return;
+                }
+
+                await loadCachedReferenceData(false);
+
+                if (result.collectionsResult.failed > 0) {
+                    Alert.alert(
+                        "Partial Sync",
+                        `${result.collectionsResult.success} collection(s) synced, but ${result.collectionsResult.failed} failed.`
+                    );
+                    await refreshCollectionGate();
+                    return;
+                }
+
+                navigateToDashboard();
+            } catch (error: any) {
+                console.error("[OFFLINE] Mandatory sync failed:", error);
+                setMandatorySyncError(
+                    error?.message || "Sync failed. Please check your connection and try again."
+                );
+            }
+        },
+        [
+            enableCollectionGateCheck,
+            loadCachedReferenceData,
+            performMandatoryOfflineSync,
+            refreshCollectionGate,
+            setMandatorySyncError,
+        ]
+    );
+
+    useLayoutEffect(() => {
+        navigation.setOptions({
+            headerShown: true,
+            headerTitle: isOnline ? "Milk Collection" : "Milk Collection (Offline)",
+            headerStyle: {
+                backgroundColor: isOnline ? OFFLINE_HEADER_ONLINE : OFFLINE_HEADER_OFFLINE,
+            },
+            headerTintColor: "#fff",
+            headerTitleStyle: { fontWeight: "600" },
+        });
+    }, [navigation, isOnline]);
 
     // Scale hook
     const scaleHook = useBluetoothService({ deviceType: "scale" });
@@ -94,112 +525,151 @@ const OfflineMilkCollectionScreen = () => {
         isConnecting: isConnectingPrinter,
         disconnect: disconnectPrinter,
         printText: printTextToPrinter,
+        autoConnectInnerPrinter,
     } = printerBluetooth;
 
-    const printerDevicesRef = useRef<any[]>(printerDevices || []);
+    const restoreDraftFromSQLite = useCallback(async () => {
+        try {
+            const draft = await getOfflineCollectionDraft();
+            if (!draft || draft.entries.length === 0) {
+                return;
+            }
 
-    // Update printer devices ref
-    useEffect(() => {
-        printerDevicesRef.current = printerDevices || [];
-    }, [printerDevices]);
+            isRestoringDraftRef.current = true;
 
-    // Initialize database and load data on mount
+            setTransporterValue(draft.transporterValue);
+            setShiftValue(draft.shiftValue);
+            setRouteValue(draft.routeValue);
+            setCenterValue(draft.centerValue);
+            setMeasuringCanValue(draft.measuringCanValue);
+            setMemberValue(draft.memberValue);
+            setEntries(draft.entries);
+            setTotalCans(draft.totalCans);
+            setTotalQuantity(draft.totalQuantity);
+
+            const [transporters, routes, measuringCans] = await Promise.all([
+                getTransporters(),
+                getRoutes(),
+                getMeasuringCans(),
+            ]);
+
+            if (draft.transporterValue) {
+                setTransporter(
+                    (transporters || []).find((item: any) => item.id === draft.transporterValue) || null
+                );
+            }
+
+            if (draft.routeValue) {
+                setRoute(
+                    (routes || []).find((item: any) => item.id === draft.routeValue) || null
+                );
+                const centers = await getRouteCenters(draft.routeValue);
+                if (isMountedRef.current) {
+                    setCommonData((prev: any) => ({
+                        ...prev,
+                        route_centers: centers || [],
+                    }));
+                    setCenterItems(
+                        (centers || []).map((item: any) => ({
+                            label: getRouteCenterDisplayName(item),
+                            value: item.id,
+                        }))
+                    );
+                }
+            }
+
+            if (draft.centerValue && draft.routeValue) {
+                const centers = await getRouteCenters(draft.routeValue);
+                setCenter(
+                    (centers || []).find((item: any) => item.id === draft.centerValue) || null
+                );
+            }
+
+            if (draft.measuringCanValue) {
+                const cans = normalizeCachedCans(measuringCans || []);
+                setMeasuringCan(
+                    cans.find((item: any) => item.id === draft.measuringCanValue) || null
+                );
+            }
+
+            if (draft.memberValue) {
+                const members = await getMembers();
+                setMember(
+                    (members || []).find((item: any) => item.id === draft.memberValue) || null
+                );
+            }
+
+            console.log("[OFFLINE] Restored in-progress collection draft from SQLite");
+        } catch (error) {
+            console.error("[OFFLINE] Failed to restore collection draft:", error);
+        } finally {
+            setTimeout(() => {
+                isRestoringDraftRef.current = false;
+            }, 500);
+        }
+    }, []);
+
+    const persistDraftToSQLite = useCallback(async () => {
+        if (isRestoringDraftRef.current || isCollectionBlocked) {
+            return;
+        }
+
+        const hasDraftContent =
+            entries.length > 0 ||
+            transporterValue != null ||
+            routeValue != null ||
+            shiftValue != null ||
+            centerValue != null ||
+            measuringCanValue != null ||
+            journalCode.trim().length > 0 ||
+            batchNo.trim().length > 0;
+
+        try {
+            if (!hasDraftContent) {
+                await clearOfflineCollectionDraft();
+                return;
+            }
+
+            await saveOfflineCollectionDraft({
+                transporterValue,
+                shiftValue,
+                routeValue,
+                centerValue,
+                measuringCanValue,
+                memberValue,
+                journalCode,
+                batchNo,
+                entries,
+                totalCans,
+                totalQuantity,
+            });
+        } catch (error) {
+            console.error("[OFFLINE] Failed to persist collection draft:", error);
+        }
+    }, [
+        batchNo,
+        centerValue,
+        entries,
+        isCollectionBlocked,
+        journalCode,
+        measuringCanValue,
+        memberValue,
+        routeValue,
+        shiftValue,
+        totalCans,
+        totalQuantity,
+        transporterValue,
+    ]);
+
+    // Initialize database and load locally stored reference data
     useEffect(() => {
         const init = async () => {
             try {
                 await initDatabase();
-                
-                // Load shifts from SQLite
-                const savedShifts = await getShifts();
-                if (savedShifts && savedShifts.length > 0) {
-                    setShifts(savedShifts);
-                    const items = savedShifts.map((s: any) => ({
-                        label: s.name,
-                        value: s.id
-                    }));
-                    setShiftItems(items);
-                    console.log('[OFFLINE] Loaded', savedShifts.length, 'shifts from database');
-
-                    // Auto-select shift based on current time period (morning, afternoon, evening)
-                    const currentTime = new Date();
-                    const currentHours = currentTime.getHours();
-
-                    // Determine current time period
-                    let currentPeriod: string;
-                    if (currentHours >= 6 && currentHours < 12) {
-                        currentPeriod = "morning";
-                    } else if (currentHours >= 12 && currentHours < 18) {
-                        currentPeriod = "afternoon";
-                    } else {
-                        // Evening: 18:00 (6 PM) to 06:00 (6 AM next day)
-                        currentPeriod = "evening";
-                    }
-
-                    console.log(`[OFFLINE] Current time: ${currentHours}:${currentTime.getMinutes()} - Period: ${currentPeriod}`);
-                    console.log(`[OFFLINE] Available shifts:`, savedShifts.map((s: any) => ({ id: s.id, name: s.name, time: s.time })));
-
-                    // Find shift that matches current time period
-                    const matchingShift = savedShifts.find((s: any) => {
-                        if (!s.time) {
-                            console.log(`[OFFLINE] Shift ${s.id} (${s.name}) has no time field`);
-                            return false;
-                        }
-
-                        // Normalize the time field to lowercase and remove any extra whitespace
-                        const shiftTime = s.time.toString().trim().toLowerCase();
-
-                        // More flexible matching - check if the time field contains the period
-                        // This handles cases like "Morning Shift", "morning", "MORNING", etc.
-                        const matches = shiftTime === currentPeriod ||
-                            shiftTime.includes(currentPeriod) ||
-                            currentPeriod.includes(shiftTime);
-
-                        console.log(`[OFFLINE] Shift ${s.id} (${s.name}): time="${s.time}" -> normalized="${shiftTime}", currentPeriod="${currentPeriod}", matches=${matches}`);
-
-                        return matches;
-                    });
-
-                    if (matchingShift) {
-                        setShiftValue(matchingShift.id);
-                        console.log(`[OFFLINE] ✅ Auto-selected shift: ${matchingShift.name} (ID: ${matchingShift.id}) - Time period: ${currentPeriod}`);
-                    } else {
-                        console.log(`[OFFLINE] ❌ No shift found matching current time period: ${currentPeriod}`);
-                        console.log(`[OFFLINE] Available shift times:`, savedShifts.map((s: any) => s.time).filter(Boolean));
-                    }
-                } else {
-                    console.log('[OFFLINE] No shifts found in database');
-                }
-
-                // Load measuring cans from SQLite
-                const savedMeasuringCans = await getMeasuringCans();
-                if (savedMeasuringCans && savedMeasuringCans.length > 0) {
-                    setMeasuringCans(savedMeasuringCans);
-                    const canItems = savedMeasuringCans.map((c: any) => ({
-                        label: `${c.can_id} (Tare: ${c.tare_weight} KG)`,
-                        value: c.id
-                    }));
-                    setMeasuringCanItems(canItems);
-                    console.log('[OFFLINE] Loaded', savedMeasuringCans.length, 'measuring cans from database');
-
-                    // Try to load saved measuring can from settings
-                    const storedUser = await AsyncStorage.getItem("user");
-                    if (storedUser) {
-                        const userData = JSON.parse(storedUser);
-                        const savedCan = await getMeasuringCan(userData.member_id);
-                        if (savedCan) {
-                            // Find matching can in loaded cans
-                            const matchingCan = savedMeasuringCans.find((c: any) => c.id === savedCan.id);
-                            if (matchingCan) {
-                                setMeasuringCanValue(matchingCan.id);
-                                setMeasuringCan(matchingCan);
-                                setTareWeight(String(matchingCan.tare_weight || 0));
-                                console.log('[OFFLINE] Auto-selected saved measuring can:', matchingCan.can_id);
-                            }
-                        }
-                    }
-                } else {
-                    console.log('[OFFLINE] No measuring cans found in database');
-                }
+                await loadCachedReferenceData(true);
+                await restoreDraftFromSQLite();
+                enableCollectionGateCheck();
+                await refreshCollectionGate();
             } catch (error) {
                 console.error('[OFFLINE] Failed to initialize:', error);
                 Alert.alert("Database Error", "Failed to initialize offline storage");
@@ -211,24 +681,237 @@ const OfflineMilkCollectionScreen = () => {
         return () => {
             isMountedRef.current = false;
         };
-    }, []);
+    }, [
+        enableCollectionGateCheck,
+        loadCachedReferenceData,
+        refreshCollectionGate,
+        restoreDraftFromSQLite,
+    ]);
 
-    // Load unsynced count
-    const loadUnsyncedCount = useCallback(async () => {
-        try {
-            const count = await getUnsyncedCount();
-            setUnsyncedCount(count);
-        } catch (error) {
-            console.error('[OFFLINE] Error loading unsynced count:', error);
+    useFocusEffect(
+        useCallback(() => {
+            if (gateCheckEnabled) {
+                void refreshCollectionGate();
+            }
+        }, [gateCheckEnabled, refreshCollectionGate])
+    );
+
+    useEffect(() => {
+        if (!gateCheckEnabled) {
+            return;
         }
+
+        const interval = setInterval(() => {
+            void refreshCollectionGate();
+        }, 30000);
+
+        return () => clearInterval(interval);
+    }, [gateCheckEnabled, refreshCollectionGate]);
+
+    useEffect(() => {
+        if (!isOnline) {
+            enableCollectionGateCheck();
+            void refreshCollectionGate();
+            return;
+        }
+
+        if (!requiresSync) {
+            return;
+        }
+
+        void runMandatorySync();
+    }, [
+        enableCollectionGateCheck,
+        isOnline,
+        refreshCollectionGate,
+        requiresSync,
+        runMandatorySync,
+    ]);
+
+    useEffect(() => {
+        const timeout = setTimeout(() => {
+            void persistDraftToSQLite();
+        }, 400);
+
+        return () => clearTimeout(timeout);
+    }, [persistDraftToSQLite]);
+
+    useEffect(() => {
+        if (canValue && Array.isArray(commonData.cans)) {
+            const found = commonData.cans.find((c: any) => c.id === canValue);
+            if (found) {
+                setCan(found);
+            }
+        }
+    }, [canValue, commonData.cans]);
+
+    useEffect(() => {
+        if (transporterValue && Array.isArray(commonData.transporters)) {
+            const found = commonData.transporters.find(
+                (item: any) => item.id === transporterValue
+            );
+            if (found) {
+                setTransporter(found);
+            }
+        }
+    }, [transporterValue, commonData.transporters]);
+
+    useEffect(() => {
+        if (routeValue && Array.isArray(commonData.routes)) {
+            const found = commonData.routes.find((r: any) => r.id === routeValue);
+            if (found) {
+                setRoute(found);
+            }
+        }
+    }, [routeValue, commonData.routes]);
+
+    useEffect(() => {
+        setJournalCode(
+            resolveJournalCode(
+                transporterValue,
+                commonData.transporters,
+                transporter
+            )
+        );
+    }, [transporter, transporterValue, commonData.transporters]);
+
+    useEffect(() => {
+        setBatchNo(
+            resolveBatchNo(routeValue, commonData.routes, route)
+        );
+    }, [route, routeValue, commonData.routes]);
+
+    useEffect(() => {
+        if (memberValue && Array.isArray(commonData.members)) {
+            const found = commonData.members.find((m: any) => m.id === memberValue);
+            if (found) {
+                setMember(found);
+            }
+        }
+    }, [memberValue, commonData.members]);
+
+    useEffect(() => {
+        if (measuringCanValue && Array.isArray(commonData.cans)) {
+            const found = commonData.cans.find((c: any) => c.id === measuringCanValue);
+            if (found) {
+                setMeasuringCan(found);
+            }
+        } else if (!measuringCanValue) {
+            setMeasuringCan(null);
+        }
+    }, [measuringCanValue, commonData.cans]);
+
+    useEffect(() => {
+        const loadRouteCenters = async () => {
+            if (routeValue == null) {
+                setCommonData((prev: any) => ({ ...prev, route_centers: [] }));
+                setCenterItems([]);
+                setCenterValue(null);
+                setCenter(null);
+                return;
+            }
+
+            try {
+                setCenterValue(null);
+                setCenter(null);
+
+                const centers = await getRouteCenters(routeValue);
+                setCommonData((prev: any) => ({ ...prev, route_centers: centers }));
+                setCenterItems(
+                    (centers || []).map((c: any) => ({
+                        label: getRouteCenterDisplayName(c),
+                        value: c.id,
+                    }))
+                );
+
+                if (centers.length > 0) {
+                    const firstCenter = centers[0];
+                    setCenterValue(firstCenter.id);
+                    setCenter({
+                        id: firstCenter.id,
+                        center: getRouteCenterDisplayName(firstCenter),
+                    });
+                }
+            } catch (error) {
+                console.error("[OFFLINE] Error loading route centers:", error);
+                setCenterItems([]);
+            }
+        };
+
+        loadRouteCenters();
+    }, [routeValue]);
+
+    const hasEntryForMemberAndCan = useCallback(
+        (memberId: number | null | undefined, selectedCanId: number | null | undefined) => {
+            if (memberId == null || selectedCanId == null) {
+                return false;
+            }
+            return entries.some(
+                (entry) => entry.member_id === memberId && entry.can_id === selectedCanId
+            );
+        },
+        [entries]
+    );
+
+    const resetMemberDropdownItems = useCallback(() => {
+        setMemberItems(allMemberItems);
+    }, [allMemberItems]);
+
+    const handleMemberSearch = useCallback(
+        (searchText: string) => {
+            setMemberItems(
+                filterMemberDropdownItems(
+                    allMemberItems,
+                    commonData.members || [],
+                    searchText
+                )
+            );
+        },
+        [allMemberItems, commonData.members]
+    );
+
+    const handleTransporterSelect = useCallback(
+        (val: number | null) => {
+            if (val == null) {
+                return;
+            }
+            setTransporterValue(val);
+            const selectedTransporter = (commonData.transporters || []).find(
+                (item: any) => item.id === val
+            );
+            if (!selectedTransporter) {
+                return;
+            }
+            setTransporter(selectedTransporter);
+            autoSelectRouteForTransporter(
+                selectedTransporter,
+                commonData.routes || [],
+                setRouteValue,
+                setRoute
+            );
+        },
+        [commonData.transporters, commonData.routes]
+    );
+
+    const closeOtherDropdowns = useCallback((current: string) => {
+        if (current !== "transporter") setTransporterOpen(false);
+        if (current !== "shift") setShiftOpen(false);
+        if (current !== "route") setRouteOpen(false);
+        if (current !== "center") setCenterOpen(false);
+        if (current !== "measuringCan") setMeasuringCanOpen(false);
+        if (current !== "can") setCanOpen(false);
+        if (current !== "member") setMemberOpen(false);
     }, []);
 
     useEffect(() => {
-        loadUnsyncedCount();
-        // Refresh count every 30 seconds
-        const interval = setInterval(loadUnsyncedCount, 30000);
-        return () => clearInterval(interval);
-    }, [loadUnsyncedCount]);
+        if (memberValue == null || canValue == null) {
+            return;
+        }
+        if (hasEntryForMemberAndCan(memberValue, canValue)) {
+            setCanValue(null);
+            setCan(null);
+        }
+    }, [memberValue, canValue, hasEntryForMemberAndCan]);
 
     // Monitor network connectivity
     useEffect(() => {
@@ -291,40 +974,99 @@ const OfflineMilkCollectionScreen = () => {
 
     // Take weight and add to entries
     const takeWeight = () => {
+        if (isCollectionBlocked) {
+            Alert.alert(
+                "Sync Required",
+                isSyncing
+                    ? "Please wait while pending collections are syncing."
+                    : "You have pending collections to upload. Turn on WiFi or mobile data and wait for sync to complete before recording."
+            );
+            return;
+        }
+
         try {
             if (scaleWeight === null || scaleWeight === undefined || !isFinite(scaleWeight) || scaleWeight < 0) {
-                Alert.alert("No weight", "No valid weight available to record.");
+                Alert.alert("No weight", "No valid weight available to record. Please ensure the scale is connected and displaying a valid weight.");
                 return;
             }
 
-            const tare = parseFloat(tareWeight) || 0;
+            if (!measuringCan) {
+                Alert.alert("Missing Measuring Can", "Select a measuring can before recording.");
+                return;
+            }
+
+            const tare = getCanTare(measuringCan);
+
+            if (!can || !canValue || !can.id) {
+                Alert.alert("Missing Can", "Please select a can before recording the weight.");
+                return;
+            }
+
+            if (!memberValue) {
+                Alert.alert("Missing Member", "Please select a member before recording the weight.");
+                return;
+            }
+
+            if (hasEntryForMemberAndCan(memberValue, can.id)) {
+                Alert.alert(
+                    "Duplicate Entry",
+                    "This member already has a record for the selected can. Choose a different can or member."
+                );
+                return;
+            }
+
             const net = parseFloat((scaleWeight - tare).toFixed(2));
 
             if (!isFinite(net) || net < 0) {
-                Alert.alert("Invalid Weight", `Net weight is invalid (${net.toFixed(2)} KG).`);
+                Alert.alert(
+                    "Invalid Weight",
+                    `Net weight is invalid (${net.toFixed(2)} KG). Please check the scale weight and measuring can tare.`
+                );
                 return;
             }
 
             if (net > 1000) {
-                Alert.alert("Suspicious Weight", `Net weight seems unusually high (${net.toFixed(2)} KG).`);
+                Alert.alert(
+                    "Suspicious Weight",
+                    `Net weight seems unusually high (${net.toFixed(2)} KG). Please verify the scale reading.`
+                );
                 return;
             }
 
+            const selectedMember =
+                member ??
+                (commonData.members || []).find((m: any) => m.id === memberValue);
+            const memberNo = getMemberNumber(selectedMember);
+            const memberName = getMemberDisplayName(selectedMember);
+            const memberLabel = memberName
+                ? memberNo
+                    ? `${memberName} (${memberNo})`
+                    : memberName
+                : `Member #${memberValue}`;
+
             const entry = {
-                can_label: `Can ${entries.length + 1}`,
+                member_id: memberValue,
+                member_label: memberLabel,
+                can_id: can.id,
+                can_label: getMilkCanLabel(can),
                 scale_weight: scaleWeight,
                 tare_weight: tare,
                 net,
                 timestamp: new Date().toISOString(),
             };
 
-            setEntries(prev => [...prev, entry]);
-            setTotalCans(prev => prev + 1);
-            setTotalQuantity(prev => prev + net);
+            setEntries((prev) => [...prev, entry]);
+            setTotalCans((prev) => prev + 1);
+            setTotalQuantity((prev) => prev + net);
 
-            // Clear for next entry
             setScaleWeight(null);
             setScaleWeightText("");
+            setMemberValue(null);
+            setMember(null);
+            setMemberOpen(true);
+            resetMemberDropdownItems();
+            setCanOpen(false);
+            setMeasuringCanOpen(false);
         } catch (error) {
             console.error('[OFFLINE] Error in takeWeight:', error);
             Alert.alert("Error", "An error occurred while recording the weight.");
@@ -340,75 +1082,6 @@ const OfflineMilkCollectionScreen = () => {
             setTotalCans(newEntries.length);
             return newEntries;
         });
-    };
-
-    // Handle measuring can selection
-    const handleMeasuringCanChange = (canId: number | null) => {
-        if (canId === null) {
-            setMeasuringCan(null);
-            setTareWeight("0");
-            return;
-        }
-
-        const selectedCan = measuringCans.find((c: any) => c.id === canId);
-        if (selectedCan) {
-            setMeasuringCan(selectedCan);
-            setTareWeight(String(selectedCan.tare_weight || 0));
-            console.log('[OFFLINE] Selected measuring can:', selectedCan.can_id, 'Tare:', selectedCan.tare_weight);
-        }
-    };
-
-    // Format receipt for offline collection
-    const formatOfflineCollectionReceipt = (
-        capturedMemberNumber: string,
-        capturedCanNumber: string,
-        capturedEntries: any[],
-        capturedTotalCans: number,
-        capturedTotalQuantity: number,
-        capturedShiftName: string,
-        capturedMeasuringCanName: string
-    ) => {
-        let receipt = "";
-        receipt += "      E-DAIRY LIMITED\n";
-        receipt += "      P.O. Box [P.O. Box Number]\n";
-        receipt += "\n\n";
-        receipt += "   OFFLINE MILK COLLECTION\n";
-        receipt += "================================\n";
-        const now = new Date();
-        const dateStr = now.toISOString().split("T")[0];
-        const timeStr = now.toTimeString().split(" ")[0];
-        receipt += `Date: ${dateStr} ${timeStr}\n`;
-        receipt += `Member No: ${capturedMemberNumber}\n`;
-        if (capturedCanNumber) {
-            receipt += `Can Number: ${capturedCanNumber}\n`;
-        }
-        if (capturedShiftName) {
-            receipt += `Shift: ${capturedShiftName}\n`;
-        }
-        if (capturedMeasuringCanName) {
-            receipt += `Measuring Can: ${capturedMeasuringCanName}\n`;
-        }
-        receipt += "--------------------------------\n";
-        receipt += `Total Cans: ${capturedTotalCans}\n`;
-        receipt += `Total Quantity: ${capturedTotalQuantity.toFixed(2)} KG\n`;
-        receipt += "--------------------------------\n";
-        receipt += "Cans Details:\n";
-
-        (capturedEntries || []).forEach((entry: any, index: number) => {
-            receipt += `${index + 1}. ${entry.can_label} - Net: ${entry.net.toFixed(2)} KG\n`;
-        });
-
-        receipt += "--------------------------------\n";
-        receipt += `TOTAL NET WEIGHT: ${capturedTotalQuantity.toFixed(2)} KG\n`;
-        receipt += "================================\n";
-        receipt += "Thank you for your delivery!\n";
-        receipt += "NOTE: Collected Offline\n";
-        receipt += "Will sync when online\n";
-        receipt += "================================\n";
-        receipt += "Powered by eDairy.africa\n";
-        receipt += "\n\n";
-
-        return receipt;
     };
 
     // Helper: Persist printer to AsyncStorage
@@ -435,95 +1108,92 @@ const OfflineMilkCollectionScreen = () => {
         }
     }, []);
 
-    // Helper: Connect to any available InnerPrinter
-    const connectToAnyAvailablePrinter = useCallback(async (): Promise<boolean> => {
-        try {
-            console.log("[OFFLINE] AUTO-CONNECT: Scanning for InnerPrinter...");
-            await scanForPrinterDevices();
-            await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
-
-            const devices = printerDevicesRef.current || [];
-            console.log("[OFFLINE] AUTO-CONNECT: Found", devices.length, "printer devices");
-
-            if (devices.length === 0) return false;
-
-            const innerPrinters = devices.filter(device => {
-                const deviceName = (device.name || '').toLowerCase();
-                return deviceName.includes('innerprinter') || deviceName.includes('inner');
-            });
-
-            let targetPrinter = innerPrinters.length > 0 ? innerPrinters[0] : devices[0];
-            const deviceId = targetPrinter?.id || targetPrinter?.address || targetPrinter?.address_or_id;
-
-            if (!deviceId) return false;
-
-            console.log("[OFFLINE] AUTO-CONNECT: Connecting to", targetPrinter.name || deviceId);
-            const result = await connectToPrinterDevice(deviceId);
-            const success = !!result;
-
-            if (success) {
-                await persistLastPrinter(result);
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-
-            return success;
-        } catch (error) {
-            console.error("[OFFLINE] AUTO-CONNECT: Error:", error);
-            return false;
-        }
-    }, [scanForPrinterDevices, connectToPrinterDevice, persistLastPrinter]);
-
-    // Helper: Attempt auto-connect
     const attemptAutoConnectPrinter = useCallback(async (): Promise<boolean> => {
-        if (connectedPrinterDevice || isConnectingPrinter) return true;
-
-        try {
-            const stored = await AsyncStorage.getItem("last_device_printer");
-            if (stored) {
-                const data = JSON.parse(stored);
-                const deviceId = data?.id || data?.address || data?.address_or_id;
-                if (deviceId) {
-                    console.log("[OFFLINE] AUTO-CONNECT: Trying stored printer");
-                    await scanForPrinterDevices();
-                    await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
-                    const result = await connectToPrinterDevice(deviceId);
-                    if (result) {
-                        await persistLastPrinter(result);
-                        await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
-                        return true;
-                    }
-                }
-            }
-
-            return await connectToAnyAvailablePrinter();
-        } catch (error) {
-            console.error("[OFFLINE] AUTO-CONNECT: Error:", error);
+        if (!autoConnectInnerPrinter) {
             return false;
         }
-    }, [connectToPrinterDevice, scanForPrinterDevices, connectedPrinterDevice, isConnectingPrinter, persistLastPrinter, connectToAnyAvailablePrinter]);
 
-    // Helper: Print receipt
+        const result = await autoConnectInnerPrinter();
+        if (result) {
+            await persistLastPrinter(result);
+            await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000));
+            return true;
+        }
+
+        return false;
+    }, [autoConnectInnerPrinter, persistLastPrinter]);
+
     const printReceipt = useCallback(async (receiptText: string, deviceOverride?: any): Promise<boolean> => {
         console.log('[OFFLINE-PRINT] Printing receipt...');
 
         let printerDevice = deviceOverride || connectedPrinterDevice;
 
+        if (deviceOverride && !connectedPrinterDevice) {
+            for (let i = 0; i < 5; i += 1) {
+                await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
+                if (connectedPrinterDevice) {
+                    printerDevice = connectedPrinterDevice;
+                    break;
+                }
+            }
+        }
+
         if (!printerDevice) {
-            console.error('[OFFLINE-PRINT] No printer connected');
+            if (!deviceOverride && !connectedPrinterDevice) {
+                await new Promise<void>((resolve) => setTimeout(() => resolve(), 500));
+                if (connectedPrinterDevice) {
+                    return printReceipt(receiptText, connectedPrinterDevice);
+                }
+            }
             Alert.alert("Printer Not Available", "No printer connected. Please connect a printer to print the receipt.");
             return false;
         }
 
         if (!printTextToPrinter) {
-            console.error('[OFFLINE-PRINT] Print function not available');
-            Alert.alert("Printer Not Available", "Print function is not available.");
+            Alert.alert("Printer Not Available", "Print function is not available. Please check printer connection.");
+            return false;
+        }
+
+        if (!connectedPrinterDevice && deviceOverride) {
+            await new Promise<void>((resolve) => setTimeout(() => resolve(), 500));
+        }
+
+        try {
+            let isStillConnected = false;
+            if (printerDevice.type === 'ble' && printerDevice.bleDevice) {
+                isStillConnected = (printerDevice.bleDevice as any).isConnected === true;
+            } else if (printerDevice.type === 'classic' && printerDevice.classicDevice) {
+                try {
+                    isStillConnected = await printerDevice.classicDevice.isConnected();
+                } catch {
+                    isStillConnected = false;
+                }
+            }
+
+            if (!isStillConnected) {
+                Alert.alert("Printer Not Connected", "The printer is not connected. Please check the connection and try again.");
+                return false;
+            }
+        } catch {
+            Alert.alert("Printer Connection Error", "Unable to verify printer connection. Please check the printer and try again.");
             return false;
         }
 
         try {
-            console.log('[OFFLINE-PRINT] Starting print operation...');
+            let printPromise: Promise<void>;
+            try {
+                printPromise = printTextToPrinter(receiptText);
+                if (!printPromise || typeof printPromise.then !== 'function') {
+                    Alert.alert("Print Error", "Print function error. Please try again.");
+                    return false;
+                }
+            } catch {
+                Alert.alert("Print Error", "Failed to start printing. Please check the printer connection.");
+                return false;
+            }
+
             await Promise.race([
-                printTextToPrinter(receiptText),
+                printPromise,
                 new Promise<never>((_, reject) =>
                     setTimeout(() => reject(new Error('Print timeout')), 30000)
                 )
@@ -534,133 +1204,266 @@ const OfflineMilkCollectionScreen = () => {
         } catch (error) {
             const errorMsg = (error as any)?.message || String(error);
             console.error('[OFFLINE-PRINT] Print error:', errorMsg);
-            Alert.alert("Print Error", "Failed to print receipt. Please check the printer connection.");
+            if (errorMsg.includes('timeout')) {
+                Alert.alert("Print Timeout", "Printing took too long. Please check the printer and try again.");
+            } else {
+                Alert.alert("Print Error", "Failed to print receipt. Please check the printer connection and try again.");
+            }
             return false;
         }
     }, [connectedPrinterDevice, printTextToPrinter]);
 
-    // Save collection offline
-    const saveCollection = async () => {
+    const printOfflineCollectionReceipts = useCallback(async (receiptTexts: string[]) => {
+        if (!receiptTexts.length) {
+            return;
+        }
+
+        setIsPrinting(true);
         try {
-            if (!memberNumber.trim()) {
-                Alert.alert("Required Field", "Please enter member number");
+            let connectedPrinter: any = null;
+
+            if (connectedPrinterDevice) {
+                try {
+                    let isStillConnected = false;
+                    if (connectedPrinterDevice.type === "ble" && connectedPrinterDevice.bleDevice) {
+                        isStillConnected = (connectedPrinterDevice.bleDevice as any).isConnected === true;
+                    } else if (
+                        connectedPrinterDevice.type === "classic" &&
+                        connectedPrinterDevice.classicDevice
+                    ) {
+                        isStillConnected = await connectedPrinterDevice.classicDevice.isConnected();
+                    }
+                    if (isStillConnected) {
+                        connectedPrinter = connectedPrinterDevice;
+                    }
+                } catch (checkErr) {
+                    console.warn("[OFFLINE-PRINT] Error checking existing connection:", checkErr);
+                }
+            }
+
+            if (!connectedPrinter) {
+                try {
+                    const connected = await attemptAutoConnectPrinter();
+                    if (connected && connectedPrinterDevice) {
+                        connectedPrinter = connectedPrinterDevice;
+                    }
+                } catch (connectErr) {
+                    console.error("[OFFLINE-PRINT] Error connecting:", connectErr);
+                }
+            }
+
+            if (!connectedPrinter) {
+                setPrinterModalVisible(true);
+                try {
+                    await AsyncStorage.setItem(
+                        getPendingReceiptsStorageKey(),
+                        JSON.stringify(receiptTexts)
+                    );
+                    await AsyncStorage.removeItem("pending_receipt");
+                } catch (storageErr) {
+                    console.error("[OFFLINE-PRINT] Storage error:", storageErr);
+                }
                 return;
             }
 
+            await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000));
+
+            for (let index = 0; index < receiptTexts.length; index += 1) {
+                const receiptText = receiptTexts[index];
+                console.log(
+                    `[OFFLINE-PRINT] Printing member receipt ${index + 1}/${receiptTexts.length}`
+                );
+
+                try {
+                    await printReceipt(receiptText, connectedPrinter);
+                } catch (printErr) {
+                    console.error("[OFFLINE-PRINT] Error during printing:", printErr);
+                    Alert.alert(
+                        "Print Error",
+                        `Collection was saved but receipt ${index + 1} of ${receiptTexts.length} failed to print.`
+                    );
+                    break;
+                }
+
+                if (index < receiptTexts.length - 1) {
+                    await new Promise<void>((resolve) => setTimeout(() => resolve(), 1200));
+                }
+            }
+        } catch (printerError) {
+            console.error("[OFFLINE-PRINT] Unexpected error:", printerError);
+            Alert.alert(
+                "Print Error",
+                "Collection was saved but an error occurred while printing receipts."
+            );
+        } finally {
+            setIsPrinting(false);
+        }
+    }, [
+        attemptAutoConnectPrinter,
+        connectedPrinterDevice,
+        printReceipt,
+    ]);
+
+    // Save collection offline
+    const saveCollection = async () => {
+        if (isCollectionBlocked) {
+            Alert.alert(
+                "Sync Required",
+                isSyncing
+                    ? "Please wait while pending collections are syncing."
+                    : "You have pending collections to upload. Turn on WiFi or mobile data and wait for sync to complete before saving."
+            );
+            return;
+        }
+
+        try {
             if (entries.length === 0) {
                 Alert.alert("No Data", "Please record at least one can");
                 return;
             }
 
+            if (!shiftValue) {
+                Alert.alert("Missing Shift", "Please select a shift before saving.");
+                return;
+            }
+
+            if (!transporterValue) {
+                Alert.alert("Missing Transporter", "Please select a transporter before saving.");
+                return;
+            }
+
+            if (!routeValue) {
+                Alert.alert("Missing Route", "Please select a route before saving.");
+                return;
+            }
+
+            const selectedTransporterForSave =
+                transporter ?? findTransporterById(commonData.transporters, transporterValue);
+            const selectedRouteForSave =
+                route ?? findRouteById(commonData.routes, routeValue);
+            const capturedJournal =
+                journalCode.trim() ||
+                resolveJournalCode(
+                    transporterValue,
+                    commonData.transporters,
+                    selectedTransporterForSave
+                );
+            const capturedBatch =
+                batchNo.trim() ||
+                resolveBatchNo(routeValue, commonData.routes, selectedRouteForSave);
+
+            if (!capturedJournal) {
+                Alert.alert(
+                    "Missing Journal",
+                    "Select a transporter to auto-generate a journal code."
+                );
+                return;
+            }
+
+            if (!capturedBatch) {
+                Alert.alert(
+                    "Missing Batch No",
+                    "Select a route to auto-generate a batch number."
+                );
+                return;
+            }
+
             setLoading(true);
 
-            // Capture data before clearing
-            const capturedMemberNumber = memberNumber.trim();
-            const capturedCanNumber = canNumber.trim();
-            const capturedShiftId = shiftValue;
-            const capturedShiftName = shifts.find((s: any) => s.id === shiftValue)?.name || '';
-            const capturedMeasuringCanName = measuringCan?.can_id || '';
             const capturedEntries = [...entries];
+            const capturedShiftId = shiftValue;
+            const capturedShiftName =
+                (commonData.shifts || []).find((s: any) => s.id === shiftValue)?.name || "";
+            const capturedTransporter = selectedTransporterForSave;
+            const capturedRoute = selectedRouteForSave;
+            const capturedCenter = center;
+            const capturedMeasuringCanName = measuringCan ? getMilkCanLabel(measuringCan) : "";
             const capturedTotalCans = totalCans;
             const capturedTotalQuantity = totalQuantity;
 
-            // Save to SQLite
+            const primaryEntry = capturedEntries[0];
+            const primaryMember =
+                (commonData.members || []).find((m: any) => m.id === primaryEntry?.member_id) ||
+                null;
+            const capturedMemberNumber = getMemberNumber(primaryMember);
+            const capturedMemberName = getMemberDisplayName(primaryMember);
+
             await insertOfflineCollection({
-                member_number: capturedMemberNumber,
+                member_number: capturedMemberNumber || `MEMBER-${primaryEntry?.member_id ?? "UNKNOWN"}`,
+                member_name: capturedMemberName || undefined,
                 shift_id: capturedShiftId || undefined,
                 shift_name: capturedShiftName || undefined,
+                transporter_id: transporterValue || undefined,
+                transporter_name: capturedTransporter
+                    ? getTransporterDisplayName(capturedTransporter)
+                    : undefined,
+                route_id: routeValue || undefined,
+                route_name: capturedRoute ? getRouteDisplayName(capturedRoute) : undefined,
+                center_id: centerValue || undefined,
+                center_name: capturedCenter?.center || undefined,
+                measuring_can_id: measuringCan?.id,
                 measuring_can_name: capturedMeasuringCanName || undefined,
                 total_cans: capturedTotalCans,
                 total_quantity: capturedTotalQuantity,
-                cans_data: capturedEntries,
+                cans_data: capturedEntries.map((entry) => ({
+                    ...entry,
+                    journal: capturedJournal,
+                    batch_no: capturedBatch,
+                })),
             });
 
-            console.log('[OFFLINE] Collection saved successfully');
+            await clearOfflineCollectionDraft();
+
+            console.log('[OFFLINE] Collection saved to SQLite for sync');
             setSuccessModalVisible(true);
-            setIsPrinting(true);
 
-            // Format receipt
-            const receiptText = formatOfflineCollectionReceipt(
-                capturedMemberNumber,
-                capturedCanNumber,
-                capturedEntries,
-                capturedTotalCans,
-                capturedTotalQuantity,
-                capturedShiftName,
-                capturedMeasuringCanName
-            );
+            const payload = buildMemberKilosJournalPayload({
+                transporterId: transporterValue as number,
+                routeId: routeValue as number,
+                milkDeliveryShiftId: shiftValue as number,
+                entries: capturedEntries,
+                transporter: capturedTransporter,
+                route: capturedRoute,
+                journal: capturedJournal,
+                batch_no: capturedBatch,
+            });
 
-            // Update unsynced count
-            await loadUnsyncedCount();
+            const receiptCommonData = {
+                ...commonData,
+                route_centers: commonData.route_centers?.length
+                    ? commonData.route_centers
+                    : capturedCenter
+                      ? [capturedCenter]
+                      : [],
+            };
 
-            // Try to print
-            try {
-                let connectedPrinter: any = null;
+            const receiptTexts = buildOfflineCollectionReceipts({
+                response: null,
+                payload,
+                localEntries: capturedEntries,
+                commonData: receiptCommonData,
+                transporterId: transporterValue,
+                shiftId: shiftValue,
+                routeId: routeValue,
+                centerId: centerValue,
+            });
 
-                if (connectedPrinterDevice) {
-                    try {
-                        let isStillConnected = false;
-                        if (connectedPrinterDevice.type === 'ble' && connectedPrinterDevice.bleDevice) {
-                            isStillConnected = (connectedPrinterDevice.bleDevice as any).isConnected === true;
-                        } else if (connectedPrinterDevice.type === 'classic' && connectedPrinterDevice.classicDevice) {
-                            isStillConnected = await connectedPrinterDevice.classicDevice.isConnected();
-                        }
-                        if (isStillConnected) {
-                            connectedPrinter = connectedPrinterDevice;
-                        }
-                    } catch (checkErr) {
-                        console.warn('[OFFLINE-PRINT] Error checking connection:', checkErr);
-                    }
-                }
-
-                if (!connectedPrinter) {
-                    try {
-                        console.log('[OFFLINE-PRINT] Attempting auto-connect...');
-                        const connected = await attemptAutoConnectPrinter();
-                        if (connected && connectedPrinterDevice) {
-                            connectedPrinter = connectedPrinterDevice;
-                        }
-                    } catch (connectErr) {
-                        console.error('[OFFLINE-PRINT] Error connecting:', connectErr);
-                    }
-                }
-
-                if (!connectedPrinter) {
-                    console.log('[OFFLINE-PRINT] No printer, showing modal');
-                    setIsPrinting(false);
-                    setPrinterModalVisible(true);
-                    await AsyncStorage.setItem('pending_receipt', receiptText);
-                    return;
-                }
-
-                await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
-
-                let printSuccess = false;
-                try {
-                    printSuccess = await printReceipt(receiptText, connectedPrinter);
-                } catch (printErr) {
-                    console.error('[OFFLINE-PRINT] Error during printing:', printErr);
-                    printSuccess = false;
-                }
-
-            } catch (printerError) {
-                console.error("[OFFLINE-PRINT] Unexpected error:", printerError);
-            } finally {
-                setIsPrinting(false);
-            }
+            enableCollectionGateCheck();
+            await refreshCollectionGate();
+            void printOfflineCollectionReceipts(receiptTexts);
 
             // Clear form after a delay
             setTimeout(() => {
-                setMemberNumber("");
-                setCanNumber("");
-                setShiftValue(null);
+                setMemberValue(null);
+                setMember(null);
+                setCanValue(null);
+                setCan(null);
                 setEntries([]);
                 setTotalCans(0);
                 setTotalQuantity(0);
                 setScaleWeight(null);
-                if (!measuringCan) {
-                    setTareWeight("0");
-                }
+                setScaleWeightText("");
+                resetMemberDropdownItems();
                 setSuccessModalVisible(false);
             }, 2000);
 
@@ -675,35 +1478,24 @@ const OfflineMilkCollectionScreen = () => {
     // Manual sync
     const handleManualSync = async () => {
         try {
-            setIsSyncing(true);
-
             const online = await checkConnectivity();
             if (!online) {
                 Alert.alert(
-                    "No Internet Connection", 
+                    "No Internet Connection",
                     "Please connect to the internet to sync data. Your offline collections are stored safely and will sync when connection is restored.",
                     [{ text: "OK" }]
                 );
-                setIsSyncing(false);
                 return;
             }
 
-            // Use the new sync with confirmation flow
-            // All error handling is done inside syncWithConfirmation
-            await syncWithConfirmation();
-            
-            // Refresh unsynced count after sync operations
-            await loadUnsyncedCount();
+            await runMandatorySync(true);
         } catch (error: any) {
             console.error('[OFFLINE] Unexpected sync error:', error);
-            // Only show alert for unexpected errors not handled by syncWithConfirmation
             Alert.alert(
-                "Sync Error", 
+                "Sync Error",
                 "An unexpected error occurred during sync. Please contact your administrator if this problem persists.",
                 [{ text: "OK" }]
             );
-        } finally {
-            setIsSyncing(false);
         }
     };
 
@@ -721,184 +1513,300 @@ const OfflineMilkCollectionScreen = () => {
 
     return (
         <View style={styles.container}>
-            <ScrollView showsVerticalScrollIndicator={true}>
-                {/* Header with status */}
-                <View style={styles.header}>
-                    <Text style={styles.title}>Offline Milk Collection</Text>
-                    <View style={styles.statusRow}>
-                        <View style={[styles.statusBadge, { backgroundColor: isOnline ? '#DEF7EC' : '#FEE' }]}>
-                            <View style={[styles.statusDot, { backgroundColor: isOnline ? '#22c55e' : '#ef4444' }]} />
-                            <Text style={[styles.statusText, { color: isOnline ? '#166534' : '#991B1B' }]}>
-                                {isOnline ? 'Online' : 'Offline'}
-                            </Text>
-                        </View>
+            <ScrollView
+                showsVerticalScrollIndicator={true}
+                contentContainerStyle={styles.scrollContent}
+                style={isCollectionBlocked ? styles.blockedContent : undefined}
+            >
+                <View style={styles.toolbarRow}>
+                    <Text style={styles.toolbarTitle}>Record Kilos</Text>
+                    <View style={styles.toolbarActions}>
                         {unsyncedCount > 0 && (
-                            <View style={styles.unsyncedBadge}>
-                                <MaterialIcons name="cloud-upload" size={16} color="#F59E0B" />
-                                <Text style={styles.unsyncedText}>{unsyncedCount} pending</Text>
+                            <View style={styles.headerPendingBadge}>
+                                <Text style={styles.headerPendingText}>{unsyncedCount}</Text>
                             </View>
                         )}
+                        <TouchableOpacity
+                            style={styles.headerIconButton}
+                            onPress={handleManualSync}
+                            disabled={isSyncing}
+                        >
+                            {isSyncing ? (
+                                <ActivityIndicator size="small" color="#1b7f74" />
+                            ) : (
+                                <MaterialIcons name="sync" size={22} color="#1b7f74" />
+                            )}
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.headerIconButton} onPress={viewHistory}>
+                            <MaterialIcons name="history" size={22} color="#1b7f74" />
+                        </TouchableOpacity>
                     </View>
                 </View>
 
-                {/* Action buttons */}
-                <View style={styles.actionRow}>
-                    <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: '#3B82F6' }]}
-                        onPress={handleManualSync}
-                        disabled={isSyncing || unsyncedCount === 0}
+                {referenceSyncLabel ? (
+                    <Text
+                        style={[
+                            styles.cacheHint,
+                            requiresSync && styles.cacheHintStale,
+                        ]}
                     >
-                        {isSyncing ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                        ) : (
-                            <>
-                                <MaterialIcons name="sync" size={20} color="#fff" />
-                                <Text style={styles.actionButtonText}>Sync Now</Text>
-                            </>
-                        )}
-                    </TouchableOpacity>
+                        {requiresSync
+                            ? `Sync required${gateSyncHint(unsyncedCount)}`
+                            : referenceSyncLabel}
+                    </Text>
+                ) : (
+                    <Text style={styles.cacheWarning}>
+                        Open Member Kilos while online to store transporters, members, routes, shifts, and cans in SQLite.
+                    </Text>
+                )}
 
-                    <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: '#8B5CF6' }]}
-                        onPress={viewHistory}
-                    >
-                        <MaterialIcons name="history" size={20} color="#fff" />
-                        <Text style={styles.actionButtonText}>History</Text>
-                    </TouchableOpacity>
+                <View style={styles.row}>
+                    <View style={styles.col}>
+                        <Text style={styles.label}>Journal</Text>
+                        <TextInput
+                            style={styles.input}
+                            value={journalCode}
+                            onChangeText={setJournalCode}
+                            placeholder="Auto-generated from transporter"
+                            autoCapitalize="characters"
+                        />
+                    </View>
+                    <View style={styles.col}>
+                        <Text style={styles.label}>Batch No</Text>
+                        <TextInput
+                            style={styles.input}
+                            value={batchNo}
+                            onChangeText={setBatchNo}
+                            placeholder="Auto-generated from route"
+                            autoCapitalize="characters"
+                        />
+                    </View>
                 </View>
 
-                {/* Member Information */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Collection Information</Text>
-                    
-                    <Text style={styles.label}>Member Number *</Text>
-                    <TextInput
-                        style={styles.input}
-                        placeholder="Enter member number"
-                        value={memberNumber}
-                        onChangeText={setMemberNumber}
-                        autoCapitalize="none"
-                    />
-
-                    <Text style={styles.label}>Can Number</Text>
-                    <TextInput
-                        style={styles.input}
-                        placeholder="Enter can number"
-                        value={canNumber}
-                        onChangeText={setCanNumber}
-                    />
-
-                    <Text style={styles.label}>Shift</Text>
-                    {shiftItems.length > 0 ? (
+                <View style={styles.row}>
+                    <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.transporter.zIndex)]}>
+                        <DropDownPicker
+                            listMode="SCROLLVIEW"
+                            open={transporterOpen}
+                            value={transporterValue}
+                            items={transporterItems}
+                            setOpen={(open) => {
+                                setTransporterOpen(open);
+                                if (open) closeOtherDropdowns("transporter");
+                            }}
+                            setValue={(val: any) => handleTransporterSelect(val as number)}
+                            setItems={setTransporterItems}
+                            placeholder="Select transporter"
+                            searchable
+                            searchPlaceholder="Search transporter..."
+                            renderListItem={renderDropdownItem}
+                            zIndex={DROPDOWN_STACK.transporter.zIndex}
+                            style={globalStyles.basedropdown}
+                            dropDownContainerStyle={globalStyles.basedropdown}
+                            zIndexInverse={DROPDOWN_STACK.transporter.zIndexInverse}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
+                        />
+                    </View>
+                    <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.shift.zIndex)]}>
                         <DropDownPicker
                             listMode="SCROLLVIEW"
                             open={shiftOpen}
                             value={shiftValue}
                             items={shiftItems}
-                            setOpen={setShiftOpen}
-                            setValue={setShiftValue}
+                            setOpen={(open) => {
+                                setShiftOpen(open);
+                                if (open) closeOtherDropdowns("shift");
+                            }}
+                            setValue={(val: any) => setShiftValue(val as number)}
                             setItems={setShiftItems}
                             placeholder="Select shift"
+                            searchable
+                            searchPlaceholder="Search shift..."
                             renderListItem={renderDropdownItem}
-                            zIndex={3000}
-                            zIndexInverse={1000}
-                            style={{
-                                borderColor: '#2563eb',
-                                borderWidth: 1,
-                                borderRadius: 6,
-                                backgroundColor: '#fff'
-                            }}
-                            dropDownContainerStyle={{
-                                borderColor: '#2563eb',
-                                borderWidth: 1,
-                                borderRadius: 6,
-                                backgroundColor: '#fff'
-                            }}
+                            zIndex={DROPDOWN_STACK.shift.zIndex}
+                            style={globalStyles.basedropdown}
+                            dropDownContainerStyle={globalStyles.basedropdown}
+                            zIndexInverse={DROPDOWN_STACK.shift.zIndexInverse}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
-                    ) : (
-                        <View style={{ 
-                            padding: 12, 
-                            backgroundColor: '#FEF3C7', 
-                            borderRadius: 6,
-                            marginTop: 8 
-                        }}>
-                            <Text style={{ fontSize: 12, color: '#92400E' }}>
-                                No shifts available. Please ensure you have internet connection on first launch.
-                            </Text>
-                        </View>
-                    )}
+                    </View>
                 </View>
 
-                {/* Measuring Can Selection */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Measuring Can</Text>
-                    
-                    {measuringCanItems.length > 0 ? (
+                <View style={styles.row}>
+                    <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.route.zIndex)]}>
+                        <DropDownPicker
+                            listMode="SCROLLVIEW"
+                            open={routeOpen}
+                            value={routeValue}
+                            items={routeItems}
+                            setOpen={(open) => {
+                                setRouteOpen(open);
+                                if (open) closeOtherDropdowns("route");
+                            }}
+                            setValue={(val: any) => {
+                                setRouteValue(val as number);
+                                const sel = (commonData.routes || []).find((r: any) => r.id === val);
+                                if (sel) setRoute(sel);
+                            }}
+                            setItems={setRouteItems}
+                            placeholder="Select route"
+                            searchable
+                            searchPlaceholder="Search route..."
+                            renderListItem={renderDropdownItem}
+                            zIndex={DROPDOWN_STACK.route.zIndex}
+                            style={globalStyles.basedropdown}
+                            dropDownContainerStyle={globalStyles.basedropdown}
+                            zIndexInverse={DROPDOWN_STACK.route.zIndexInverse}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
+                        />
+                    </View>
+                    <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.center.zIndex)]}>
+                        <DropDownPicker
+                            listMode="SCROLLVIEW"
+                            open={centerOpen}
+                            value={centerValue}
+                            items={centerItems}
+                            setOpen={(open) => {
+                                setCenterOpen(open);
+                                if (open) closeOtherDropdowns("center");
+                            }}
+                            setValue={(val: any) => {
+                                setCenterValue(val as number);
+                                const sel = centerItems.find((c: any) => c.value === val);
+                                if (sel) {
+                                    setCenter({ id: sel.value, center: sel.label });
+                                }
+                            }}
+                            setItems={setCenterItems}
+                            placeholder="Select route center"
+                            searchable
+                            searchPlaceholder="Search center..."
+                            disabled={!routeValue}
+                            renderListItem={renderDropdownItem}
+                            zIndex={DROPDOWN_STACK.center.zIndex}
+                            style={globalStyles.basedropdown}
+                            dropDownContainerStyle={globalStyles.basedropdown}
+                            zIndexInverse={DROPDOWN_STACK.center.zIndexInverse}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
+                        />
+                    </View>
+                </View>
+
+                <View style={styles.row}>
+                    <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.can.zIndex)]}>
+                        <DropDownPicker
+                            listMode="SCROLLVIEW"
+                            open={canOpen}
+                            value={canValue}
+                            items={canItems.map((item) => ({
+                                ...item,
+                                disabled:
+                                    memberValue != null &&
+                                    hasEntryForMemberAndCan(memberValue, item.value),
+                            }))}
+                            setOpen={(open) => {
+                                setCanOpen(open);
+                                if (open) closeOtherDropdowns("can");
+                            }}
+                            setValue={(val: any) => {
+                                setCanValue(val as number);
+                                const sel = (commonData.cans || []).find((c: any) => c.id === val);
+                                if (sel) {
+                                    setCan(sel);
+                                    setMeasuringCanValue(sel.id);
+                                    setMeasuringCan(sel);
+                                }
+                            }}
+                            setItems={setCanItems}
+                            placeholder="Select can"
+                            searchable
+                            searchPlaceholder="Search can..."
+                            renderListItem={renderDropdownItem}
+                            zIndex={DROPDOWN_STACK.can.zIndex}
+                            style={globalStyles.basedropdown}
+                            dropDownContainerStyle={globalStyles.basedropdown}
+                            zIndexInverse={DROPDOWN_STACK.can.zIndexInverse}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
+                        />
+                    </View>
+                    <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.measuringCan.zIndex)]}>
                         <DropDownPicker
                             listMode="SCROLLVIEW"
                             open={measuringCanOpen}
                             value={measuringCanValue}
                             items={measuringCanItems}
-                            setOpen={setMeasuringCanOpen}
-                            setValue={(callback) => {
-                                const value = typeof callback === 'function' ? callback(measuringCanValue) : callback;
-                                setMeasuringCanValue(value);
-                                handleMeasuringCanChange(value);
+                            setOpen={(open) => {
+                                setMeasuringCanOpen(open);
+                                if (open) closeOtherDropdowns("measuringCan");
+                            }}
+                            setValue={(val: any) => {
+                                setMeasuringCanValue(val as number);
+                                const sel = (commonData.cans || []).find((c: any) => c.id === val);
+                                if (sel) setMeasuringCan(sel);
                             }}
                             setItems={setMeasuringCanItems}
-                            placeholder="Select measuring can"
+                            placeholder="Measuring Can"
+                            searchable
+                            searchPlaceholder="Search measuring can..."
                             renderListItem={renderDropdownItem}
-                            zIndex={2000}
-                            zIndexInverse={2000}
-                            style={{
-                                borderColor: '#16a34a',
-                                borderWidth: 1,
-                                borderRadius: 6,
-                                backgroundColor: '#fff'
-                            }}
-                            dropDownContainerStyle={{
-                                borderColor: '#16a34a',
-                                borderWidth: 1,
-                                borderRadius: 6,
-                                backgroundColor: '#fff'
-                            }}
+                            zIndex={DROPDOWN_STACK.measuringCan.zIndex}
+                            style={globalStyles.basedropdown}
+                            dropDownContainerStyle={globalStyles.basedropdown}
+                            zIndexInverse={DROPDOWN_STACK.measuringCan.zIndexInverse}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
-                    ) : (
-                        <View style={{ 
-                            padding: 12, 
-                            backgroundColor: '#FEF3C7', 
-                            borderRadius: 6,
-                            marginTop: 8 
-                        }}>
-                            <Text style={{ fontSize: 12, color: '#92400E' }}>
-                                No measuring cans available. Please ensure you have internet connection on first launch.
-                            </Text>
-                        </View>
-                    )}
-
-                    {measuringCan && (
-                        <View style={[styles.measuringCanInfo, { marginTop: 12 }]}>
-                            <MaterialIcons name="check-circle" size={16} color="#16a34a" />
-                            <Text style={styles.measuringCanText}>
-                                Tare weight will be automatically set to {measuringCan.tare_weight} KG
-                            </Text>
-                        </View>
-                    )}
+                    </View>
                 </View>
 
-                {/* Weight Recording */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Weight Recording</Text>
+                <View style={styles.row}>
+                    <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.member.zIndex)]}>
+                        <DropDownPicker
+                            listMode="SCROLLVIEW"
+                            open={memberOpen}
+                            value={memberValue}
+                            items={memberItems}
+                            setOpen={(open) => {
+                                setMemberOpen(open);
+                                if (open) closeOtherDropdowns("member");
+                            }}
+                            setValue={(val: any) => {
+                                setMemberValue(val as number);
+                                const sel = (commonData.members || []).find((m: any) => m.id === val);
+                                if (sel) setMember(sel);
+                                resetMemberDropdownItems();
+                            }}
+                            setItems={setMemberItems}
+                            placeholder="Select member"
+                            searchable
+                            disableLocalSearch
+                            searchPlaceholder="Search name or member no..."
+                            onChangeSearchText={handleMemberSearch}
+                            onClose={resetMemberDropdownItems}
+                            renderListItem={renderDropdownItem}
+                            zIndex={DROPDOWN_STACK.member.zIndex}
+                            style={globalStyles.basedropdown}
+                            dropDownContainerStyle={globalStyles.basedropdown}
+                            zIndexInverse={DROPDOWN_STACK.member.zIndexInverse}
+                            scrollViewProps={{ nestedScrollEnabled: true }}
+                        />
+                    </View>
+                </View>
 
+                <View style={styles.contentBelowDropdowns}>
                     <View style={styles.row}>
                         <View style={styles.col}>
-                            <Text style={styles.label}>Scale Weight (KG)</Text>
+                            <Text style={styles.label}>Scale</Text>
                             <TextInput
                                 style={styles.input}
-                                placeholder="Scale Weight"
-                                value={connectedScaleDevice
-                                    ? (scaleWeight !== null && !isNaN(scaleWeight) ? scaleWeight.toFixed(2) : "")
-                                    : scaleWeightText
+                                placeholder="Scale Wt"
+                                value={
+                                    connectedScaleDevice
+                                        ? scaleWeight !== null &&
+                                          scaleWeight !== undefined &&
+                                          !isNaN(scaleWeight)
+                                            ? scaleWeight.toFixed(2)
+                                            : ""
+                                        : scaleWeightText
                                 }
                                 keyboardType="decimal-pad"
                                 editable={!connectedScaleDevice}
@@ -911,42 +1819,39 @@ const OfflineMilkCollectionScreen = () => {
                                             setScaleWeight(null);
                                         } else {
                                             const parsed = parseFloat(cleaned);
-                                            if (!isNaN(parsed)) {
-                                                setScaleWeight(parsed);
-                                            } else {
-                                                setScaleWeight(null);
-                                            }
+                                            setScaleWeight(!isNaN(parsed) ? parsed : null);
                                         }
                                     }
                                 }}
                             />
                         </View>
                         <View style={styles.col}>
-                            <Text style={styles.label}>Tare Weight (KG)</Text>
+                            <Text style={styles.label}>Tare Wt</Text>
                             <TextInput
-                                style={[styles.input, measuringCan && styles.inputReadonly]}
-                                placeholder="Tare Weight"
-                                value={tareWeight}
-                                keyboardType="decimal-pad"
-                                editable={!measuringCan}
-                                onChangeText={(text) => {
-                                    if (!measuringCan) {
-                                        const cleaned = text.replace(/[^0-9.]/g, "");
-                                        if ((cleaned.match(/\./g) || []).length > 1) return;
-                                        setTareWeight(cleaned);
-                                    }
-                                }}
+                                style={styles.input}
+                                placeholder="Tare Wt"
+                                value={
+                                    measuringCan
+                                        ? getCanTare(measuringCan).toFixed(2)
+                                        : "0.00"
+                                }
+                                editable={false}
                             />
                         </View>
                         <View style={styles.col}>
-                            <Text style={styles.label}>Net (KG)</Text>
-                            <Text style={styles.netValue}>
+                            <Text style={styles.label}>Net</Text>
+                            <Text style={styles.value}>
                                 {(() => {
-                                    const tare = parseFloat(tareWeight) || 0;
-                                    if (scaleWeight !== null && !isNaN(scaleWeight) && isFinite(scaleWeight)) {
-                                        const net = scaleWeight - tare;
+                                    if (
+                                        scaleWeight !== null &&
+                                        scaleWeight !== undefined &&
+                                        measuringCan &&
+                                        isFinite(scaleWeight) &&
+                                        scaleWeight >= 0
+                                    ) {
+                                        const net = scaleWeight - getCanTare(measuringCan);
                                         if (isFinite(net) && net >= 0) {
-                                            return net.toFixed(2);
+                                            return `${net.toFixed(2)} KG`;
                                         }
                                     }
                                     return "--";
@@ -955,13 +1860,21 @@ const OfflineMilkCollectionScreen = () => {
                         </View>
                     </View>
 
-                    {/* Bluetooth Status */}
+                    {!connectedScaleDevice && (
+                        <View style={styles.bluetoothReminder}>
+                            <MaterialIcons name="bluetooth" size={16} color="#F59E0B" />
+                            <Text style={styles.bluetoothReminderText}>
+                                Ensure Bluetooth is enabled before connecting to a scale.
+                            </Text>
+                        </View>
+                    )}
+
                     <View style={styles.bluetoothStatus}>
                         {connectedScaleDevice ? (
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
                                 <View style={styles.connectedDot} />
                                 <Text style={styles.connectedText}>
-                                    Connected: {connectedScaleDevice?.name || 'Scale'}
+                                    Connected: {connectedScaleDevice?.name || "Scale"}
                                 </Text>
                             </View>
                         ) : (
@@ -969,7 +1882,6 @@ const OfflineMilkCollectionScreen = () => {
                         )}
                     </View>
 
-                    {/* Scale Buttons */}
                     <View style={styles.buttonRow}>
                         <TouchableOpacity
                             style={[styles.button, { backgroundColor: "#facc15" }]}
@@ -980,54 +1892,74 @@ const OfflineMilkCollectionScreen = () => {
                             </Text>
                         </TouchableOpacity>
 
-                        <TouchableOpacity
-                            style={[styles.button, { backgroundColor: "#16a34a" }]}
-                            onPress={takeWeight}
-                        >
+                        <TouchableOpacity style={styles.button} onPress={takeWeight}>
                             <Text style={styles.buttonText}>Take Record</Text>
                         </TouchableOpacity>
                     </View>
-                </View>
 
-                {/* Recorded Cans */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Recorded Cans: {entries.length}</Text>
-                    {entries.map((entry, idx) => (
-                        <View key={idx} style={styles.entryRow}>
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.entryText}>
-                                    {entry.can_label} - Gross: {entry.scale_weight.toFixed(2)} - Tare: {entry.tare_weight.toFixed(2)} - Net: {entry.net.toFixed(2)} KG
-                                </Text>
+                    <View style={{ marginVertical: 16 }}>
+                        <Text style={{ fontWeight: "bold" }}>Recorded Cans: {entries.length}</Text>
+                        {entries.map((entry, idx) => (
+                            <View key={idx} style={styles.entryRow}>
+                                <View style={{ flex: 1, marginRight: 8 }}>
+                                    <Text style={styles.entryText}>
+                                        {entry.member_label ? `${entry.member_label} - ` : ""}
+                                        Can ({entry.can_label}) - Gross: {entry.scale_weight} - Tare:{" "}
+                                        {entry.tare_weight} - Net: {entry.net}
+                                    </Text>
+                                </View>
+                                <TouchableOpacity
+                                    onPress={() => removeEntry(idx)}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                    <MaterialIcons name="delete" size={22} color="#ef4444" />
+                                </TouchableOpacity>
                             </View>
-                            <TouchableOpacity onPress={() => removeEntry(idx)}>
-                                <MaterialIcons name="delete" size={20} color="#ef4444" />
-                            </TouchableOpacity>
-                        </View>
-                    ))}
+                        ))}
+                    </View>
 
-                    {entries.length > 0 && (
-                        <View style={styles.totalRow}>
-                            <Text style={styles.totalLabel}>Total Net Weight:</Text>
-                            <Text style={styles.totalValue}>{totalQuantity.toFixed(2)} KG</Text>
-                        </View>
-                    )}
+                    <View style={{ alignItems: "center", marginBottom: 10 }}>
+                        <Text style={{ fontSize: 16, fontWeight: "bold", color: "#374151" }}>
+                            Total Net Weight: {totalQuantity?.toFixed(2) ?? 0} KG
+                        </Text>
+                    </View>
+
+                    <TouchableOpacity
+                        style={[
+                            styles.submitButton,
+                            (loading || isCollectionBlocked) && styles.submitButtonDisabled,
+                        ]}
+                        onPress={saveCollection}
+                        disabled={loading || isCollectionBlocked}
+                    >
+                        {loading ? (
+                            <ActivityIndicator color="#fff" />
+                        ) : (
+                            <Text style={styles.submitText}>Save Collection</Text>
+                        )}
+                    </TouchableOpacity>
                 </View>
 
-                {/* Save Button */}
-                <TouchableOpacity
-                    style={[styles.submitButton, loading && styles.submitButtonDisabled]}
-                    onPress={saveCollection}
-                    disabled={loading}
-                >
-                    {loading ? (
-                        <ActivityIndicator color="#fff" />
-                    ) : (
-                        <Text style={styles.submitText}>Save Collection</Text>
-                    )}
-                </TouchableOpacity>
-
-                <View style={{ height: 20 }} />
+                <View style={{ height: 24 }} />
             </ScrollView>
+
+            <Modal
+                visible={requiresSync && !isOnline && !isSyncing}
+                transparent
+                animationType="fade"
+                onRequestClose={() => {}}
+            >
+                <View style={styles.staleBlockOverlay}>
+                    <View style={styles.staleBlockCard}>
+                        <MaterialIcons name="wifi-off" size={42} color="#dc2626" />
+                        <Text style={styles.staleBlockTitle}>Sync required</Text>
+                        <Text style={styles.staleBlockMessage}>
+                            {mandatorySyncError ||
+                                `You have ${unsyncedCount} pending collection${unsyncedCount === 1 ? "" : "s"}. Turn on WiFi or mobile data — sync will start automatically when you are online.`}
+                        </Text>
+                    </View>
+                </View>
+            </Modal>
 
             {/* Scale Modal */}
             <BluetoothConnectionModal
@@ -1060,15 +1992,58 @@ const OfflineMilkCollectionScreen = () => {
                         if (result) {
                             await persistLastPrinter(result);
 
-                            // Print pending receipt if exists
                             try {
-                                const pendingReceipt = await AsyncStorage.getItem('pending_receipt');
-                                if (pendingReceipt) {
+                                const pendingReceiptsRaw = await AsyncStorage.getItem(
+                                    getPendingReceiptsStorageKey()
+                                );
+                                let pendingReceipts: string[] = [];
+
+                                if (pendingReceiptsRaw) {
+                                    const parsed = JSON.parse(pendingReceiptsRaw);
+                                    if (Array.isArray(parsed)) {
+                                        pendingReceipts = parsed.filter(
+                                            (item) => typeof item === "string"
+                                        );
+                                    }
+                                }
+
+                                if (pendingReceipts.length === 0) {
+                                    const legacyReceipt = await AsyncStorage.getItem(
+                                        "pending_receipt"
+                                    );
+                                    if (legacyReceipt) {
+                                        pendingReceipts = [legacyReceipt];
+                                    }
+                                }
+
+                                if (pendingReceipts.length > 0) {
                                     setIsPrinting(true);
                                     try {
-                                        const printSuccess = await printReceipt(pendingReceipt);
-                                        if (printSuccess) {
-                                            await AsyncStorage.removeItem('pending_receipt');
+                                        let allPrinted = true;
+                                        for (
+                                            let index = 0;
+                                            index < pendingReceipts.length;
+                                            index += 1
+                                        ) {
+                                            const printSuccess = await printReceipt(
+                                                pendingReceipts[index]
+                                            );
+                                            if (!printSuccess) {
+                                                allPrinted = false;
+                                                break;
+                                            }
+                                            if (index < pendingReceipts.length - 1) {
+                                                await new Promise<void>((resolve) =>
+                                                    setTimeout(() => resolve(), 1200)
+                                                );
+                                            }
+                                        }
+
+                                        if (allPrinted) {
+                                            await AsyncStorage.removeItem(
+                                                getPendingReceiptsStorageKey()
+                                            );
+                                            await AsyncStorage.removeItem("pending_receipt");
                                         }
                                     } catch (printErr) {
                                         console.error('[OFFLINE-PRINT] Error printing:', printErr);
@@ -1101,7 +2076,7 @@ const OfflineMilkCollectionScreen = () => {
                 title="Success"
                 message="Collection saved successfully!"
                 isLoading={isPrinting}
-                loadingMessage={isPrinting ? "Printing receipt..." : undefined}
+                loadingMessage={isPrinting ? "Printing receipts..." : undefined}
                 onClose={() => setSuccessModalVisible(false)}
             />
 
@@ -1157,174 +2132,136 @@ const OfflineMilkCollectionScreen = () => {
 export default OfflineMilkCollectionScreen;
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: "#fff",
+    container: { flex: 1, backgroundColor: "#fff" },
+    scrollContent: { padding: 16 },
+    toolbarRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: 12,
     },
-    header: {
-        padding: 16,
-        backgroundColor: "#F9FAFB",
-        borderBottomWidth: 1,
-        borderBottomColor: "#E5E7EB",
-    },
-    title: {
-        fontSize: 20,
-        fontWeight: "bold",
+    toolbarTitle: {
+        fontSize: 18,
+        fontWeight: "700",
         color: "#111827",
-        marginBottom: 8,
     },
-    statusRow: {
+    toolbarActions: {
         flexDirection: "row",
         alignItems: "center",
-        gap: 8,
     },
-    statusBadge: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 12,
-        gap: 6,
+    headerIconButton: {
+        padding: 8,
     },
-    statusDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-    },
-    statusText: {
-        fontSize: 12,
-        fontWeight: "600",
-    },
-    unsyncedBadge: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: "#FEF3C7",
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 12,
-        gap: 4,
-    },
-    unsyncedText: {
-        fontSize: 12,
-        fontWeight: "600",
-        color: "#92400E",
-    },
-    actionRow: {
-        flexDirection: "row",
-        padding: 16,
-        gap: 12,
-    },
-    actionButton: {
-        flex: 1,
-        flexDirection: "row",
+    headerPendingBadge: {
+        backgroundColor: "#F59E0B",
+        borderRadius: 10,
+        minWidth: 20,
+        height: 20,
         alignItems: "center",
         justifyContent: "center",
-        padding: 12,
-        borderRadius: 8,
-        gap: 6,
+        paddingHorizontal: 6,
+        marginRight: 4,
     },
-    actionButtonText: {
+    headerPendingText: {
         color: "#fff",
-        fontWeight: "600",
-        fontSize: 14,
+        fontSize: 11,
+        fontWeight: "700",
     },
-    section: {
-        padding: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: "#E5E7EB",
-    },
-    sectionTitle: {
-        fontSize: 16,
-        fontWeight: "600",
-        color: "#374151",
+    cacheHint: {
+        fontSize: 12,
+        color: "#1E40AF",
         marginBottom: 12,
+        lineHeight: 18,
     },
-    label: {
-        fontSize: 14,
-        color: "#6B7280",
-        marginBottom: 6,
-        marginTop: 8,
+    cacheHintStale: {
+        color: "#B91C1C",
+        backgroundColor: "#FEE2E2",
+        padding: 10,
+        borderRadius: 6,
     },
+    blockedContent: {
+        opacity: 0.45,
+    },
+    staleBlockOverlay: {
+        flex: 1,
+        backgroundColor: "rgba(15, 23, 42, 0.72)",
+        justifyContent: "center",
+        alignItems: "center",
+        padding: 24,
+    },
+    staleBlockCard: {
+        width: "100%",
+        maxWidth: 360,
+        backgroundColor: "#fff",
+        borderRadius: 12,
+        padding: 24,
+        alignItems: "center",
+    },
+    staleBlockTitle: {
+        marginTop: 16,
+        fontSize: 20,
+        fontWeight: "700",
+        color: "#111827",
+        textAlign: "center",
+    },
+    staleBlockMessage: {
+        marginTop: 12,
+        fontSize: 15,
+        lineHeight: 22,
+        color: "#4B5563",
+        textAlign: "center",
+    },
+    staleBlockButton: {
+        marginTop: 20,
+        backgroundColor: "#1b7f74",
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        borderRadius: 8,
+    },
+    staleBlockButtonText: {
+        color: "#fff",
+        fontWeight: "700",
+        fontSize: 15,
+    },
+    cacheWarning: {
+        fontSize: 12,
+        color: "#92400E",
+        marginBottom: 12,
+        lineHeight: 18,
+        backgroundColor: "#FEF3C7",
+        padding: 10,
+        borderRadius: 6,
+    },
+    row: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
+    col: { flex: 1, marginHorizontal: 4 },
+    contentBelowDropdowns: { zIndex: 1, elevation: 1 },
+    label: { fontSize: 14, marginBottom: 6, color: "#333" },
     input: {
         borderWidth: 1,
-        borderColor: "#D1D5DB",
-        padding: 10,
+        borderColor: "#ddd",
+        padding: 8,
         borderRadius: 6,
         backgroundColor: "#fff",
-        fontSize: 14,
     },
-    inputReadonly: {
-        backgroundColor: "#F3F4F6",
-        color: "#6B7280",
-    },
-    measuringCanInfo: {
-        flexDirection: "row",
-        alignItems: "center",
-        padding: 10,
-        backgroundColor: "#DEF7EC",
-        borderRadius: 6,
-        marginBottom: 12,
-        gap: 8,
-    },
-    measuringCanText: {
-        fontSize: 13,
-        color: "#166534",
-        fontWeight: "600",
-        flex: 1,
-    },
-    row: {
-        flexDirection: "row",
-        gap: 12,
-    },
-    col: {
-        flex: 1,
-    },
-    netValue: {
-        fontSize: 16,
-        fontWeight: "600",
-        color: "#16a34a",
-        marginTop: 8,
-    },
-    bluetoothStatus: {
-        marginTop: 12,
-        padding: 8,
-        backgroundColor: "#F3F4F6",
-        borderRadius: 6,
-        alignItems: "center",
-    },
-    connectedDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: "#22c55e",
-        marginRight: 6,
-    },
-    connectedText: {
-        fontSize: 12,
-        color: "#22c55e",
-        fontWeight: "600",
-    },
-    disconnectedText: {
-        fontSize: 12,
-        color: "#ef4444",
-        fontWeight: "500",
-    },
-    buttonRow: {
-        flexDirection: "row",
-        gap: 12,
-        marginTop: 12,
-    },
+    value: { fontSize: 16, fontWeight: "600", marginTop: 8 },
+    buttonRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 12 },
     button: {
-        flex: 1,
+        backgroundColor: "#2563eb",
         padding: 12,
         borderRadius: 6,
+        minWidth: 140,
         alignItems: "center",
     },
-    buttonText: {
-        color: "#fff",
-        fontWeight: "600",
-        fontSize: 14,
+    buttonText: { color: "#fff", fontWeight: "600" },
+    submitButton: {
+        backgroundColor: "#16a34a",
+        padding: 14,
+        borderRadius: 8,
+        alignItems: "center",
+        marginTop: 12,
     },
+    submitButtonDisabled: { opacity: 0.6 },
+    submitText: { color: "#fff", fontWeight: "700" },
     entryRow: {
         flexDirection: "row",
         alignItems: "center",
@@ -1333,44 +2270,40 @@ const styles = StyleSheet.create({
         borderRadius: 6,
         marginBottom: 8,
     },
-    entryText: {
-        fontSize: 13,
-        color: "#374151",
-    },
-    totalRow: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        marginTop: 12,
-        padding: 12,
-        backgroundColor: "#EBF5FF",
+    entryText: { fontSize: 13, color: "#374151" },
+    bluetoothReminder: {
+        marginVertical: 6,
+        padding: 8,
+        backgroundColor: "#FEF3C7",
         borderRadius: 6,
-    },
-    totalLabel: {
-        fontSize: 16,
-        fontWeight: "600",
-        color: "#1E40AF",
-    },
-    totalValue: {
-        fontSize: 18,
-        fontWeight: "bold",
-        color: "#1E40AF",
-    },
-    submitButton: {
-        backgroundColor: "#16a34a",
-        padding: 16,
-        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: "#F59E0B",
+        flexDirection: "row",
         alignItems: "center",
-        margin: 16,
     },
-    submitButtonDisabled: {
-        opacity: 0.6,
+    bluetoothReminderText: {
+        marginLeft: 6,
+        color: "#92400E",
+        fontSize: 12,
+        flex: 1,
     },
-    submitText: {
-        color: "#fff",
-        fontWeight: "700",
-        fontSize: 16,
+    bluetoothStatus: {
+        marginVertical: 6,
+        padding: 8,
+        backgroundColor: "#f8fafc",
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: "#e2e8f0",
     },
+    connectedDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: "#22c55e",
+        marginRight: 6,
+    },
+    connectedText: { color: "#22c55e", fontWeight: "600", fontSize: 12 },
+    disconnectedText: { color: "#ef4444", fontWeight: "500", fontSize: 12, textAlign: "center" },
     historyItem: {
         padding: 12,
         borderBottomWidth: 1,
@@ -1380,31 +2313,16 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         justifyContent: "space-between",
         alignItems: "center",
-        marginBottom: 6,
+        marginBottom: 4,
     },
-    historyMember: {
-        fontSize: 14,
-        fontWeight: "600",
-        color: "#111827",
-        flex: 1,
-    },
+    historyMember: { fontSize: 14, fontWeight: "600", color: "#111827", flex: 1 },
+    historyDetails: { fontSize: 13, color: "#6B7280", marginBottom: 4 },
+    historyDate: { fontSize: 12, color: "#9CA3AF" },
     syncBadge: {
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 4,
     },
-    syncBadgeText: {
-        fontSize: 11,
-        fontWeight: "600",
-    },
-    historyDetails: {
-        fontSize: 13,
-        color: "#6B7280",
-        marginBottom: 4,
-    },
-    historyDate: {
-        fontSize: 11,
-        color: "#9CA3AF",
-    },
+    syncBadgeText: { fontSize: 11, fontWeight: "600" },
 });
 

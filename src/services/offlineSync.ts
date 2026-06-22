@@ -3,10 +3,14 @@ import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import makeRequest from '../components/utils/makeRequest';
 import {
+    buildMemberKilosJournalPayload,
+    type MemberKilosJournalPayload,
+} from '../utils/memberKilosJournalPayload';
+import { logMilkJournalPost } from '../utils/memberKilosJournalReceipts';
+import {
     getUnsyncedCollections,
-    markCollectionSynced,
+    deleteOfflineCollection,
     updateSyncAttempt,
-    deleteSyncedCollection,
 } from './offlineDatabase';
 
 let syncInterval: NodeJS.Timeout | null = null;
@@ -91,43 +95,123 @@ export const validateOfflineLogin = async (): Promise<boolean> => {
     return await hasSQLiteCreds();
 };
 
-// Sync single collection
+const extractApiErrorMessage = (response: any, status?: number): string => {
+    if (typeof response === 'string' && response.trim()) {
+        return response.trim();
+    }
+
+    if (response && typeof response === 'object') {
+        const message =
+            response.message ||
+            response.error ||
+            response.data?.message ||
+            response.data?.error;
+
+        if (typeof message === 'string' && message.trim()) {
+            return message.trim();
+        }
+    }
+
+    if (status) {
+        return `Failed to send kilos (status ${status}).`;
+    }
+
+    return 'Failed to send kilos.';
+};
+
+/** Build the same milk-journals payload used by Member Kilos from a SQLite collection row. */
+export const buildOfflineCollectionJournalPayload = async (
+    collection: any
+): Promise<MemberKilosJournalPayload | null> => {
+    const entries = Array.isArray(collection?.cans_data) ? collection.cans_data : [];
+    if (entries.length === 0) {
+        return null;
+    }
+
+    const transporterId = Number(collection.transporter_id);
+    const routeId = Number(collection.route_id);
+    const shiftId = Number(collection.shift_id);
+
+    if (!transporterId || !routeId || !shiftId) {
+        return null;
+    }
+
+    const firstEntry = entries[0] || {};
+    const journalOverride =
+        typeof firstEntry.journal === 'string' && firstEntry.journal.trim()
+            ? firstEntry.journal.trim()
+            : undefined;
+    const batchNoOverride =
+        typeof firstEntry.batch_no === 'string' && firstEntry.batch_no.trim()
+            ? firstEntry.batch_no.trim()
+            : undefined;
+
+    const journalDate = collection.created_at
+        ? new Date(collection.created_at)
+        : new Date();
+
+    let transporter: any;
+    let route: any;
+
+    if (!journalOverride || !batchNoOverride) {
+        const { getTransporters, getRoutes } = await import('./offlineReferenceData');
+        const [transporters, routes] = await Promise.all([
+            getTransporters(),
+            getRoutes(),
+        ]);
+        transporter = (transporters || []).find((t: any) => t.id === transporterId);
+        route = (routes || []).find((r: any) => r.id === routeId);
+    }
+
+    return buildMemberKilosJournalPayload({
+        transporterId,
+        routeId,
+        milkDeliveryShiftId: shiftId,
+        entries,
+        transporter,
+        route,
+        journal: journalOverride,
+        batch_no: batchNoOverride,
+        journalDate,
+    });
+};
+
+// Sync single collection via milk-journals (same endpoint/format as Member Kilos; no printing)
 const syncCollection = async (collection: any): Promise<boolean> => {
     try {
-        console.log('[SYNC] Syncing collection ID:', collection.id);
-
-        // Get stored phone number
-        const phoneNumber = await AsyncStorage.getItem("@edairyApp:user_phone_number");
-        console.log('[SYNC] Using phone number:', phoneNumber);
-
-        // Prepare payload
-        const payload = {
-            member_number: collection.member_number,
-            shift_id: collection.shift_id,
-            transporter_phone: phoneNumber,
-            cans: collection.cans_data,
-            collected_at: collection.created_at,
-            is_offline: true,
-        };
-
-        // Send to server
-        const [status, response] = await makeRequest({
-            url: 'offline-collection',
-            method: 'POST',
-            data: payload,
-        });
-
-        if ([200, 201].includes(status)) {
-            // Mark as synced
-            await markCollectionSynced(collection.id);
-            // Delete from local database
-            await deleteSyncedCollection(collection.id);
-            return true;
-        } else {
-            console.error('[SYNC] Failed to sync collection:', response?.message);
-            await updateSyncAttempt(collection.id, response?.message || 'Unknown error');
+        const payload = await buildOfflineCollectionJournalPayload(collection);
+        if (!payload) {
+            const errorMsg =
+                'Missing transporter, route, shift, or entry data for milk-journals sync';
+            console.error('[SYNC] Invalid offline collection payload:', collection.id, errorMsg);
+            await updateSyncAttempt(collection.id, errorMsg);
             return false;
         }
+
+        console.log('[SYNC] Syncing collection ID:', collection.id, 'to milk-journals');
+        console.log('[SYNC] Payload:', JSON.stringify(payload, null, 2));
+
+        const [status, response] = await makeRequest({
+            url: 'milk-journals',
+            method: 'POST',
+            data: payload as any,
+        });
+
+        logMilkJournalPost(payload, status, response);
+
+        if ([200, 201].includes(status)) {
+            await deleteOfflineCollection(collection.id);
+            console.log(
+                '[SYNC] Collection removed from SQLite after successful milk-journals submission:',
+                collection.id
+            );
+            return true;
+        }
+
+        const errorMsg = extractApiErrorMessage(response, status);
+        console.error('[SYNC] Failed to sync collection:', errorMsg, { status, response });
+        await updateSyncAttempt(collection.id, errorMsg);
+        return false;
     } catch (error: any) {
         console.error('[SYNC] Error syncing collection:', error);
         await updateSyncAttempt(collection.id, error?.message || 'Network error');
@@ -185,7 +269,94 @@ const performSyncAllCollections = async (forceLogin: boolean = true): Promise<{ 
     }
 
     console.log('[SYNC] Sync completed:', successCount, 'success,', failedCount, 'failed');
+
+    try {
+        const { clearSyncedCollections } = await import('./offlineDatabase');
+        const purged = await clearSyncedCollections();
+        if (purged > 0) {
+            console.log('[SYNC] Purged leftover synced collection rows:', purged);
+        }
+    } catch (purgeError) {
+        console.warn('[SYNC] Failed to purge synced collection rows:', purgeError);
+    }
+
     return { success: successCount, failed: failedCount };
+};
+
+export type MandatoryOfflineRefreshResult = {
+    success: boolean;
+    collectionsResult: { success: number; failed: number };
+    referenceSynced: boolean;
+    error?: string;
+};
+
+/** Upload pending collections and refresh reference data (reference rows are updated, not deleted). */
+export const performMandatoryOfflineRefresh = async (): Promise<MandatoryOfflineRefreshResult> => {
+    const isOnline = await checkConnectivity();
+    if (!isOnline) {
+        return {
+            success: false,
+            collectionsResult: { success: 0, failed: 0 },
+            referenceSynced: false,
+            error: "No internet connection",
+        };
+    }
+
+    const { getUnsyncedCount } = await import('./offlineDatabase');
+    const pendingCount = await getUnsyncedCount();
+
+    if (pendingCount === 0) {
+        console.log('[SYNC] No pending collections — skipping mandatory sync');
+        return {
+            success: true,
+            collectionsResult: { success: 0, failed: 0 },
+            referenceSynced: true,
+        };
+    }
+
+    let collectionsResult = { success: 0, failed: 0 };
+
+    try {
+        collectionsResult = await performSyncAllCollections(true);
+    } catch (error: any) {
+        console.error("[SYNC] Error syncing collections during mandatory refresh:", error);
+        return {
+            success: false,
+            collectionsResult,
+            referenceSynced: false,
+            error: error?.message || "Failed to sync offline collections",
+        };
+    }
+
+    try {
+        const { syncMemberKilosReferenceDataFromServer } = await import("./offlineReferenceData");
+        const referenceSynced = await syncMemberKilosReferenceDataFromServer();
+
+        if (!referenceSynced) {
+            return {
+                success: false,
+                collectionsResult,
+                referenceSynced: false,
+                error: "Failed to refresh reference data",
+            };
+        }
+
+        const pendingAfterSync = await (await import('./offlineDatabase')).getUnsyncedCount();
+
+        return {
+            success: collectionsResult.failed === 0 && pendingAfterSync === 0,
+            collectionsResult,
+            referenceSynced: true,
+        };
+    } catch (error: any) {
+        console.error("[SYNC] Error refreshing reference data:", error);
+        return {
+            success: false,
+            collectionsResult,
+            referenceSynced: false,
+            error: error?.message || "Failed to refresh reference data",
+        };
+    }
 };
 
 // Sync all unsynced collections (with UI state management through callbacks)

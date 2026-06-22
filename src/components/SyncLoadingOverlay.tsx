@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ActivityIndicator, Modal, StyleSheet, Image, Animated, StatusBar } from 'react-native';
-import CustomHeader from './CustomHeader';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, Modal, StyleSheet, Animated } from 'react-native';
+// @ts-ignore
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 
 interface SyncLoadingOverlayProps {
   visible: boolean;
@@ -9,128 +10,83 @@ interface SyncLoadingOverlayProps {
 
 const SyncLoadingOverlay: React.FC<SyncLoadingOverlayProps> = ({
   visible,
-  message = 'Syncing data...'
+  message = 'Syncing...',
 }) => {
-  const [fadeAnim] = useState(new Animated.Value(0));
-  const [bounceAnim] = useState(new Animated.Value(0));
+  const spinAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (visible) {
-      // Fade in animation
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 800,
-        useNativeDriver: true,
-      }).start();
-
-      // Bouncing text animation
-      const bounceAnimation = () => {
-        Animated.sequence([
-          Animated.timing(bounceAnim, {
-            toValue: -10,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-          Animated.timing(bounceAnim, {
-            toValue: 0,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-        ]).start(() => {
-          if (visible) {
-            setTimeout(bounceAnimation, 1000);
-          }
-        });
-      };
-
-      bounceAnimation();
+    if (!visible) {
+      spinAnim.setValue(0);
+      return;
     }
-  }, [visible, fadeAnim, bounceAnim]);
 
-  if (!visible) return null;
+    const loop = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 900,
+        useNativeDriver: true,
+      })
+    );
+
+    loop.start();
+    return () => loop.stop();
+  }, [visible, spinAnim]);
+
+  const spin = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  if (!visible) {
+    return null;
+  }
 
   return (
     <Modal
       visible={visible}
-      transparent={false}
+      transparent
       animationType="fade"
-      onRequestClose={() => {}} // Prevent closing
-      presentationStyle="overFullScreen"
+      onRequestClose={() => {}}
+      statusBarTranslucent
     >
-      <StatusBar backgroundColor="#26A69A" barStyle="light-content" />
-      <Animated.View style={[styles.fullScreenOverlay, { opacity: fadeAnim }]}>
-        <CustomHeader scene={null} previous={null} navigation={null} />
-        <View style={styles.contentContainer}>
-          <View style={styles.container}>
-            <Image
-              source={require('../assets/images/profile.png')}
-              style={styles.logo}
-              resizeMode="contain"
-            />
-            <ActivityIndicator size="large" color="#FFFFFF" />
-            <Animated.Text style={[styles.message, { transform: [{ translateY: bounceAnim }] }]}>
-              {message}
-            </Animated.Text>
-            <Text style={styles.subMessage}>
-              Please wait while we sync your offline data
-            </Text>
-            <Text style={styles.instruction}>
-              This process ensures your data is up to date before you continue.
-            </Text>
-          </View>
+      <View style={styles.backdrop} pointerEvents="box-none">
+        <View style={styles.card}>
+          <Animated.View style={{ transform: [{ rotate: spin }] }}>
+            <MaterialIcons name="sync" size={40} color="#1b7f74" />
+          </Animated.View>
+          <Text style={styles.message}>{message}</Text>
         </View>
-      </Animated.View>
+      </View>
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  fullScreenOverlay: {
-    flex: 1,
-    backgroundColor: '#26A69A',
-  },
-  contentContainer: {
+  backdrop: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
   },
-  container: {
-    backgroundColor: 'transparent',
-    borderRadius: 40,
-    padding: 32,
+  card: {
+    minWidth: 180,
+    paddingHorizontal: 28,
+    paddingVertical: 24,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
-    minWidth: 320,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  logo: {
-    width: 80,
-    height: 80,
-    marginBottom: 20,
-    borderRadius: 40,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
   },
   message: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginTop: 20,
-    textAlign: 'center',
-  },
-  subMessage: {
-    color: '#FFFFFF',
+    marginTop: 14,
     fontSize: 16,
-    opacity: 0.9,
-    marginTop: 12,
+    fontWeight: '600',
+    color: '#111827',
     textAlign: 'center',
-  },
-  instruction: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    opacity: 0.7,
-    marginTop: 16,
-    textAlign: 'center',
-    lineHeight: 20,
   },
 });
 

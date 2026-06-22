@@ -5,6 +5,9 @@ import { setItem, getItem } from "../components/utils/local-storage";
 import { Platform, PermissionsAndroid, Alert } from "react-native";
 import filterBluetoothDevices from "../components/utils/device-filter";
 import {
+    attemptInnerPrinterAutoConnect,
+} from "../utils/innerPrinter";
+import {
     acquireSharedBleManager,
     releaseSharedBleManager,
     isBleAdapterReady,
@@ -93,6 +96,7 @@ type UseBluetoothServiceReturn = {
     lastConnectionAttempt: string | null;
     printText?: (text: string) => Promise<void>;
     printRaw?: (bytes: Uint8Array | number[]) => Promise<void>;
+    autoConnectInnerPrinter?: () => Promise<UnifiedDevice | null>;
 };
 
 export default function useBluetoothService({
@@ -539,24 +543,11 @@ export default function useBluetoothService({
         setClassicDevices([]);
 
         if (deviceType === "printer") {
-            console.log('[UNIFIED] SCAN: Printer mode detected, scanning BLE and Classic devices');
-            // Scan BLE printers first
-            if (bleReady) {
-                await scanBLEDevices();
-            } else {
-                console.log('[UNIFIED] SCAN: BLE off, skipping BLE printer scan');
-            }
-            // Also scan Classic printers
-            setTimeout(() => {
-                scanClassicDevices().finally(() => {
-                    setIsScanning(false);
-                    console.log('[UNIFIED] ========== PRINTER SCAN COMPLETE ==========');
-                });
-            }, 500);
-            // Stop scanning flag after scans complete
-            setTimeout(() => {
-                setIsScanning(false);
-            }, 16000);
+            console.log('[UNIFIED] SCAN: Printer mode detected, scanning Classic InnerPrinter devices first');
+            setIsScanning(true);
+            await scanClassicDevices();
+            setIsScanning(false);
+            console.log('[UNIFIED] ========== PRINTER CLASSIC SCAN COMPLETE ==========');
             return;
         }
 
@@ -626,7 +617,11 @@ export default function useBluetoothService({
             // Check if device is paired
             const bonded = await RNBluetoothClassic.getBondedDevices();
             if (!bonded.some((b) => b.address === id)) {
-                Alert.alert("Device not paired", "Please pair your scale manually in Bluetooth settings first.");
+                const pairMessage =
+                    deviceType === "printer"
+                        ? "Please pair your InnerPrinter in Bluetooth settings first."
+                        : "Please pair your scale manually in Bluetooth settings first.";
+                Alert.alert("Device not paired", pairMessage);
                 setIsConnecting(false);
                 return null;
             }
@@ -2082,6 +2077,57 @@ export default function useBluetoothService({
         return () => clearTimeout(timeout);
     }, [deviceType]); // Only depend on deviceType, run once on mount
 
+    const autoConnectInnerPrinter = useCallback(async (): Promise<UnifiedDevice | null> => {
+        if (deviceType !== "printer") {
+            return null;
+        }
+
+        if (manualDisconnectRef.current) {
+            console.log("[INNER-PRINTER] Manual disconnect detected, skipping auto-connect");
+            return null;
+        }
+
+        const enabled = await ensureClassicBluetoothEnabled();
+        if (!enabled) {
+            return null;
+        }
+
+        return attemptInnerPrinterAutoConnect({
+            connectClassicDevice,
+            getConnectedDevice: () => connectedDevice,
+            isConnecting: () => isConnecting,
+            logPrefix: "[INNER-PRINTER]",
+        });
+    }, [
+        deviceType,
+        connectedDevice,
+        isConnecting,
+        connectClassicDevice,
+        ensureClassicBluetoothEnabled,
+    ]);
+
+    // Auto-connect to the first Classic InnerPrinter on mount
+    useEffect(() => {
+        if (deviceType !== "printer") {
+            return;
+        }
+
+        if (manualDisconnectRef.current || autoConnectHasRunRef.current) {
+            return;
+        }
+
+        const timeout = setTimeout(async () => {
+            autoConnectHasRunRef.current = true;
+            try {
+                await autoConnectInnerPrinter();
+            } catch (error) {
+                console.error("[INNER-PRINTER] Auto-connect failed:", error);
+            }
+        }, 1500);
+
+        return () => clearTimeout(timeout);
+    }, [deviceType, autoConnectInnerPrinter]);
+
     return {
         devices,
         connectedDevice,
@@ -2095,5 +2141,7 @@ export default function useBluetoothService({
         lastConnectionAttempt,
         printText: deviceType === "printer" ? printText : undefined,
         printRaw: deviceType === "printer" ? printRaw : undefined,
+        autoConnectInnerPrinter:
+            deviceType === "printer" ? autoConnectInnerPrinter : undefined,
     };
 }

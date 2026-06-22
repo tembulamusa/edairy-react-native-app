@@ -497,6 +497,25 @@ export function buildMemberKilosReceipts(
     );
 }
 
+/** One receipt per member for offline collections (same layout as Member Kilos). */
+export function buildOfflineCollectionReceipts(
+    input: Omit<BuildMemberKilosReceiptsInput, "response"> & { response?: any }
+): string[] {
+    const receipts = buildMemberKilosReceipts({
+        ...input,
+        response: input.response ?? null,
+    });
+
+    return receipts.map((receipt) =>
+        receipt
+            .replace("      MEMBER KILOS RECEIPT\n", "   OFFLINE MILK COLLECTION\n")
+            .replace(
+                "Thank you for your delivery!\n",
+                "Thank you for your delivery!\nNOTE: Collected Offline\nWill sync when online\n"
+            )
+    );
+}
+
 export async function loadPendingMemberReceipts(): Promise<string[]> {
     try {
         const raw = await AsyncStorage.getItem(PENDING_RECEIPTS_STORAGE_KEY);

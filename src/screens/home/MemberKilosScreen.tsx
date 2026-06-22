@@ -202,12 +202,17 @@ import useCan from "../../hooks/useCan";
 import { can as checkPermission } from "../../utils/permissions";
 import { getTransporterDisplayName } from "../../utils/transporter";
 import { getRouteDisplayName, getRouteCenterDisplayName } from "../../utils/route";
-import { getMeasuringCan, saveMeasuringCan } from "../../services/offlineDatabase";
+import { getMeasuringCan, saveMeasuringCan, initDatabase } from "../../services/offlineDatabase";
+import {
+    saveMemberKilosReferenceData,
+    cacheRouteCentersForOffline,
+} from "../../services/offlineReferenceData";
 import {
     buildMemberKilosJournalPayload,
-    buildJournalCode,
-    buildBatchNo,
-    formatJournalDate,
+    findRouteById,
+    findTransporterById,
+    resolveBatchNo,
+    resolveJournalCode,
 } from "../../utils/memberKilosJournalPayload";
 import {
     buildMemberKilosReceipts,
@@ -521,9 +526,9 @@ const MemberKilosScreen = () => {
         isConnecting: isConnectingPrinter,
         disconnect: disconnectPrinter,
         printText: printTextToPrinter,
+        autoConnectInnerPrinter,
     } = printerBluetooth;
 
-    const printerDevicesRef = useRef<any[]>(printerDevices || []);
     const isMountedRef = useRef(true);
     const hasShownConnectionFailedRef = useRef(false);
     const hasAutoScaleInitRunRef = useRef(false);
@@ -534,10 +539,6 @@ const MemberKilosScreen = () => {
             isMountedRef.current = false;
         };
     }, []);
-    useEffect(() => {
-        printerDevicesRef.current = printerDevices || [];
-    }, [printerDevices]);
-
     // Update scale weight when data is received from connected device
     // lastMessage is already weight in kgs (0.01 precision) from useBluetoothService
     useEffect(() => {
@@ -840,155 +841,20 @@ const MemberKilosScreen = () => {
         }
     }, []);
 
-    // Helper: Connect to any available InnerPrinter (similar to StoreSaleModal)
-    const connectToAnyAvailablePrinter = useCallback(async (): Promise<boolean> => {
-        try {
-            console.log("[MemberKilos] AUTO-CONNECT: Scanning for InnerPrinter...");
-            await scanForPrinterDevices();
-
-            // Wait a bit for scan to complete
-            await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
-
-            // Get the latest devices from the ref (updated by useEffect)
-            const devices = printerDevicesRef.current || [];
-            console.log("[MemberKilos] AUTO-CONNECT: Found", devices.length, "printer devices");
-
-            if (devices.length === 0) {
-                console.log("[MemberKilos] AUTO-CONNECT: No printers found in scan");
-                return false;
-            }
-
-            // Filter for InnerPrinter devices first (case-insensitive)
-            const innerPrinters = devices.filter(device => {
-                const deviceName = (device.name || '').toLowerCase();
-                return deviceName.includes('innerprinter') || deviceName.includes('inner');
-            });
-
-            let targetPrinter;
-            if (innerPrinters.length > 0) {
-                targetPrinter = innerPrinters[0];
-                console.log("[MemberKilos] AUTO-CONNECT: Found InnerPrinter device:", targetPrinter.name || targetPrinter.id);
-            } else {
-                // Fallback to first available printer if no InnerPrinter found
-                targetPrinter = devices[0];
-                console.log("[MemberKilos] AUTO-CONNECT: No InnerPrinter found, using first available printer:", targetPrinter.name || targetPrinter.id);
-            }
-
-            const deviceId = targetPrinter?.id || targetPrinter?.address || targetPrinter?.address_or_id;
-
-            if (!deviceId) {
-                console.log("[MemberKilos] AUTO-CONNECT: Target printer missing device id");
-                return false;
-            }
-
-            console.log("[MemberKilos] AUTO-CONNECT: Attempting connection to", targetPrinter.name || deviceId);
-            const result = await connectToPrinterDevice(deviceId);
-            const success = !!result;
-            console.log("[MemberKilos] AUTO-CONNECT:", success ? "✓ Connected" : "✗ Connection failed");
-
-            if (success) {
-                await persistLastPrinter(result);
-                // Wait for connection to be fully established
-                console.log("[MemberKilos] AUTO-CONNECT: Waiting for connection to stabilize...");
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-
-            return success;
-        } catch (error) {
-            console.error("[MemberKilos] AUTO-CONNECT: Error connecting to printer:", error);
+    const attemptAutoConnectPrinter = useCallback(async (): Promise<boolean> => {
+        if (!autoConnectInnerPrinter) {
             return false;
         }
-    }, [scanForPrinterDevices, connectToPrinterDevice, persistLastPrinter]);
 
-    // Helper: Attempt auto-connect (try saved first, then scan for InnerPrinter)
-    const attemptAutoConnectPrinter = useCallback(async (): Promise<boolean> => {
-        if (connectedPrinterDevice || isConnectingPrinter) {
+        const result = await autoConnectInnerPrinter();
+        if (result) {
+            await persistLastPrinter(result);
+            await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000));
             return true;
         }
 
-        const bleReady = await isBleAdapterReady();
-        if (!bleReady) {
-            console.log('[MemberKilos] AUTO-CONNECT PRINTER: Bluetooth is off, skipping');
-            return false;
-        }
-
-        try {
-            // First, try stored printer
-            const stored = await AsyncStorage.getItem("last_device_printer");
-            if (stored) {
-                let data: any = null;
-                try {
-                    data = JSON.parse(stored);
-                } catch (parseError) {
-                    console.error("[MemberKilos] AUTO-CONNECT: Failed to parse stored printer:", parseError);
-                }
-
-                if (data) {
-                    const deviceId = data?.id || data?.address || data?.address_or_id;
-                    if (deviceId) {
-                        console.log("[MemberKilos] AUTO-CONNECT: Scanning for saved printer...");
-                        await scanForPrinterDevices();
-                        await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
-                        console.log("[MemberKilos] AUTO-CONNECT: Attempting connection to stored printer", deviceId);
-                        const result = await connectToPrinterDevice(deviceId);
-                        const success = !!result;
-                        console.log("[MemberKilos] AUTO-CONNECT:", success ? "✓ Connected to stored printer" : "✗ Stored printer connection failed");
-
-                        if (success) {
-                            await persistLastPrinter(result);
-                            // Wait for connection to be fully established
-                            console.log("[MemberKilos] AUTO-CONNECT: Waiting for connection to stabilize...");
-                            await new Promise<void>(resolve => setTimeout(() => resolve(), 1000));
-                            return true;
-                        }
-                    }
-                }
-            }
-
-            // If stored printer failed or doesn't exist, try any available InnerPrinter
-            console.log("[MemberKilos] AUTO-CONNECT: Trying to connect to any available InnerPrinter...");
-            return await connectToAnyAvailablePrinter();
-        } catch (error) {
-            console.error("[MemberKilos] AUTO-CONNECT: Unexpected error:", error);
-            return false;
-        }
-    }, [connectToPrinterDevice, scanForPrinterDevices, connectedPrinterDevice, isConnectingPrinter, persistLastPrinter, connectToAnyAvailablePrinter]);
-
-    // Auto-connect printer on load: Check AsyncStorage and connect to InnerPrinter (similar to StoreSaleModal)
-    useEffect(() => {
-        const autoConnectToLastPrinter = async () => {
-            try {
-                // Skip if already connected
-                if (connectedPrinterDevice) {
-                    try {
-                        let stillConnected = false;
-                        if (connectedPrinterDevice.type === 'ble' && connectedPrinterDevice.bleDevice) {
-                            stillConnected = (connectedPrinterDevice.bleDevice as any).isConnected === true;
-                        } else if (connectedPrinterDevice.type === 'classic' && connectedPrinterDevice.classicDevice) {
-                            stillConnected = await connectedPrinterDevice.classicDevice.isConnected();
-                        }
-                        if (stillConnected) {
-                            console.log('[MemberKilos] AUTO-CONNECT PRINTER: Already connected, skipping');
-                            return;
-                        }
-                    } catch { }
-                }
-
-                // Use the attemptAutoConnectPrinter helper (similar to StoreSaleModal)
-                await attemptAutoConnectPrinter();
-            } catch (error) {
-                console.error('[MemberKilos] AUTO-CONNECT PRINTER: Failed:', error);
-                // Don't show alert - just log the error
-            }
-        };
-
-        // Run auto-connect after a short delay to allow component to mount
-        const timeout = setTimeout(() => {
-            autoConnectToLastPrinter();
-        }, 5000); // Delay printer auto-connect a bit more to let scale connect first
-
-        return () => clearTimeout(timeout);
-    }, [attemptAutoConnectPrinter, connectedPrinterDevice]); // Include dependencies
+        return false;
+    }, [autoConnectInnerPrinter, persistLastPrinter]);
 
     // Show connection-failed alert only once, then let user proceed
     useEffect(() => {
@@ -1064,6 +930,20 @@ const MemberKilosScreen = () => {
                 setMemberItems(memberDropdownItems);
                 setCanItems(toMilkCanDropdownItems(cans));
                 setMeasuringCanItems(toMilkCanDropdownItems(cans));
+
+                try {
+                    await initDatabase();
+                    await saveMemberKilosReferenceData({
+                        transporters: transporters || [],
+                        members: members || [],
+                        routes: routes || [],
+                        shifts: shifts || [],
+                        cans: cans || [],
+                    });
+                    console.log("[MemberKilos] Cached reference data for offline milk collection");
+                } catch (cacheError) {
+                    console.warn("[MemberKilos] Failed to cache offline reference data:", cacheError);
+                }
 
                 try {
                     const userDataString = await AsyncStorage.getItem("user");
@@ -1212,12 +1092,17 @@ const MemberKilosScreen = () => {
                 });
 
                 if (![200, 201].includes(status)) {
-                    Alert.alert("Error", response?.message || "Failed to fetch credit limit");
+                    console.warn(
+                        "[MemberKilos] Failed to fetch credit limit:",
+                        response?.message || status
+                    );
+                    setMemberCreditLimit(null);
                     return;
                 }
                 setMemberCreditLimit(response?.data?.credit_limit ?? 0);
             } catch (err) {
-                console.error(err);
+                console.error("[MemberKilos] Failed to fetch credit limit:", err);
+                setMemberCreditLimit(null);
             } finally {
                 setFetchingCredit(false);
             }
@@ -1280,6 +1165,17 @@ const MemberKilosScreen = () => {
     }, [canValue, commonData.cans]);
 
     useEffect(() => {
+        if (transporterValue && Array.isArray(commonData.transporters)) {
+            const found = commonData.transporters.find(
+                (item: any) => item.id === transporterValue
+            );
+            if (found) {
+                setTransporter(found);
+            }
+        }
+    }, [transporterValue, commonData.transporters]);
+
+    useEffect(() => {
         if (routeValue && Array.isArray(commonData.routes)) {
             const found = commonData.routes.find((r: any) => r.id === routeValue);
             if (found) {
@@ -1289,27 +1185,19 @@ const MemberKilosScreen = () => {
     }, [routeValue, commonData.routes]);
 
     useEffect(() => {
-        if (transporter) {
-            setJournalCode(buildJournalCode(transporter, formatJournalDate()));
-            return;
-        }
-
-        setJournalCode("");
-    }, [transporter]);
+        setJournalCode(
+            resolveJournalCode(
+                transporterValue,
+                commonData.transporters,
+                transporter
+            )
+        );
+    }, [transporter, transporterValue, commonData.transporters]);
 
     useEffect(() => {
-        const selectedRoute =
-            route ??
-            (routeValue && Array.isArray(commonData.routes)
-                ? commonData.routes.find((r: any) => r.id === routeValue)
-                : null);
-
-        if (selectedRoute) {
-            setBatchNo(buildBatchNo(selectedRoute, 1));
-            return;
-        }
-
-        setBatchNo("");
+        setBatchNo(
+            resolveBatchNo(routeValue, commonData.routes, route)
+        );
     }, [route, routeValue, commonData.routes]);
 
     // Keep selected can details fully loaded
@@ -1451,6 +1339,12 @@ const MemberKilosScreen = () => {
                     console.log(
                         `[MemberKilos] ✅ Auto-selected route center: ${getRouteCenterDisplayName(firstCenter)} (ID: ${firstCenter.id}) for route_id: ${routeValue}`
                     );
+                }
+
+                try {
+                    await cacheRouteCentersForOffline(routeValue as number, centers);
+                } catch (cacheError) {
+                    console.warn("[MemberKilos] Failed to cache route centers offline:", cacheError);
                 }
             } catch (error: any) {
                 console.error("[MemberKilos] Error fetching route centers:", error);
@@ -2158,7 +2052,22 @@ const MemberKilosScreen = () => {
             return;
         }
 
-        if (!journalCode.trim()) {
+        const selectedTransporterForSubmit =
+            transporter ?? findTransporterById(commonData.transporters, transporterValue);
+        const selectedRouteForSubmit =
+            route ?? findRouteById(commonData.routes, routeValue);
+        const resolvedJournal =
+            journalCode.trim() ||
+            resolveJournalCode(
+                transporterValue,
+                commonData.transporters,
+                selectedTransporterForSubmit
+            );
+        const resolvedBatch =
+            batchNo.trim() ||
+            resolveBatchNo(routeValue, commonData.routes, selectedRouteForSubmit);
+
+        if (!resolvedJournal) {
             Alert.alert(
                 "Missing Journal",
                 "Journal is required. Select a transporter to auto-generate one, or enter it manually."
@@ -2166,7 +2075,7 @@ const MemberKilosScreen = () => {
             return;
         }
 
-        if (!batchNo.trim()) {
+        if (!resolvedBatch) {
             Alert.alert(
                 "Missing Batch No",
                 "Batch number is required. Select a route to auto-generate one, or enter it manually."
@@ -2200,22 +2109,15 @@ const MemberKilosScreen = () => {
             const capturedRouteValue = routeValue;
             const capturedCenterValue = centerValue;
             const capturedCommonData = commonData;
-            const selectedTransporter = (commonData.transporters || []).find(
-                (t: any) => t.id === transporterValue
-            );
-            const selectedRoute = (commonData.routes || []).find(
-                (r: any) => r.id === routeValue
-            );
-
             const payload = buildMemberKilosJournalPayload({
                 transporterId: transporterValue as number,
                 routeId: routeValue as number,
                 milkDeliveryShiftId: shiftValue as number,
                 entries: capturedEntries,
-                transporter: selectedTransporter,
-                route: selectedRoute,
-                journal: journalCode.trim(),
-                batch_no: batchNo.trim(),
+                transporter: selectedTransporterForSubmit,
+                route: selectedRouteForSubmit,
+                journal: resolvedJournal,
+                batch_no: resolvedBatch,
             });
 
             console.log("[MemberKilos] Sending milk journal payload:", payload);

@@ -167,14 +167,14 @@ const DashboardScreen = () => {
                         ]}
                         activeOpacity={0.7}
                         onPress={() => {
-                            // Special handling for offline collection
                             if (item.screenName === 'OfflineMilkCollection') {
-                                // Navigate to auth/login screen for offline collection
-                                navigation.navigate('Auth' as never);
+                                navigation.navigate(
+                                    'Members' as never,
+                                    { screen: 'OfflineMilkCollection' } as never
+                                );
                                 return;
                             }
 
-                            // Check if offline and item requires internet
                             if (!isOnline) {
                                 Alert.alert(
                                     'Internet Required',
