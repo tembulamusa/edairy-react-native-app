@@ -1,5 +1,9 @@
 // src/styles/styles.ts
-import { StyleSheet } from "react-native";
+import { Dimensions, StyleSheet } from "react-native";
+
+const windowHeight = Dimensions.get("window").height;
+
+export const DROPDOWN_MODAL_HEADER_COLOR = "#1b7f74";
 
 export const globalStyles = StyleSheet.create({
 
@@ -91,6 +95,9 @@ export const globalStyles = StyleSheet.create({
         borderWidth: 1,
         borderRadius: 8,
         backgroundColor: "#fff",
+    },
+    dropdownListContainer: {
+        maxHeight: 280,
     },
 
     previewBox: {
@@ -333,3 +340,53 @@ export const globalStyles = StyleSheet.create({
     },
     finishButtonText: { color: "#fff", fontWeight: "700", fontSize: 15 },
 });
+
+/** Compact modal dropdown for use inside screen ScrollViews. */
+export function getDropdownPickerModalProps(modalTitle: string) {
+    return {
+        listMode: "MODAL" as const,
+        modalAnimationType: "fade" as const,
+        modalTitle,
+        modalProps: {
+            transparent: true,
+            animationType: "fade" as const,
+            statusBarTranslucent: true,
+        },
+        modalContentContainerStyle: {
+            marginHorizontal: 24,
+            marginTop: windowHeight * 0.16,
+            maxHeight: windowHeight * 0.5,
+            borderRadius: 12,
+            backgroundColor: "#fff",
+            overflow: "hidden" as const,
+            borderWidth: 1,
+            borderColor: "#d1d5db",
+        },
+        modalTitleContainerStyle: {
+            backgroundColor: DROPDOWN_MODAL_HEADER_COLOR,
+            paddingVertical: 14,
+            paddingHorizontal: 16,
+        },
+        modalTitleStyle: {
+            color: "#fff",
+            fontSize: 17,
+            fontWeight: "600" as const,
+        },
+        closeIconContainerStyle: {
+            backgroundColor: DROPDOWN_MODAL_HEADER_COLOR,
+        },
+        searchContainerStyle: {
+            borderBottomColor: "#e5e7eb",
+            borderBottomWidth: 1,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+        },
+        searchTextInputStyle: {
+            borderColor: "#d1d5db",
+            borderWidth: 1,
+            borderRadius: 8,
+            paddingHorizontal: 12,
+            color: "#111827",
+        },
+    };
+}

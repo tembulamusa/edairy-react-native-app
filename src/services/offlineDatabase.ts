@@ -174,14 +174,7 @@ const createTables = async () => {
             );
         `);
 
-        await database.executeSql(`
-            CREATE TABLE IF NOT EXISTS route_centers (
-                id INTEGER PRIMARY KEY,
-                route_id INTEGER NOT NULL,
-                data_json TEXT NOT NULL,
-                synced_at TEXT NOT NULL
-            );
-        `);
+        await ensureRouteCentersTableSchema(database);
 
         await database.executeSql(`
             CREATE INDEX IF NOT EXISTS idx_route_centers_route_id ON route_centers(route_id);
@@ -209,6 +202,57 @@ const createTables = async () => {
         throw error;
     }
 };
+
+async function ensureRouteCentersTableSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+    try {
+        const tableResult = await db.executeSql(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='route_centers'"
+        );
+
+        if (tableResult[0].rows.length === 0) {
+            await db.executeSql(`
+                CREATE TABLE route_centers (
+                    route_id INTEGER NOT NULL,
+                    id INTEGER NOT NULL,
+                    data_json TEXT NOT NULL,
+                    synced_at TEXT NOT NULL,
+                    PRIMARY KEY (route_id, id)
+                )
+            `);
+            console.log('[DB] Created route_centers table with composite primary key');
+            return;
+        }
+
+        const createSql = String(tableResult[0].rows.item(0).sql || "");
+        if (
+            createSql.includes("PRIMARY KEY (route_id, id)") ||
+            createSql.includes("route_id, id)")
+        ) {
+            return;
+        }
+
+        console.log('[DB] Migrating route_centers to composite primary key (route_id, id)...');
+        await db.executeSql(`
+            CREATE TABLE route_centers_migrated (
+                route_id INTEGER NOT NULL,
+                id INTEGER NOT NULL,
+                data_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (route_id, id)
+            )
+        `);
+        await db.executeSql(`
+            INSERT OR IGNORE INTO route_centers_migrated (route_id, id, data_json, synced_at)
+            SELECT route_id, id, data_json, synced_at FROM route_centers
+        `);
+        await db.executeSql('DROP TABLE route_centers');
+        await db.executeSql('ALTER TABLE route_centers_migrated RENAME TO route_centers');
+        console.log('[DB] route_centers migration complete');
+    } catch (error) {
+        console.error('[DB] Failed to ensure route_centers schema:', error);
+        throw error;
+    }
+}
 
 // Close database
 export const closeDatabase = async () => {
@@ -686,24 +730,25 @@ export const getTransporterStatus = async (user_id?: number): Promise<{ is_trans
     }
 };
 
-// Save shifts to SQLite
+// Save shifts to SQLite (upsert — never wipe the table on empty/failed fetch)
 export const saveShifts = async (shifts: any[]): Promise<void> => {
+    if (!Array.isArray(shifts) || shifts.length === 0) {
+        console.log('[DB] Skipping shifts save — no records to write');
+        return;
+    }
+
     try {
         const db = database || await initDatabase();
         const now = new Date().toISOString();
 
-        // Clear existing shifts
-        await db.executeSql('DELETE FROM shifts');
-
-        // Insert new shifts
         for (const shift of shifts) {
             await db.executeSql(
-                'INSERT INTO shifts (id, name, time, created_at) VALUES (?, ?, ?, ?)',
+                'INSERT OR REPLACE INTO shifts (id, name, time, created_at) VALUES (?, ?, ?, ?)',
                 [shift.id, shift.name, shift.time || '', now]
             );
         }
 
-        console.log('[DB] Saved', shifts.length, 'shifts to database');
+        console.log('[DB] Upserted', shifts.length, 'shifts to database');
     } catch (error) {
         console.error('[DB] Error saving shifts:', error);
         throw error;
@@ -750,20 +795,21 @@ export const hasShifts = async (): Promise<boolean> => {
     }
 };
 
-// Save measuring cans to SQLite
+// Save measuring cans to SQLite (upsert — never wipe the table on empty/failed fetch)
 export const saveMeasuringCans = async (measuringCans: any[]): Promise<void> => {
+    if (!Array.isArray(measuringCans) || measuringCans.length === 0) {
+        console.log('[DB] Skipping measuring cans save — no records to write');
+        return;
+    }
+
     try {
         const db = database || await initDatabase();
         const now = new Date().toISOString();
 
-        // Clear existing measuring cans
-        await db.executeSql('DELETE FROM measuring_cans');
-
-        // Insert new measuring cans
         for (const can of measuringCans) {
-            const tareWeight = Number(can.weight ?? can.tare_weight ?? 0);
+            const tareWeight = Number(can?.tare_weight ?? can?.weight ?? 0);
             await db.executeSql(
-                'INSERT INTO measuring_cans (id, can_id, tare_weight, transporter_id, created_at) VALUES (?, ?, ?, ?, ?)',
+                'INSERT OR REPLACE INTO measuring_cans (id, can_id, tare_weight, transporter_id, created_at) VALUES (?, ?, ?, ?, ?)',
                 [
                     can.id,
                     can.can_id || can.name || `Can ${can.id}`,
@@ -774,7 +820,7 @@ export const saveMeasuringCans = async (measuringCans: any[]): Promise<void> => 
             );
         }
 
-        console.log('[DB] Saved', measuringCans.length, 'measuring cans to database');
+        console.log('[DB] Upserted', measuringCans.length, 'measuring cans to database');
     } catch (error) {
         console.error('[DB] Error saving measuring cans:', error);
         throw error;
@@ -839,20 +885,23 @@ function parseJsonRows(result: any): any[] {
     return rows;
 }
 
-async function replaceJsonReferenceTable(
+async function upsertJsonReferenceTable(
     tableName: 'transporters' | 'members' | 'routes',
     records: any[],
     options?: { includeMemberNo?: boolean }
 ): Promise<number> {
+    if (!Array.isArray(records) || records.length === 0) {
+        console.log(`[DB] Skipping ${tableName} save — no records to write`);
+        return 0;
+    }
+
     const db = database || await initDatabase();
     const now = new Date().toISOString();
-
-    await db.executeSql(`DELETE FROM ${tableName}`);
 
     for (const record of records) {
         if (options?.includeMemberNo) {
             await db.executeSql(
-                `INSERT INTO ${tableName} (id, member_no, data_json, synced_at) VALUES (?, ?, ?, ?)`,
+                `INSERT OR REPLACE INTO ${tableName} (id, member_no, data_json, synced_at) VALUES (?, ?, ?, ?)`,
                 [
                     record.id,
                     getMemberNumberFromRecord(record) || null,
@@ -864,7 +913,7 @@ async function replaceJsonReferenceTable(
         }
 
         await db.executeSql(
-            `INSERT INTO ${tableName} (id, data_json, synced_at) VALUES (?, ?, ?)`,
+            `INSERT OR REPLACE INTO ${tableName} (id, data_json, synced_at) VALUES (?, ?, ?)`,
             [record.id, JSON.stringify(record), now]
         );
     }
@@ -873,8 +922,10 @@ async function replaceJsonReferenceTable(
 }
 
 export async function saveTransporters(transporters: any[]): Promise<void> {
-    const count = await replaceJsonReferenceTable('transporters', transporters || []);
-    console.log('[DB] Saved', count, 'transporters');
+    const count = await upsertJsonReferenceTable('transporters', transporters || []);
+    if (count > 0) {
+        console.log('[DB] Upserted', count, 'transporters');
+    }
 }
 
 export async function getTransporters(): Promise<any[]> {
@@ -889,10 +940,12 @@ export async function getTransporters(): Promise<any[]> {
 }
 
 export async function saveMembers(members: any[]): Promise<void> {
-    const count = await replaceJsonReferenceTable('members', members || [], {
+    const count = await upsertJsonReferenceTable('members', members || [], {
         includeMemberNo: true,
     });
-    console.log('[DB] Saved', count, 'members');
+    if (count > 0) {
+        console.log('[DB] Upserted', count, 'members');
+    }
 }
 
 export async function getMembers(): Promise<any[]> {
@@ -937,8 +990,10 @@ export async function findMemberByNumber(memberNo: string): Promise<any | null> 
 }
 
 export async function saveRoutes(routes: any[]): Promise<void> {
-    const count = await replaceJsonReferenceTable('routes', routes || []);
-    console.log('[DB] Saved', count, 'routes');
+    const count = await upsertJsonReferenceTable('routes', routes || []);
+    if (count > 0) {
+        console.log('[DB] Upserted', count, 'routes');
+    }
 }
 
 export async function getRoutes(): Promise<any[]> {
@@ -956,22 +1011,32 @@ export async function saveRouteCentersForRoute(
     routeId: number,
     routeCenters: any[]
 ): Promise<void> {
+    if (!Array.isArray(routeCenters) || routeCenters.length === 0) {
+        console.log('[DB] Skipping route centers save — no records to write');
+        return;
+    }
+
     try {
         const db = database || await initDatabase();
+        await ensureRouteCentersTableSchema(db);
         const now = new Date().toISOString();
 
         await db.executeSql('DELETE FROM route_centers WHERE route_id = ?', [routeId]);
 
-        for (const center of routeCenters || []) {
+        for (const center of routeCenters) {
+            if (center?.id == null) {
+                continue;
+            }
+
             await db.executeSql(
-                'INSERT INTO route_centers (id, route_id, data_json, synced_at) VALUES (?, ?, ?, ?)',
-                [center.id, routeId, JSON.stringify(center), now]
+                'INSERT OR REPLACE INTO route_centers (route_id, id, data_json, synced_at) VALUES (?, ?, ?, ?)',
+                [routeId, center.id, JSON.stringify(center), now]
             );
         }
 
         console.log(
             '[DB] Saved',
-            routeCenters?.length || 0,
+            routeCenters.length,
             'route centers for route',
             routeId
         );
@@ -1072,15 +1137,30 @@ export async function saveMemberKilosReferenceData(data: {
         await saveMeasuringCans(cans);
     }
 
-    await saveReferenceSyncMeta(MEMBER_KILOS_SYNC_KEY, {
-        transporters: transporters.length,
-        members: members.length,
-        routes: routes.length,
-        shifts: shifts.length,
-        cans: cans.length,
+    const [savedTransporters, savedMembers, savedRoutes, savedShifts, savedCans] =
+        await Promise.all([
+            getTransporters(),
+            getMembers(),
+            getRoutes(),
+            getShifts(),
+            getMeasuringCans(),
+        ]);
+
+    await saveMemberKilosReferenceSyncMeta({
+        transporters: savedTransporters.length,
+        members: savedMembers.length,
+        routes: savedRoutes.length,
+        shifts: savedShifts.length,
+        cans: savedCans.length,
     });
 
     console.log('[DB] Member Kilos reference data cached for offline use');
+}
+
+export async function saveMemberKilosReferenceSyncMeta(
+    recordCounts: Record<string, number>
+): Promise<void> {
+    await saveReferenceSyncMeta(MEMBER_KILOS_SYNC_KEY, recordCounts);
 }
 
 // Offline Credentials Management

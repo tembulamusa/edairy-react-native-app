@@ -200,13 +200,19 @@ import fetchCommonData, { clearSpecificCommonDataCache } from "../../components/
 import makeRequest from "../../components/utils/makeRequest.ts";
 import useCan from "../../hooks/useCan";
 import { can as checkPermission } from "../../utils/permissions";
+import useMemberDropdownSearch from "../../hooks/useMemberDropdownSearch";
+import { getMilkCanTare } from "../../utils/milkCan";
+import { toMemberDropdownItems } from "../../utils/referenceDataFetch";
 import { getTransporterDisplayName } from "../../utils/transporter";
-import { getRouteDisplayName, getRouteCenterDisplayName } from "../../utils/route";
+import { getRouteDisplayName, getRouteCenterDisplayName, toRouteCenterDropdownItems } from "../../utils/route";
 import { getMeasuringCan, saveMeasuringCan, initDatabase } from "../../services/offlineDatabase";
 import {
-    saveMemberKilosReferenceData,
-    cacheRouteCentersForOffline,
+    fetchRouteCentersForRoute,
+    hasMemberKilosReferenceData,
+    loadMemberKilosReferenceDataFromSQLite,
+    refreshMemberKilosReferenceDataFromServer,
 } from "../../services/offlineReferenceData";
+import { checkConnectivity } from "../../services/offlineSync";
 import {
     buildMemberKilosJournalPayload,
     findRouteById,
@@ -225,7 +231,7 @@ import CashoutFormModal from "../../components/modals/CashoutFormModal.tsx";
 import SuccessModal from "../../components/modals/SuccessModal.tsx";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
-import { globalStyles } from "../../styles.ts";
+import { globalStyles, getDropdownPickerModalProps } from "../../styles.ts";
 
 // At the top of the file (best effort if multiple import blocks)
 declare module 'react-native-vector-icons/MaterialIcons';
@@ -259,50 +265,6 @@ const toMilkCanDropdownItems = (cans: any[]) =>
         value: c.id,
     }));
 
-const getMemberNumber = (member: any): string =>
-    member?.member_no || member?.membership_no || member?.membershipNo || "";
-
-const toMemberDropdownItems = (members: any[]) =>
-    (members || []).map((m: any) => {
-        const memberNo = getMemberNumber(m);
-        const name = `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim();
-        return {
-            label: memberNo ? `${name} (${memberNo})` : name,
-            value: m.id,
-        };
-    });
-
-const filterMemberDropdownItems = (
-    items: { label: string; value: number }[],
-    members: any[],
-    searchText: string
-) => {
-    const normalized = searchText.trim().toLowerCase();
-    if (!normalized) {
-        return items;
-    }
-
-    return items.filter((item) => {
-        const member = members.find((m: any) => m.id === item.value);
-        if (!member) {
-            return item.label.toLowerCase().includes(normalized);
-        }
-
-        const memberNo = getMemberNumber(member).toLowerCase();
-        const firstName = String(member.first_name ?? "").toLowerCase();
-        const lastName = String(member.last_name ?? "").toLowerCase();
-        const fullName = `${firstName} ${lastName}`.trim();
-
-        return (
-            item.label.toLowerCase().includes(normalized) ||
-            memberNo.includes(normalized) ||
-            firstName.includes(normalized) ||
-            lastName.includes(normalized) ||
-            fullName.includes(normalized)
-        );
-    });
-};
-
 const autoSelectRouteForTransporter = (
     selectedTransporter: any,
     routes: any[],
@@ -318,15 +280,6 @@ const autoSelectRouteForTransporter = (
         setRouteValue(matchingRoute.id);
         setRoute(matchingRoute);
     }
-};
-
-const getMeasuringCanTare = (can: any): number => {
-    const value = can?.weight;
-    if (value === null || value === undefined || value === "") {
-        return 0;
-    }
-    const parsed = parseFloat(String(value));
-    return Number.isFinite(parsed) ? parsed : 0;
 };
 
 const extractApiErrorMessage = (response: any, status?: number): string => {
@@ -790,7 +743,7 @@ const MemberKilosScreen = () => {
                 user_id: userId,
                 measuring_can_id: selected.id,
                 measuring_can_name: getMilkCanLabel(selected),
-                measuring_can_tare_weight: getMeasuringCanTare(selected),
+                measuring_can_tare_weight: getMilkCanTare(selected),
             });
             console.log(`[MemberKilos] Saved selected can: ${getMilkCanLabel(selected)}`);
         } catch (error) {
@@ -878,72 +831,102 @@ const MemberKilosScreen = () => {
 
     // --- Load Common Data + Auto-select member if needed ---
     useEffect(() => {
+        const applyReferenceData = ({
+            transporters,
+            routes,
+            shifts,
+            members,
+            cans,
+        }: {
+            transporters: any[];
+            routes: any[];
+            shifts: any[];
+            members: any[];
+            cans: any[];
+        }) => {
+            setCommonData({
+                transporters,
+                routes,
+                shifts,
+                members,
+                cans,
+                route_centers: [],
+            });
+            setTransporterItems(
+                (transporters || []).map((t: any) => ({
+                    label: getTransporterDisplayName(t),
+                    value: t.id,
+                }))
+            );
+            setShiftItems(
+                (shifts || []).map((s: any) => ({ label: s.name, value: s.id }))
+            );
+            setRouteItems(
+                (routes || []).map((r: any) => ({
+                    label: getRouteDisplayName(r),
+                    value: r.id,
+                }))
+            );
+            const memberDropdownItems = toMemberDropdownItems(members);
+            setAllMemberItems(memberDropdownItems);
+            setMemberItems(memberDropdownItems);
+            setCanItems(toMilkCanDropdownItems(cans));
+            setMeasuringCanItems(toMilkCanDropdownItems(cans));
+            setCenterItems([]);
+        };
+
         const loadCommonData = async () => {
             try {
-                const memberFetchOptions = {
-                    cachable: false as const,
-                    direct: true,
-                    logContext: "MemberKilos",
-                };
+                await initDatabase();
 
-                await Promise.all([
-                    clearSpecificCommonDataCache("cans"),
-                    clearSpecificCommonDataCache("milk-delivery-cans"),
-                    clearSpecificCommonDataCache("milk-cans"),
-                    clearSpecificCommonDataCache("measuring_cans"),
-                    clearSpecificCommonDataCache("route-centers"),
-                    clearSpecificCommonDataCache("centers"),
-                ]);
+                let referenceData = await loadMemberKilosReferenceDataFromSQLite();
+                if (hasMemberKilosReferenceData(referenceData)) {
+                    applyReferenceData(referenceData);
+                    console.log("[MemberKilos] Loaded reference data from SQLite");
+                }
 
-                console.log("[MemberKilos] Fetching members from endpoint: members");
+                const online = await checkConnectivity();
+                if (online) {
+                    try {
+                        referenceData = await refreshMemberKilosReferenceDataFromServer({
+                            logContext: "MemberKilos",
+                        });
+                        applyReferenceData(referenceData);
+                        console.log(
+                            "[MemberKilos] Refreshed reference data from server and saved to SQLite"
+                        );
+                    } catch (refreshError) {
+                        console.warn(
+                            "[MemberKilos] Server refresh failed, using SQLite cache:",
+                            refreshError
+                        );
+                        referenceData = await loadMemberKilosReferenceDataFromSQLite();
+                        if (hasMemberKilosReferenceData(referenceData)) {
+                            applyReferenceData(referenceData);
+                        }
+                        if (!hasMemberKilosReferenceData(referenceData)) {
+                            throw refreshError;
+                        }
+                    }
+                } else if (!hasMemberKilosReferenceData(referenceData)) {
+                    Alert.alert(
+                        "No Reference Data",
+                        "Open Member Kilos while online first to download transporters, members, routes, shifts, and cans into SQLite."
+                    );
+                    return;
+                }
 
-                const [transporters, routes, shifts, members, cans] =
-                    await Promise.all([
-                        fetchCommonData({ name: "transporters", ...memberFetchOptions }),
-                        fetchCommonData({ name: "routes", direct: true, cachable: false, logContext: "MemberKilos" }),
-                        fetchCommonData({ name: "milk-delivery-shifts", direct: true, cachable: false, logContext: "MemberKilos" }),
-                        fetchCommonData({ name: "members", ...memberFetchOptions }),
-                        fetchCommonData({ name: "milk-cans", ...memberFetchOptions }),
-                    ]);
+                const { transporters, routes, shifts, members, cans } = referenceData;
 
                 console.log("[MemberKilos] Members loaded:", {
                     count: Array.isArray(members) ? members.length : 0,
-                    sample: Array.isArray(members) ? members.slice(0, 3).map((m: any) => ({
-                        id: m.id,
-                        name: `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim(),
-                    })) : members,
+                    sample: Array.isArray(members)
+                        ? members.slice(0, 3).map((m: any) => ({
+                              id: m.id,
+                              name: `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim(),
+                          }))
+                        : members,
                 });
-                const allData = { transporters, routes, shifts, members, cans, route_centers: [] };
-                setCommonData(allData);
-                // populate dropdown items
-                setTransporterItems((transporters || []).map((t: any) => ({
-                    label: getTransporterDisplayName(t),
-                    value: t.id,
-                })));
-                setShiftItems((shifts || []).map((s: any) => ({ label: s.name, value: s.id })));
-                setRouteItems((routes || []).map((r: any) => ({
-                    label: getRouteDisplayName(r),
-                    value: r.id,
-                })));
-                const memberDropdownItems = toMemberDropdownItems(members);
-                setAllMemberItems(memberDropdownItems);
-                setMemberItems(memberDropdownItems);
-                setCanItems(toMilkCanDropdownItems(cans));
-                setMeasuringCanItems(toMilkCanDropdownItems(cans));
-
-                try {
-                    await initDatabase();
-                    await saveMemberKilosReferenceData({
-                        transporters: transporters || [],
-                        members: members || [],
-                        routes: routes || [],
-                        shifts: shifts || [],
-                        cans: cans || [],
-                    });
-                    console.log("[MemberKilos] Cached reference data for offline milk collection");
-                } catch (cacheError) {
-                    console.warn("[MemberKilos] Failed to cache offline reference data:", cacheError);
-                }
 
                 try {
                     const userDataString = await AsyncStorage.getItem("user");
@@ -963,7 +946,6 @@ const MemberKilosScreen = () => {
                 } catch (restoreError) {
                     console.warn("[MemberKilos] Failed to restore saved measuring can:", restoreError);
                 }
-                setCenterItems([]);
 
                 // Auto-select shift based on current time period (morning, afternoon, evening)
                 if (shifts && shifts.length > 0) {
@@ -1224,22 +1206,15 @@ const MemberKilosScreen = () => {
         [entries]
     );
 
-    const resetMemberDropdownItems = useCallback(() => {
-        setMemberItems(allMemberItems);
-    }, [allMemberItems]);
-
-    const handleMemberSearch = useCallback(
-        (searchText: string) => {
-            setMemberItems(
-                filterMemberDropdownItems(
-                    allMemberItems,
-                    commonData.members || [],
-                    searchText
-                )
-            );
-        },
-        [allMemberItems, commonData.members]
-    );
+    const { handleMemberSearch, resetMemberDropdownItems } = useMemberDropdownSearch({
+        members: commonData.members || [],
+        setMembers: (members) =>
+            setCommonData((prev: any) => ({ ...prev, members })),
+        allMemberItems,
+        setAllMemberItems,
+        setMemberItems,
+        logContext: "MemberKilos",
+    });
 
     const handleTransporterSelect = useCallback(
         (val: number | null) => {
@@ -1287,75 +1262,65 @@ const MemberKilosScreen = () => {
         }
     }, [memberValue, canValue, hasEntryForMemberAndCan]);
 
+    const clearRouteCenterSelection = useCallback(() => {
+        setCenterValue(null);
+        setCenter(null);
+        setCenterItems([]);
+        setCommonData((prev: any) => ({ ...prev, route_centers: [] }));
+    }, []);
+
     // Fetch route centers when route is selected
     useEffect(() => {
-        const fetchRouteCenters = async () => {
+        let cancelled = false;
+
+        const loadRouteCenters = async () => {
             if (routeValue == null || routeValue === "") {
-                setCommonData((prev: any) => ({ ...prev, route_centers: [] }));
-                setCenterItems([]);
-                setCenterValue(null);
-                setCenter(null);
+                clearRouteCenterSelection();
                 return;
             }
 
+            clearRouteCenterSelection();
+
             try {
-                setCenterValue(null);
-                setCenter(null);
-
-                await Promise.all([
-                    clearSpecificCommonDataCache("route-centers"),
-                    clearSpecificCommonDataCache("centers"),
-                ]);
-
-                console.log(`[MemberKilos] Fetching route centers for route_id: ${routeValue}`);
-                const routeCenters = await fetchCommonData({
-                    name: "route-centers",
-                    cachable: false,
-                    direct: true,
-                    params: { route_id: routeValue },
+                console.log(`[MemberKilos] Loading route centers for route_id: ${routeValue}`);
+                const centers = await fetchRouteCentersForRoute(routeValue as number, {
                     logContext: "MemberKilos",
+                    preferOnline: true,
                 });
 
-                const centers = Array.isArray(routeCenters) ? routeCenters : [];
+                if (cancelled) {
+                    return;
+                }
 
                 setCommonData((prev: any) => ({
                     ...prev,
                     route_centers: centers,
                 }));
+                setCenterItems(toRouteCenterDropdownItems(centers));
 
-                const items = centers.map((c: any) => ({
-                    label: getRouteCenterDisplayName(c),
-                    value: c.id,
-                }));
-                setCenterItems(items);
-
-                if (centers.length > 0) {
-                    const firstCenter = centers[0];
-                    setCenterValue(firstCenter.id);
+                if (centers.length === 1) {
+                    const onlyCenter = centers[0];
+                    setCenterValue(onlyCenter.id);
                     setCenter({
-                        id: firstCenter.id,
-                        center: getRouteCenterDisplayName(firstCenter),
+                        id: onlyCenter.id,
+                        center: getRouteCenterDisplayName(onlyCenter),
                     });
-                    console.log(
-                        `[MemberKilos] ✅ Auto-selected route center: ${getRouteCenterDisplayName(firstCenter)} (ID: ${firstCenter.id}) for route_id: ${routeValue}`
-                    );
-                }
-
-                try {
-                    await cacheRouteCentersForOffline(routeValue as number, centers);
-                } catch (cacheError) {
-                    console.warn("[MemberKilos] Failed to cache route centers offline:", cacheError);
                 }
             } catch (error: any) {
-                console.error("[MemberKilos] Error fetching route centers:", error);
-                Alert.alert("Error", `Failed to load route centers: ${error.message || "Unknown error"}`);
-                setCommonData((prev: any) => ({ ...prev, route_centers: [] }));
-                setCenterItems([]);
+                if (cancelled) {
+                    return;
+                }
+                console.error("[MemberKilos] Error loading route centers:", error);
+                clearRouteCenterSelection();
             }
         };
 
-        fetchRouteCenters();
-    }, [routeValue]);
+        loadRouteCenters();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [routeValue, clearRouteCenterSelection]);
 
     useEffect(() => {
         if (measuringCanValue && Array.isArray(commonData?.cans)) {
@@ -1363,7 +1328,7 @@ const MemberKilosScreen = () => {
             if (found) {
                 setMeasuringCan(found);
                 console.log(`[MemberKilos] Measuring can loaded:`, found);
-                console.log(`[MemberKilos] Measuring can tare (weight):`, getMeasuringCanTare(found));
+                console.log(`[MemberKilos] Measuring can tare (weight):`, getMilkCanTare(found));
             } else {
                 console.log(`[MemberKilos] Measuring can not found for ID: ${measuringCanValue}`);
                 console.log(`[MemberKilos] Available milk cans:`, commonData?.cans);
@@ -1389,7 +1354,7 @@ const MemberKilosScreen = () => {
                 return;
             }
 
-            const tare = getMeasuringCanTare(measuringCan);
+            const tare = getMilkCanTare(measuringCan);
 
             if (!can || !canValue || !can.id) {
                 Alert.alert("Missing Can", "Please select a can before recording the weight.");
@@ -2201,10 +2166,24 @@ const MemberKilosScreen = () => {
         setViewMode(nextViewMode);
     };
 
+    const isAnyDropdownOpen =
+        memberOpen ||
+        transporterOpen ||
+        shiftOpen ||
+        routeOpen ||
+        centerOpen ||
+        canOpen ||
+        measuringCanOpen;
+
     // --- Render ---
     return (
         <View style={styles.container}>
-            <ScrollView showsVerticalScrollIndicator={true}>
+            <ScrollView
+                showsVerticalScrollIndicator={true}
+                nestedScrollEnabled={true}
+                keyboardShouldPersistTaps="handled"
+                scrollEnabled={!isAnyDropdownOpen}
+            >
                 {/* --- View/Record Toggle --- */}
                 <View style={styles.toggleContainer}>
                     <Text style={styles.toggleLabel}>{viewMode ? "View Kilos" : "Record Kilos"}</Text>
@@ -2223,7 +2202,7 @@ const MemberKilosScreen = () => {
                 {viewMode ? (
                     // --- View Kilos UI --
                     <DropDownPicker
-                        listMode="SCROLLVIEW"
+                        {...getDropdownPickerModalProps("Select member")}
                         open={memberOpen}
                         value={memberValue}
                         items={memberItems}
@@ -2240,9 +2219,11 @@ const MemberKilosScreen = () => {
                         renderListItem={renderDropdownItem}
                         zIndex={DROPDOWN_STACK.viewMember.zIndex}
                         style={globalStyles.basedropdown}
-                        dropDownContainerStyle={globalStyles.basedropdown}
+                        dropDownContainerStyle={[
+                            globalStyles.basedropdown,
+                            globalStyles.dropdownListContainer,
+                        ]}
                         zIndexInverse={DROPDOWN_STACK.viewMember.zIndexInverse}
-                        scrollViewProps={{ nestedScrollEnabled: true }}
                     />
                 ) : (
                     <>
@@ -2272,7 +2253,7 @@ const MemberKilosScreen = () => {
                         <View style={styles.row}>
                             <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.transporter.zIndex)]}>
                                 <DropDownPicker
-                                    listMode="SCROLLVIEW"
+                                    {...getDropdownPickerModalProps("Select transporter")}
                                     open={transporterOpen}
                                     value={transporterValue}
                                     items={transporterItems}
@@ -2289,14 +2270,16 @@ const MemberKilosScreen = () => {
                                     renderListItem={renderDropdownItem}
                                     zIndex={DROPDOWN_STACK.transporter.zIndex}
                                     style={globalStyles.basedropdown}
-                                    dropDownContainerStyle={globalStyles.basedropdown}
+                                    dropDownContainerStyle={[
+                                        globalStyles.basedropdown,
+                                        globalStyles.dropdownListContainer,
+                                    ]}
                                     zIndexInverse={DROPDOWN_STACK.transporter.zIndexInverse}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
                                 />
                             </View>
                             <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.shift.zIndex)]}>
                                 <DropDownPicker
-                                    listMode="SCROLLVIEW"
+                                    {...getDropdownPickerModalProps("Select shift")}
                                     open={shiftOpen}
                                     value={shiftValue}
                                     items={shiftItems}
@@ -2316,9 +2299,11 @@ const MemberKilosScreen = () => {
                                     renderListItem={renderDropdownItem}
                                     zIndex={DROPDOWN_STACK.shift.zIndex}
                                     style={globalStyles.basedropdown}
-                                    dropDownContainerStyle={globalStyles.basedropdown}
+                                    dropDownContainerStyle={[
+                                        globalStyles.basedropdown,
+                                        globalStyles.dropdownListContainer,
+                                    ]}
                                     zIndexInverse={DROPDOWN_STACK.shift.zIndexInverse}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
                                 />
                             </View>
                         </View>
@@ -2326,7 +2311,7 @@ const MemberKilosScreen = () => {
                         <View style={styles.row}>
                             <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.route.zIndex)]}>
                                 <DropDownPicker
-                                    listMode="SCROLLVIEW"
+                                    {...getDropdownPickerModalProps("Select route")}
                                     open={routeOpen}
                                     value={routeValue}
                                     items={routeItems}
@@ -2338,6 +2323,7 @@ const MemberKilosScreen = () => {
                                         setRouteValue(val as number);
                                         const sel = (commonData.routes || []).find((r: any) => r.id === val);
                                         if (sel) setRoute(sel);
+                                        clearRouteCenterSelection();
                                     }}
                                     setItems={setRouteItems}
                                     placeholder="Select route"
@@ -2346,14 +2332,16 @@ const MemberKilosScreen = () => {
                                     renderListItem={renderDropdownItem}
                                     zIndex={DROPDOWN_STACK.route.zIndex}
                                     style={globalStyles.basedropdown}
-                                    dropDownContainerStyle={globalStyles.basedropdown}
+                                    dropDownContainerStyle={[
+                                        globalStyles.basedropdown,
+                                        globalStyles.dropdownListContainer,
+                                    ]}
                                     zIndexInverse={DROPDOWN_STACK.route.zIndexInverse}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
                                 />
                             </View>
                             <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.center.zIndex)]}>
                                 <DropDownPicker
-                                    listMode="SCROLLVIEW"
+                                    {...getDropdownPickerModalProps("Select route center")}
                                     open={centerOpen}
                                     value={centerValue}
                                     items={centerItems}
@@ -2363,21 +2351,35 @@ const MemberKilosScreen = () => {
                                     }}
                                     setValue={(val: any) => {
                                         setCenterValue(val as number);
-                                        const sel = centerItems.find((c: any) => c.value === val);
+                                        const sel = (commonData.route_centers || []).find(
+                                            (c: any) => c.id === val
+                                        );
                                         if (sel) {
-                                            setCenter({ id: sel.value, center: sel.label });
+                                            setCenter({
+                                                id: sel.id,
+                                                center: getRouteCenterDisplayName(sel),
+                                            });
                                         }
                                     }}
                                     setItems={setCenterItems}
-                                    placeholder="Select route center"
+                                    placeholder={
+                                        !routeValue
+                                            ? "Select route first"
+                                            : centerItems.length === 0
+                                              ? "No centers for this route"
+                                              : "Select route center"
+                                    }
                                     searchable
                                     searchPlaceholder="Search center..."
+                                    disabled={!routeValue || centerItems.length === 0}
                                     renderListItem={renderDropdownItem}
                                     zIndex={DROPDOWN_STACK.center.zIndex}
                                     style={globalStyles.basedropdown}
-                                    dropDownContainerStyle={globalStyles.basedropdown}
+                                    dropDownContainerStyle={[
+                                        globalStyles.basedropdown,
+                                        globalStyles.dropdownListContainer,
+                                    ]}
                                     zIndexInverse={DROPDOWN_STACK.center.zIndexInverse}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
                                 />
                             </View>
                         </View>
@@ -2385,7 +2387,7 @@ const MemberKilosScreen = () => {
                         <View style={styles.row}>
                             <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.can.zIndex)]}>
                                 <DropDownPicker
-                                    listMode="SCROLLVIEW"
+                                    {...getDropdownPickerModalProps("Select can")}
                                     open={canOpen}
                                     value={canValue}
                                     items={canItems.map((item) => ({
@@ -2414,14 +2416,16 @@ const MemberKilosScreen = () => {
                                     renderListItem={renderDropdownItem}
                                     zIndex={DROPDOWN_STACK.can.zIndex}
                                     style={globalStyles.basedropdown}
-                                    dropDownContainerStyle={globalStyles.basedropdown}
+                                    dropDownContainerStyle={[
+                                        globalStyles.basedropdown,
+                                        globalStyles.dropdownListContainer,
+                                    ]}
                                     zIndexInverse={DROPDOWN_STACK.can.zIndexInverse}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
                                 />
                             </View>
                             <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.measuringCan.zIndex)]}>
                                 <DropDownPicker
-                                    listMode="SCROLLVIEW"
+                                    {...getDropdownPickerModalProps("Select measuring can")}
                                     open={measuringCanOpen}
                                     value={measuringCanValue}
                                     items={measuringCanItems}
@@ -2444,9 +2448,11 @@ const MemberKilosScreen = () => {
                                     renderListItem={renderDropdownItem}
                                     zIndex={DROPDOWN_STACK.measuringCan.zIndex}
                                     style={globalStyles.basedropdown}
-                                    dropDownContainerStyle={globalStyles.basedropdown}
+                                    dropDownContainerStyle={[
+                                        globalStyles.basedropdown,
+                                        globalStyles.dropdownListContainer,
+                                    ]}
                                     zIndexInverse={DROPDOWN_STACK.measuringCan.zIndexInverse}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
                                 />
                             </View>
                         </View>
@@ -2454,7 +2460,7 @@ const MemberKilosScreen = () => {
                         <View style={styles.row}>
                             <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.member.zIndex)]}>
                                 <DropDownPicker
-                                    listMode="SCROLLVIEW"
+                                    {...getDropdownPickerModalProps("Select member")}
                                     open={memberOpen}
                                     value={memberValue}
                                     items={memberItems}
@@ -2481,9 +2487,11 @@ const MemberKilosScreen = () => {
                                     renderListItem={renderDropdownItem}
                                     zIndex={DROPDOWN_STACK.member.zIndex}
                                     style={globalStyles.basedropdown}
-                                    dropDownContainerStyle={globalStyles.basedropdown}
+                                    dropDownContainerStyle={[
+                                        globalStyles.basedropdown,
+                                        globalStyles.dropdownListContainer,
+                                    ]}
                                     zIndexInverse={DROPDOWN_STACK.member.zIndexInverse}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
                                 />
                             </View>
                         </View>
@@ -2537,7 +2545,7 @@ const MemberKilosScreen = () => {
                                 <TextInput
                                     style={styles.input}
                                     placeholder="Tare Wt"
-                                    value={measuringCan ? getMeasuringCanTare(measuringCan).toFixed(2) : "0.00"}
+                                    value={measuringCan ? getMilkCanTare(measuringCan).toFixed(2) : "0.00"}
                                     editable={false}
                                 />
                             </View>
@@ -2549,7 +2557,7 @@ const MemberKilosScreen = () => {
                                             if (scaleWeight !== null && scaleWeight !== undefined &&
                                                 measuringCan &&
                                                 isFinite(scaleWeight) && scaleWeight >= 0) {
-                                                const net = scaleWeight - getMeasuringCanTare(measuringCan);
+                                                const net = scaleWeight - getMilkCanTare(measuringCan);
                                                 if (isFinite(net) && net >= 0) {
                                                     return `${net.toFixed(2)} KG`;
                                                 }

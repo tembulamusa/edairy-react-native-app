@@ -19,31 +19,40 @@ import NetInfo from '@react-native-community/netinfo';
 import useBluetoothService from "../../hooks/useBluetoothService";
 import BluetoothConnectionModal from '../../components/modals/BluetoothConnectionModal';
 import SuccessModal from "../../components/modals/SuccessModal";
-import { globalStyles } from "../../styles";
+import { globalStyles, getDropdownPickerModalProps } from "../../styles";
 import {
     initDatabase,
     insertOfflineCollection,
     getAllCollections,
     getMeasuringCan,
-    getShifts,
-    getMeasuringCans,
     saveOfflineCollectionDraft,
     getOfflineCollectionDraft,
     clearOfflineCollectionDraft,
 } from "../../services/offlineDatabase";
 import {
+    fetchRouteCentersForRoute,
     getMembers,
+    getMeasuringCans,
     getRouteCenters,
     getRoutes,
     getTransporters,
+    loadMemberKilosReferenceDataFromSQLite,
+    normalizeMemberKilosCans,
 } from "../../services/offlineReferenceData";
 import { checkConnectivity } from "../../services/offlineSync";
 import { navigateToDashboard } from "../../services/offlineNavigation";
 import { useSync } from "../../context/SyncContext";
 import DropDownPicker from "react-native-dropdown-picker";
 import { renderDropdownItem } from "../../assets/styles/all";
+import useMemberDropdownSearch from "../../hooks/useMemberDropdownSearch";
+import { getMilkCanTare } from "../../utils/milkCan";
+import {
+    getMemberDisplayName,
+    getMemberNumber,
+    toMemberDropdownItems,
+} from "../../utils/referenceDataFetch";
 import { getTransporterDisplayName } from "../../utils/transporter";
-import { getRouteDisplayName, getRouteCenterDisplayName } from "../../utils/route";
+import { getRouteDisplayName, getRouteCenterDisplayName, toRouteCenterDropdownItems } from "../../utils/route";
 import {
     buildMemberKilosJournalPayload,
     findRouteById,
@@ -83,58 +92,6 @@ const toMilkCanDropdownItems = (cans: any[]) =>
         value: c.id,
     }));
 
-const getMemberNumber = (member: any): string =>
-    String(member?.member_no || member?.membership_no || member?.membershipNo || "").trim();
-
-const getMemberDisplayName = (member: any): string => {
-    if (!member) {
-        return "";
-    }
-    const name = `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim();
-    return name || member.name || member.full_name || "";
-};
-
-const toMemberDropdownItems = (members: any[]) =>
-    (members || []).map((m: any) => {
-        const memberNo = getMemberNumber(m);
-        const name = getMemberDisplayName(m);
-        return {
-            label: memberNo ? `${name} (${memberNo})` : name,
-            value: m.id,
-        };
-    });
-
-const filterMemberDropdownItems = (
-    items: { label: string; value: number }[],
-    members: any[],
-    searchText: string
-) => {
-    const normalized = searchText.trim().toLowerCase();
-    if (!normalized) {
-        return items;
-    }
-
-    return items.filter((item) => {
-        const member = members.find((m: any) => m.id === item.value);
-        if (!member) {
-            return item.label.toLowerCase().includes(normalized);
-        }
-
-        const memberNo = getMemberNumber(member).toLowerCase();
-        const firstName = String(member.first_name ?? "").toLowerCase();
-        const lastName = String(member.last_name ?? "").toLowerCase();
-        const fullName = `${firstName} ${lastName}`.trim();
-
-        return (
-            item.label.toLowerCase().includes(normalized) ||
-            memberNo.includes(normalized) ||
-            firstName.includes(normalized) ||
-            lastName.includes(normalized) ||
-            fullName.includes(normalized)
-        );
-    });
-};
-
 const autoSelectRouteForTransporter = (
     selectedTransporter: any,
     routes: any[],
@@ -151,26 +108,6 @@ const autoSelectRouteForTransporter = (
         setRoute(matchingRoute);
     }
 };
-
-const getCanTare = (can: any): number => {
-    const fromWeight = can?.weight;
-    if (fromWeight !== null && fromWeight !== undefined && fromWeight !== "") {
-        const parsed = parseFloat(String(fromWeight));
-        if (Number.isFinite(parsed)) {
-            return parsed;
-        }
-    }
-
-    const tare = can?.tare_weight ?? 0;
-    const parsedTare = parseFloat(String(tare));
-    return Number.isFinite(parsedTare) ? parsedTare : 0;
-};
-
-const normalizeCachedCans = (cans: any[]) =>
-    (cans || []).map((can) => ({
-        ...can,
-        weight: can.weight ?? can.tare_weight ?? 0,
-    }));
 
 const formatReferenceSyncLabel = (
     syncInfo: { synced_at: string; record_counts: Record<string, number> } | null
@@ -384,25 +321,14 @@ const OfflineMilkCollectionScreen = () => {
 
     const loadCachedReferenceData = useCallback(
         async (autoSelectDefaults = false) => {
-            const [
-                savedTransporters,
-                savedMembers,
-                savedRoutes,
-                savedShifts,
-                savedMeasuringCans,
-            ] = await Promise.all([
-                getTransporters(),
-                getMembers(),
-                getRoutes(),
-                getShifts(),
-                getMeasuringCans(),
-            ]);
-
-            const cans = normalizeCachedCans(savedMeasuringCans || []);
-            const transporters = savedTransporters || [];
-            const members = savedMembers || [];
-            const routes = savedRoutes || [];
-            const shifts = savedShifts || [];
+            const referenceData = await loadMemberKilosReferenceDataFromSQLite();
+            const {
+                transporters,
+                members,
+                routes,
+                shifts,
+                cans,
+            } = referenceData;
 
             if (!isMountedRef.current) {
                 return;
@@ -586,7 +512,7 @@ const OfflineMilkCollectionScreen = () => {
             }
 
             if (draft.measuringCanValue) {
-                const cans = normalizeCachedCans(measuringCans || []);
+                const cans = normalizeMemberKilosCans(measuringCans || []);
                 setMeasuringCan(
                     cans.find((item: any) => item.id === draft.measuringCanValue) || null
                 );
@@ -690,10 +616,11 @@ const OfflineMilkCollectionScreen = () => {
 
     useFocusEffect(
         useCallback(() => {
+            void loadCachedReferenceData(false);
             if (gateCheckEnabled) {
                 void refreshCollectionGate();
             }
-        }, [gateCheckEnabled, refreshCollectionGate])
+        }, [gateCheckEnabled, loadCachedReferenceData, refreshCollectionGate])
     );
 
     useEffect(() => {
@@ -801,45 +728,60 @@ const OfflineMilkCollectionScreen = () => {
         }
     }, [measuringCanValue, commonData.cans]);
 
+    const clearRouteCenterSelection = useCallback(() => {
+        setCenterValue(null);
+        setCenter(null);
+        setCenterItems([]);
+        setCommonData((prev: any) => ({ ...prev, route_centers: [] }));
+    }, []);
+
     useEffect(() => {
+        let cancelled = false;
+
         const loadRouteCenters = async () => {
             if (routeValue == null) {
-                setCommonData((prev: any) => ({ ...prev, route_centers: [] }));
-                setCenterItems([]);
-                setCenterValue(null);
-                setCenter(null);
+                clearRouteCenterSelection();
                 return;
             }
 
+            clearRouteCenterSelection();
+
             try {
-                setCenterValue(null);
-                setCenter(null);
+                const centers = await fetchRouteCentersForRoute(routeValue, {
+                    logContext: "OfflineMilkCollection",
+                    preferOnline: isOnline,
+                });
 
-                const centers = await getRouteCenters(routeValue);
+                if (cancelled) {
+                    return;
+                }
+
                 setCommonData((prev: any) => ({ ...prev, route_centers: centers }));
-                setCenterItems(
-                    (centers || []).map((c: any) => ({
-                        label: getRouteCenterDisplayName(c),
-                        value: c.id,
-                    }))
-                );
+                setCenterItems(toRouteCenterDropdownItems(centers));
 
-                if (centers.length > 0) {
-                    const firstCenter = centers[0];
-                    setCenterValue(firstCenter.id);
+                if (centers.length === 1) {
+                    const onlyCenter = centers[0];
+                    setCenterValue(onlyCenter.id);
                     setCenter({
-                        id: firstCenter.id,
-                        center: getRouteCenterDisplayName(firstCenter),
+                        id: onlyCenter.id,
+                        center: getRouteCenterDisplayName(onlyCenter),
                     });
                 }
             } catch (error) {
+                if (cancelled) {
+                    return;
+                }
                 console.error("[OFFLINE] Error loading route centers:", error);
-                setCenterItems([]);
+                clearRouteCenterSelection();
             }
         };
 
         loadRouteCenters();
-    }, [routeValue]);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [routeValue, isOnline, clearRouteCenterSelection]);
 
     const hasEntryForMemberAndCan = useCallback(
         (memberId: number | null | undefined, selectedCanId: number | null | undefined) => {
@@ -853,22 +795,16 @@ const OfflineMilkCollectionScreen = () => {
         [entries]
     );
 
-    const resetMemberDropdownItems = useCallback(() => {
-        setMemberItems(allMemberItems);
-    }, [allMemberItems]);
-
-    const handleMemberSearch = useCallback(
-        (searchText: string) => {
-            setMemberItems(
-                filterMemberDropdownItems(
-                    allMemberItems,
-                    commonData.members || [],
-                    searchText
-                )
-            );
-        },
-        [allMemberItems, commonData.members]
-    );
+    const { handleMemberSearch, resetMemberDropdownItems } = useMemberDropdownSearch({
+        members: commonData.members || [],
+        setMembers: (members) =>
+            setCommonData((prev: any) => ({ ...prev, members })),
+        allMemberItems,
+        setAllMemberItems,
+        setMemberItems,
+        logContext: "OfflineMilkCollection",
+        remoteSearchEnabled: isOnline,
+    });
 
     const handleTransporterSelect = useCallback(
         (val: number | null) => {
@@ -995,7 +931,7 @@ const OfflineMilkCollectionScreen = () => {
                 return;
             }
 
-            const tare = getCanTare(measuringCan);
+            const tare = getMilkCanTare(measuringCan);
 
             if (!can || !canValue || !can.id) {
                 Alert.alert("Missing Can", "Please select a can before recording the weight.");
@@ -1511,12 +1447,24 @@ const OfflineMilkCollectionScreen = () => {
         }
     };
 
+    const isAnyDropdownOpen =
+        memberOpen ||
+        transporterOpen ||
+        shiftOpen ||
+        routeOpen ||
+        centerOpen ||
+        canOpen ||
+        measuringCanOpen;
+
     return (
         <View style={styles.container}>
             <ScrollView
                 showsVerticalScrollIndicator={true}
                 contentContainerStyle={styles.scrollContent}
                 style={isCollectionBlocked ? styles.blockedContent : undefined}
+                nestedScrollEnabled={true}
+                keyboardShouldPersistTaps="handled"
+                scrollEnabled={!isAnyDropdownOpen}
             >
                 <View style={styles.toolbarRow}>
                     <Text style={styles.toolbarTitle}>Record Kilos</Text>
@@ -1586,7 +1534,7 @@ const OfflineMilkCollectionScreen = () => {
                 <View style={styles.row}>
                     <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.transporter.zIndex)]}>
                         <DropDownPicker
-                            listMode="SCROLLVIEW"
+                            {...getDropdownPickerModalProps("Select transporter")}
                             open={transporterOpen}
                             value={transporterValue}
                             items={transporterItems}
@@ -1602,14 +1550,16 @@ const OfflineMilkCollectionScreen = () => {
                             renderListItem={renderDropdownItem}
                             zIndex={DROPDOWN_STACK.transporter.zIndex}
                             style={globalStyles.basedropdown}
-                            dropDownContainerStyle={globalStyles.basedropdown}
+                            dropDownContainerStyle={[
+                                globalStyles.basedropdown,
+                                globalStyles.dropdownListContainer,
+                            ]}
                             zIndexInverse={DROPDOWN_STACK.transporter.zIndexInverse}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                     <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.shift.zIndex)]}>
                         <DropDownPicker
-                            listMode="SCROLLVIEW"
+                            {...getDropdownPickerModalProps("Select shift")}
                             open={shiftOpen}
                             value={shiftValue}
                             items={shiftItems}
@@ -1625,9 +1575,11 @@ const OfflineMilkCollectionScreen = () => {
                             renderListItem={renderDropdownItem}
                             zIndex={DROPDOWN_STACK.shift.zIndex}
                             style={globalStyles.basedropdown}
-                            dropDownContainerStyle={globalStyles.basedropdown}
+                            dropDownContainerStyle={[
+                                globalStyles.basedropdown,
+                                globalStyles.dropdownListContainer,
+                            ]}
                             zIndexInverse={DROPDOWN_STACK.shift.zIndexInverse}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                 </View>
@@ -1635,7 +1587,7 @@ const OfflineMilkCollectionScreen = () => {
                 <View style={styles.row}>
                     <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.route.zIndex)]}>
                         <DropDownPicker
-                            listMode="SCROLLVIEW"
+                            {...getDropdownPickerModalProps("Select route")}
                             open={routeOpen}
                             value={routeValue}
                             items={routeItems}
@@ -1647,6 +1599,7 @@ const OfflineMilkCollectionScreen = () => {
                                 setRouteValue(val as number);
                                 const sel = (commonData.routes || []).find((r: any) => r.id === val);
                                 if (sel) setRoute(sel);
+                                clearRouteCenterSelection();
                             }}
                             setItems={setRouteItems}
                             placeholder="Select route"
@@ -1655,14 +1608,16 @@ const OfflineMilkCollectionScreen = () => {
                             renderListItem={renderDropdownItem}
                             zIndex={DROPDOWN_STACK.route.zIndex}
                             style={globalStyles.basedropdown}
-                            dropDownContainerStyle={globalStyles.basedropdown}
+                            dropDownContainerStyle={[
+                                globalStyles.basedropdown,
+                                globalStyles.dropdownListContainer,
+                            ]}
                             zIndexInverse={DROPDOWN_STACK.route.zIndexInverse}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                     <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.center.zIndex)]}>
                         <DropDownPicker
-                            listMode="SCROLLVIEW"
+                            {...getDropdownPickerModalProps("Select route center")}
                             open={centerOpen}
                             value={centerValue}
                             items={centerItems}
@@ -1672,22 +1627,35 @@ const OfflineMilkCollectionScreen = () => {
                             }}
                             setValue={(val: any) => {
                                 setCenterValue(val as number);
-                                const sel = centerItems.find((c: any) => c.value === val);
+                                const sel = (commonData.route_centers || []).find(
+                                    (c: any) => c.id === val
+                                );
                                 if (sel) {
-                                    setCenter({ id: sel.value, center: sel.label });
+                                    setCenter({
+                                        id: sel.id,
+                                        center: getRouteCenterDisplayName(sel),
+                                    });
                                 }
                             }}
                             setItems={setCenterItems}
-                            placeholder="Select route center"
+                            placeholder={
+                                !routeValue
+                                    ? "Select route first"
+                                    : centerItems.length === 0
+                                      ? "No centers for this route"
+                                      : "Select route center"
+                            }
                             searchable
                             searchPlaceholder="Search center..."
-                            disabled={!routeValue}
+                            disabled={!routeValue || centerItems.length === 0}
                             renderListItem={renderDropdownItem}
                             zIndex={DROPDOWN_STACK.center.zIndex}
                             style={globalStyles.basedropdown}
-                            dropDownContainerStyle={globalStyles.basedropdown}
+                            dropDownContainerStyle={[
+                                globalStyles.basedropdown,
+                                globalStyles.dropdownListContainer,
+                            ]}
                             zIndexInverse={DROPDOWN_STACK.center.zIndexInverse}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                 </View>
@@ -1695,7 +1663,7 @@ const OfflineMilkCollectionScreen = () => {
                 <View style={styles.row}>
                     <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.can.zIndex)]}>
                         <DropDownPicker
-                            listMode="SCROLLVIEW"
+                            {...getDropdownPickerModalProps("Select can")}
                             open={canOpen}
                             value={canValue}
                             items={canItems.map((item) => ({
@@ -1724,14 +1692,16 @@ const OfflineMilkCollectionScreen = () => {
                             renderListItem={renderDropdownItem}
                             zIndex={DROPDOWN_STACK.can.zIndex}
                             style={globalStyles.basedropdown}
-                            dropDownContainerStyle={globalStyles.basedropdown}
+                            dropDownContainerStyle={[
+                                globalStyles.basedropdown,
+                                globalStyles.dropdownListContainer,
+                            ]}
                             zIndexInverse={DROPDOWN_STACK.can.zIndexInverse}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                     <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.measuringCan.zIndex)]}>
                         <DropDownPicker
-                            listMode="SCROLLVIEW"
+                            {...getDropdownPickerModalProps("Select measuring can")}
                             open={measuringCanOpen}
                             value={measuringCanValue}
                             items={measuringCanItems}
@@ -1751,9 +1721,11 @@ const OfflineMilkCollectionScreen = () => {
                             renderListItem={renderDropdownItem}
                             zIndex={DROPDOWN_STACK.measuringCan.zIndex}
                             style={globalStyles.basedropdown}
-                            dropDownContainerStyle={globalStyles.basedropdown}
+                            dropDownContainerStyle={[
+                                globalStyles.basedropdown,
+                                globalStyles.dropdownListContainer,
+                            ]}
                             zIndexInverse={DROPDOWN_STACK.measuringCan.zIndexInverse}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                 </View>
@@ -1761,7 +1733,7 @@ const OfflineMilkCollectionScreen = () => {
                 <View style={styles.row}>
                     <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.member.zIndex)]}>
                         <DropDownPicker
-                            listMode="SCROLLVIEW"
+                            {...getDropdownPickerModalProps("Select member")}
                             open={memberOpen}
                             value={memberValue}
                             items={memberItems}
@@ -1785,9 +1757,11 @@ const OfflineMilkCollectionScreen = () => {
                             renderListItem={renderDropdownItem}
                             zIndex={DROPDOWN_STACK.member.zIndex}
                             style={globalStyles.basedropdown}
-                            dropDownContainerStyle={globalStyles.basedropdown}
+                            dropDownContainerStyle={[
+                                globalStyles.basedropdown,
+                                globalStyles.dropdownListContainer,
+                            ]}
                             zIndexInverse={DROPDOWN_STACK.member.zIndexInverse}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
                         />
                     </View>
                 </View>
@@ -1832,7 +1806,7 @@ const OfflineMilkCollectionScreen = () => {
                                 placeholder="Tare Wt"
                                 value={
                                     measuringCan
-                                        ? getCanTare(measuringCan).toFixed(2)
+                                        ? getMilkCanTare(measuringCan).toFixed(2)
                                         : "0.00"
                                 }
                                 editable={false}
@@ -1849,7 +1823,7 @@ const OfflineMilkCollectionScreen = () => {
                                         isFinite(scaleWeight) &&
                                         scaleWeight >= 0
                                     ) {
-                                        const net = scaleWeight - getCanTare(measuringCan);
+                                        const net = scaleWeight - getMilkCanTare(measuringCan);
                                         if (isFinite(net) && net >= 0) {
                                             return `${net.toFixed(2)} KG`;
                                         }

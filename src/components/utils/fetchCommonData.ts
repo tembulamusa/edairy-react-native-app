@@ -106,10 +106,7 @@ const fetchCommonData = async ({
         return result;
     } catch (error) {
         console.error(`❌ Failed to load common data for ${name}:`, error);
-        return {
-            error: error,
-            data: null,
-        };
+        return [];
     }
 };
 

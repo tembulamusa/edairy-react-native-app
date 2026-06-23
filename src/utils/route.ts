@@ -54,3 +54,27 @@ export function getRouteCenterDisplayName(
         `Route Center ${routeCenter.id ?? ""}`
     );
 }
+
+/** Keep only centers that belong to the selected route. */
+export function filterRouteCentersForRoute(
+    centers: any[] | null | undefined,
+    routeId: number | null | undefined
+): any[] {
+    if (!Array.isArray(centers) || routeId == null) {
+        return [];
+    }
+
+    return centers.filter((center) => {
+        if (center?.route_id == null) {
+            return true;
+        }
+        return Number(center.route_id) === Number(routeId);
+    });
+}
+
+export function toRouteCenterDropdownItems(centers: any[]) {
+    return (centers || []).map((center) => ({
+        label: getRouteCenterDisplayName(center),
+        value: center.id,
+    }));
+}
