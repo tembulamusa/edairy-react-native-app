@@ -5,19 +5,32 @@ import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/FontAwesome';
 import { AuthContext } from '../AuthContext';
 import { useSync } from '../context/SyncContext';
-import { syncWithConfirmation } from '../services/offlineSync';
-import { getUnsyncedCollections } from '../services/offlineDatabase';
+import { useConnectivity } from '../context/ConnectivityContext';
+import { checkConnectivity } from '../services/offlineSync';
+import { getRetryableSyncQueueCount, getFailedSyncQueueCount } from '../services/offlineDatabase';
 import { getDairyName, DEFAULT_DAIRY_NAME } from '../utils/userPreferences';
 import { subscribeHeaderRefresh } from '../utils/headerRefresh';
+import { isNetworkOnlineFromFlags } from '../utils/networkState';
 
 const CustomHeader = ({ scene, previous, navigation }) => {
     const [dropdownVisible, setDropdownVisible] = useState(false);
     const [firstName, setFirstName] = useState('');
     const [dairyName, setDairyName] = useState(DEFAULT_DAIRY_NAME);
-    const { logout } = useContext(AuthContext);
-    const { isSyncing, lastSyncResult, lastSyncTime, syncError, triggerSync } = useSync();
+    const { logout, userToken } = useContext(AuthContext);
+    const { isConnected, isInternetReachable } = useConnectivity();
+    const isOnline = isNetworkOnlineFromFlags(isConnected, isInternetReachable);
+    const {
+        isSyncing,
+        lastSyncResult,
+        performMandatoryOfflineSync,
+        enableCollectionGateCheck,
+        refreshCollectionGate,
+    } = useSync();
     const [hasPendingSync, setHasPendingSync] = useState(false);
+    const [hasFailedSync, setHasFailedSync] = useState(false);
     const bellIconRef = useRef(null);
+    const pushInFlightRef = useRef(false);
+    const wasOnlineRef = useRef(isOnline);
 
     const loadHeaderInfo = useCallback(async () => {
         try {
@@ -42,15 +55,84 @@ const CustomHeader = ({ scene, previous, navigation }) => {
         }
     }, []);
 
+    const refreshPendingSyncState = useCallback(async (): Promise<number> => {
+        try {
+            const [pendingCount, failedCount] = await Promise.all([
+                getRetryableSyncQueueCount(),
+                getFailedSyncQueueCount(),
+            ]);
+            setHasPendingSync(pendingCount > 0);
+            setHasFailedSync(failedCount > 0);
+            return pendingCount;
+        } catch (error) {
+            console.error('[Header] Error checking pending syncs:', error);
+            return 0;
+        }
+    }, []);
+
+    /** Single entry point for pushing offline sync_queue data online. */
+    const pushPendingOfflineData = useCallback(
+        async (source: 'auto' | 'manual') => {
+            if (pushInFlightRef.current || isSyncing) {
+                return null;
+            }
+
+            const online = await checkConnectivity();
+            if (!online) {
+                return null;
+            }
+
+            const storedUser = await AsyncStorage.getItem('user');
+            if (!storedUser && !userToken) {
+                return null;
+            }
+
+            const pendingCount = await getRetryableSyncQueueCount();
+            if (pendingCount === 0) {
+                await refreshPendingSyncState();
+                return null;
+            }
+
+            pushInFlightRef.current = true;
+            console.log(`[Header] Pushing ${pendingCount} offline record(s) (${source})`);
+
+            try {
+                enableCollectionGateCheck();
+                const result = await performMandatoryOfflineSync(true);
+                await refreshCollectionGate();
+                return result;
+            } finally {
+                pushInFlightRef.current = false;
+                await refreshPendingSyncState();
+            }
+        },
+        [
+            isSyncing,
+            userToken,
+            performMandatoryOfflineSync,
+            enableCollectionGateCheck,
+            refreshCollectionGate,
+            refreshPendingSyncState,
+        ]
+    );
+
     useEffect(() => {
         loadHeaderInfo();
-        return subscribeHeaderRefresh(loadHeaderInfo);
-    }, [loadHeaderInfo]);
+        return subscribeHeaderRefresh(() => {
+            void loadHeaderInfo();
+            void refreshPendingSyncState().then((count) => {
+                if (count > 0 && isOnline) {
+                    void pushPendingOfflineData('auto');
+                }
+            });
+        });
+    }, [loadHeaderInfo, refreshPendingSyncState, pushPendingOfflineData, isOnline]);
 
     useFocusEffect(
         useCallback(() => {
-            loadHeaderInfo();
-        }, [loadHeaderInfo])
+            void loadHeaderInfo();
+            void refreshPendingSyncState();
+        }, [loadHeaderInfo, refreshPendingSyncState])
     );
 
     useEffect(() => {
@@ -60,6 +142,32 @@ const CustomHeader = ({ scene, previous, navigation }) => {
         const unsubscribe = navigation.addListener('focus', loadHeaderInfo);
         return unsubscribe;
     }, [navigation, loadHeaderInfo]);
+
+    useEffect(() => {
+        void refreshPendingSyncState();
+    }, [isSyncing, refreshPendingSyncState]);
+
+    useEffect(() => {
+        if (!userToken || !isOnline) {
+            wasOnlineRef.current = isOnline;
+            return;
+        }
+
+        const cameOnline = !wasOnlineRef.current && isOnline;
+        wasOnlineRef.current = isOnline;
+
+        if (cameOnline) {
+            void pushPendingOfflineData('auto');
+        }
+    }, [isOnline, userToken, pushPendingOfflineData]);
+
+    const previousUserTokenRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (userToken && !previousUserTokenRef.current && isOnline) {
+            void pushPendingOfflineData('auto');
+        }
+        previousUserTokenRef.current = userToken;
+    }, [userToken, isOnline, pushPendingOfflineData]);
 
     const handleLogout = async () => {
         console.log('Logout button pressed, closing dropdown...');
@@ -73,48 +181,31 @@ const CustomHeader = ({ scene, previous, navigation }) => {
         setDropdownVisible(!dropdownVisible);
     };
 
-    // Check for pending syncs on component mount
-    useEffect(() => {
-        const checkPendingSyncs = async () => {
-            try {
-                const pendingCollections = await getUnsyncedCollections();
-                setHasPendingSync(pendingCollections.length > 0);
-            } catch (error) {
-                console.error('Error checking pending syncs:', error);
-            }
-        };
-
-        checkPendingSyncs();
-
-        // Re-check when sync completes
-        if (!isSyncing && hasPendingSync) {
-            checkPendingSyncs();
-        }
-    }, [isSyncing, hasPendingSync]);
-
     const handleSyncPress = async () => {
         try {
-            console.log('[SYNC] Sync button pressed, checking for pending collections...');
-            const pendingCollections = await getUnsyncedCollections();
-            console.log('[SYNC] Found pending collections:', pendingCollections.length);
-            if (pendingCollections.length > 0) {
-                console.log('[SYNC] Starting sync process...');
-                const result = await triggerSync();
+            const pendingCount = await getRetryableSyncQueueCount();
+            if (pendingCount > 0) {
+                const result = await pushPendingOfflineData('manual');
+                const collectionsResult = result?.collectionsResult ?? { success: 0, failed: 0 };
 
-                if (result.success > 0 && result.failed === 0) {
-                    Alert.alert('Sync Complete', `Successfully synced ${result.success} collection(s).`);
-                } else if (result.failed > 0) {
-                    Alert.alert('Sync Partially Failed', `Successfully synced ${result.success} collection(s), but ${result.failed} failed.`);
+                if (collectionsResult.success > 0 && collectionsResult.failed === 0) {
+                    Alert.alert('Sync Complete', `Successfully synced ${collectionsResult.success} record(s).`);
+                } else if (collectionsResult.failed > 0) {
+                    Alert.alert(
+                        'Sync Partially Failed',
+                        `Successfully synced ${collectionsResult.success} record(s), but ${collectionsResult.failed} failed.`
+                    );
                 }
+            } else if (hasFailedSync) {
+                navigation.navigate('Members', { screen: 'FailedSyncs' });
             } else {
-                Alert.alert('All Synced', 'All your offline collections are already synced.');
+                Alert.alert('All Synced', 'All your offline records are already synced.');
             }
         } catch (error) {
             console.error('Error during sync:', error);
             Alert.alert('Sync Error', 'An error occurred during sync. Please try again.');
         }
     };
-
 
     return (
         <View style={styles.header}>
@@ -137,6 +228,7 @@ const CustomHeader = ({ scene, previous, navigation }) => {
                 style={[styles.iconContainer, isSyncing && styles.iconContainerDisabled]}
                 onPress={handleSyncPress}
                 disabled={isSyncing}
+                accessibilityLabel="Sync offline data"
             >
                 {isSyncing ? (
                     <ActivityIndicator size={20} color="#FFFFFF" />

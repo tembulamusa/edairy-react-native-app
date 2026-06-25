@@ -10,12 +10,12 @@ import Store from "./src/context/store";
 import { GlobalProvider } from "./src/context/GlobalContext";
 import { AuthProvider, AuthContext } from "./src/AuthContext";
 import { ConnectivityProvider, useConnectivity } from "./src/context/ConnectivityContext";
-import { SyncProvider, useSync } from "./src/context/SyncContext";
+import { SyncProvider } from "./src/context/SyncContext";
 import ConnectivityDebugger from "./src/components/ConnectivityDebugger";
 import OfflineModeRedirect from "./src/components/OfflineModeRedirect";
-import SyncLoadingOverlay from "./src/components/SyncLoadingOverlay";
+import CoreDataGate from "./src/components/CoreDataGate";
 import { initDatabase } from "./src/services/offlineDatabase";
-import { isOnOfflineCollectionScreen, navigateToOfflineCollection, bindAppNavigationRef, navigateToDashboard } from "./src/services/offlineNavigation";
+import { bindAppNavigationRef, getRootRouteName } from "./src/services/offlineNavigation";
 import { isNetworkOnlineFromFlags } from "./src/utils/networkState";
 import LaunchScreen from "./src/components/LaunchScreen";
 
@@ -44,6 +44,7 @@ import {
   ProfileScreen,
   SettingsScreen,
   OfflineMilkCollectionScreen,
+  FailedSyncsScreen,
 } from "./src/screens";
 import CustomHeader from "./src/components/CustomHeader";
 
@@ -115,7 +116,18 @@ function MembersStackNavigator() {
       <MembersStack.Screen name="MemberCashout" component={MemberCashoutListScreen} />
       <MembersStack.Screen name="LivenessCheck" component={WebViewScreen} />
       <MembersStack.Screen name="UserBalanceSummary" component={UserBalanceSummaryScreen} />
-      <MembersStack.Screen name="ScaleTest" component={ScaleTestScreen} />
+        <MembersStack.Screen name="ScaleTest" component={ScaleTestScreen} />
+        <MembersStack.Screen
+          name="FailedSyncs"
+          component={FailedSyncsScreen}
+          options={{
+            headerShown: true,
+            headerTitle: "Failed Syncs",
+            headerStyle: { backgroundColor: "#dc2626" },
+            headerTintColor: "#fff",
+            headerTitleStyle: { fontWeight: "600" },
+          }}
+        />
         <MembersStack.Screen
           name="OfflineMilkCollection"
           component={OfflineMilkCollectionScreen}
@@ -193,30 +205,16 @@ function AppContent({
   navigationRef: React.RefObject<any>;
   appReady: boolean;
 }) {
-  const { isSyncing, handleOnlineReconnect } = useSync();
-  const { setNavigationRef, userToken, loading: authLoading } = React.useContext(AuthContext);
+  const {
+    setNavigationRef,
+    userToken,
+    loading: authLoading,
+    handleConnectivityTransition,
+  } = React.useContext(AuthContext);
   const { isConnected, isInternetReachable } = useConnectivity();
   const isOnline = isNetworkOnlineFromFlags(isConnected, isInternetReachable);
-  const isOnlineRef = React.useRef(isOnline);
-  const userTokenRef = React.useRef(userToken);
   const wasOnlineRef = React.useRef(isOnline);
-  isOnlineRef.current = isOnline;
-  userTokenRef.current = userToken;
-
-  const handleNavigationStateChange = React.useCallback(() => {
-    if (isOnlineRef.current || authLoading || !appReady) {
-      return;
-    }
-
-    const nav = navigationRef.current;
-    if (!nav?.isReady() || isOnOfflineCollectionScreen(nav)) {
-      return;
-    }
-
-    if (userTokenRef.current) {
-      navigateToOfflineCollection(nav);
-    }
-  }, [navigationRef, authLoading, appReady]);
+  const connectivityBaselineSetRef = React.useRef(false);
 
   React.useEffect(() => {
     if (navigationRef.current) {
@@ -226,54 +224,61 @@ function AppContent({
   }, [navigationRef, setNavigationRef]);
 
   React.useEffect(() => {
-    if (!appReady || authLoading || !userToken) {
+    if (!appReady || authLoading) {
+      return;
+    }
+
+    const nav = navigationRef.current;
+    if (!nav?.isReady()) {
+      return;
+    }
+
+    const rootRoute = getRootRouteName(nav.getRootState());
+
+    if (userToken && rootRoute === "Auth") {
+      nav.reset({
+        index: 0,
+        routes: [{ name: "Home" }],
+      });
+    }
+  }, [appReady, authLoading, navigationRef, userToken]);
+
+  React.useEffect(() => {
+    if (!appReady || authLoading) {
+      return;
+    }
+
+    if (!connectivityBaselineSetRef.current) {
+      connectivityBaselineSetRef.current = true;
       wasOnlineRef.current = isOnline;
       return;
     }
 
-    const cameOnline = isOnline && !wasOnlineRef.current;
-    wasOnlineRef.current = isOnline;
-
-    if (!cameOnline) {
+    const previousOnline = wasOnlineRef.current;
+    if (previousOnline === isOnline) {
       return;
     }
 
-    const runAutoSyncOnReconnect = async () => {
-      try {
-        const result = await handleOnlineReconnect();
-        if (result?.success) {
-          navigateToDashboard(navigationRef.current);
-        }
-      } catch (error) {
-        console.error("[APP] Auto-sync on reconnect failed:", error);
-      }
-    };
+    wasOnlineRef.current = isOnline;
 
-    void runAutoSyncOnReconnect();
-  }, [
-    isOnline,
-    appReady,
-    authLoading,
-    userToken,
-    handleOnlineReconnect,
-    navigationRef,
-  ]);
+    console.log(
+      `[APP] Connectivity transition: ${previousOnline ? "online" : "offline"} → ${isOnline ? "online" : "offline"}`
+    );
+
+    void handleConnectivityTransition(isOnline);
+  }, [isOnline, appReady, authLoading, handleConnectivityTransition]);
 
   return (
     <>
       <ConnectivityDebugger />
-      <NavigationContainer
-        ref={navigationRef}
-        onStateChange={handleNavigationStateChange}
-      >
+      <NavigationContainer ref={navigationRef}>
         <OfflineModeRedirect navigationRef={navigationRef} appReady={appReady} />
+        <CoreDataGate navigationRef={navigationRef} appReady={appReady} />
         <RootStack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Auth">
           <RootStack.Screen name="Auth" component={AuthStack} />
           <RootStack.Screen name="Home" component={HomeStack} />
         </RootStack.Navigator>
       </NavigationContainer>
-
-      <SyncLoadingOverlay visible={isSyncing} message="Syncing..." />
     </>
   );
 }

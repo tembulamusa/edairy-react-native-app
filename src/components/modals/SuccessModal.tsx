@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import {
     Modal,
     View,
@@ -6,6 +6,8 @@ import {
     TouchableOpacity,
     StyleSheet,
     ActivityIndicator,
+    Animated,
+    Easing,
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 
@@ -26,6 +28,41 @@ const SuccessModal: React.FC<SuccessModalProps> = ({
     loadingMessage = "Processing...",
     onClose,
 }) => {
+    const scaleAnim = useRef(new Animated.Value(0)).current;
+    const opacityAnim = useRef(new Animated.Value(0)).current;
+    const ringScaleAnim = useRef(new Animated.Value(0.6)).current;
+
+    useEffect(() => {
+        if (!visible || isLoading) {
+            return;
+        }
+
+        scaleAnim.setValue(0);
+        opacityAnim.setValue(0);
+        ringScaleAnim.setValue(0.6);
+
+        Animated.parallel([
+            Animated.spring(scaleAnim, {
+                toValue: 1,
+                friction: 5,
+                tension: 90,
+                useNativeDriver: true,
+            }),
+            Animated.timing(opacityAnim, {
+                toValue: 1,
+                duration: 220,
+                easing: Easing.out(Easing.ease),
+                useNativeDriver: true,
+            }),
+            Animated.spring(ringScaleAnim, {
+                toValue: 1,
+                friction: 6,
+                tension: 70,
+                useNativeDriver: true,
+            }),
+        ]).start();
+    }, [visible, isLoading, opacityAnim, ringScaleAnim, scaleAnim]);
+
     return (
         <Modal
             visible={visible}
@@ -42,8 +79,27 @@ const SuccessModal: React.FC<SuccessModalProps> = ({
                         </>
                     ) : (
                         <>
-                            <View style={styles.iconContainer}>
-                                <MaterialIcons name="check-circle" size={64} color="#16a34a" />
+                            <View style={styles.iconWrapper}>
+                                <Animated.View
+                                    style={[
+                                        styles.iconRing,
+                                        {
+                                            opacity: opacityAnim,
+                                            transform: [{ scale: ringScaleAnim }],
+                                        },
+                                    ]}
+                                />
+                                <Animated.View
+                                    style={[
+                                        styles.iconContainer,
+                                        {
+                                            opacity: opacityAnim,
+                                            transform: [{ scale: scaleAnim }],
+                                        },
+                                    ]}
+                                >
+                                    <MaterialIcons name="check" size={42} color="#fff" />
+                                </Animated.View>
                             </View>
                             <Text style={styles.title}>{title}</Text>
                             <Text style={styles.message}>{message}</Text>
@@ -80,8 +136,27 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.25,
         shadowRadius: 4,
     },
-    iconContainer: {
+    iconWrapper: {
+        width: 88,
+        height: 88,
+        justifyContent: "center",
+        alignItems: "center",
         marginBottom: 16,
+    },
+    iconRing: {
+        position: "absolute",
+        width: 88,
+        height: 88,
+        borderRadius: 44,
+        backgroundColor: "#dcfce7",
+    },
+    iconContainer: {
+        width: 72,
+        height: 72,
+        borderRadius: 36,
+        backgroundColor: "#16a34a",
+        justifyContent: "center",
+        alignItems: "center",
     },
     title: {
         fontSize: 22,
@@ -117,4 +192,3 @@ const styles = StyleSheet.create({
         textAlign: "center",
     },
 });
-

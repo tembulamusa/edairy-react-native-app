@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
     View,
     Text,
@@ -7,7 +8,6 @@ import {
     StyleSheet,
     SafeAreaView,
     Alert,
-    FlatList,
     ActivityIndicator,
     Modal,
     ScrollView,
@@ -19,7 +19,23 @@ import DropDownPicker from 'react-native-dropdown-picker';
 import fetchCommonData from '../../components/utils/fetchCommonData';
 import useBluetoothService from '../../hooks/useBluetoothService';
 import BluetoothConnectionModal from '../../components/modals/BluetoothConnectionModal';
+import CustomerMilkDeliveryModal from '../../components/modals/CustomerMilkDeliveryModal';
+import SuccessModal from '../../components/modals/SuccessModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import useCan from '../../hooks/useCan';
+import { REFERENCE_DATA_FETCH_LIMIT, toCustomerDropdownItems } from '../../utils/referenceDataFetch';
+import { getDropdownPickerModalProps } from '../../styles';
+import { resolveDropDownPickerValue } from '../../utils/dropdownItems';
+import {
+    loadMilkDeliveryReferenceDataFromSQLite,
+    hasMilkDeliveryReferenceData,
+} from '../../services/milkDeliveryReferenceData';
+import { CORE_DATA_SETTINGS_MESSAGE } from '../../services/coreData';
+import { checkConnectivity } from '../../services/connectivity';
+import { useSync } from '../../context/SyncContext';
+import ReferenceDataMissingBanner from '../../components/ReferenceDataMissingBanner';
+
+const PERM_MILK_DELIVERIES_CREATE = 'milk-deliveries.create';
 
 const UserBalanceSummaryScreen = () => {
     const [fromDate, setFromDate] = useState(new Date());
@@ -29,6 +45,11 @@ const UserBalanceSummaryScreen = () => {
     const [commonData, setCommonData] = useState<any>({});
     const [userSummary, setUserSummary] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
+    const [reportRefreshKey, setReportRefreshKey] = useState(0);
+    const [deliveryModalVisible, setDeliveryModalVisible] = useState(false);
+    const [deliverySuccessVisible, setDeliverySuccessVisible] = useState(false);
+    const canCreateDelivery = useCan(PERM_MILK_DELIVERIES_CREATE);
+    const { enableCollectionGateCheck, refreshCollectionGate } = useSync();
     const [memberTotals, setMemberTotals] = useState<any>([]);
     const [transactionType, setTransactionType] = useState<"all" | "delivery" | "deduction">("all");
     const [customerOpen, setCustomerOpen] = useState(false);
@@ -39,6 +60,7 @@ const UserBalanceSummaryScreen = () => {
     const [loadingTransactionDetails, setLoadingTransactionDetails] = useState(false);
     const [printerModalVisible, setPrinterModalVisible] = useState(false);
     const [isPrinting, setIsPrinting] = useState(false);
+    const [referenceDataMissing, setReferenceDataMissing] = useState(false);
 
     // Printer hook
     const printerBluetooth = useBluetoothService({ deviceType: "printer" });
@@ -66,29 +88,70 @@ const UserBalanceSummaryScreen = () => {
         };
     }, []);
 
+    const handleDeliverySaved = useCallback((savedDelivery?: any) => {
+        setCustomerOpen(false);
+
+        const deliveredCustomerId =
+            savedDelivery?.customer_id != null
+                ? Number(savedDelivery.customer_id)
+                : null;
+
+        setTimeout(() => {
+            if (!isMountedRef.current) {
+                return;
+            }
+
+            if (
+                deliveredCustomerId != null &&
+                !Number.isNaN(deliveredCustomerId)
+            ) {
+                setCustomerValue((current) => {
+                    if (current === deliveredCustomerId) {
+                        return current;
+                    }
+                    return deliveredCustomerId;
+                });
+            }
+
+            setReportRefreshKey((key) => key + 1);
+            setDeliverySuccessVisible(true);
+        }, 500);
+    }, []);
+
+
+    const loadReferenceData = useCallback(async () => {
+        try {
+            const referenceData = await loadMilkDeliveryReferenceDataFromSQLite();
+
+            if (!hasMilkDeliveryReferenceData(referenceData)) {
+                setReferenceDataMissing(true);
+                return;
+            }
+
+            setReferenceDataMissing(false);
+            const allData = {
+                customers: referenceData.customers,
+                transporters: referenceData.transporters,
+                shifts: referenceData.shifts,
+            };
+            setCommonData(allData);
+            setCustomerItems(toCustomerDropdownItems(referenceData.customers || []));
+        } catch (error: any) {
+            Alert.alert('Error', `Failed to load common data: ${error.message || error}`);
+        }
+    }, []);
 
     useEffect(() => {
-        const loadCommonData = async () => {
-            try {
-                const [members] = await Promise.all([
-                    fetchCommonData({ name: 'members' }),
-                ]);
-                const allData = { members };
-                setCommonData(allData);
-                setCustomerItems(
-                    (members || []).map((c: any) => ({
-                        label: `${c.first_name} ${c.last_name}(${c.primary_phone})`,
-                        value: c.id,
-                    }))
-                );
-
-            } catch (error: any) {
-                Alert.alert('Error', `Failed to load common data: ${error.message || error}`);
-            }
-        };
-
-        loadCommonData();
+        loadReferenceData();
+        enableCollectionGateCheck();
+        void refreshCollectionGate();
     }, []);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadReferenceData();
+        }, [loadReferenceData])
+    );
 
     const onChangeFromDate = (event: any, selectedDate?: Date) => {
         setShowFromPicker(false);
@@ -108,40 +171,77 @@ const UserBalanceSummaryScreen = () => {
     };
 
     useEffect(() => {
-        const loadReport = async (customerValue: number | null) => {
-            if (customerValue) {
-                try {
+        let cancelled = false;
+
+        const loadReport = async (selectedCustomerId: number | null) => {
+            if (!selectedCustomerId) {
+                if (!cancelled && isMountedRef.current) {
+                    setUserSummary([]);
+                    setMemberTotals([]);
+                    setLoading(false);
+                }
+                return;
+            }
+
+            try {
+                if (!cancelled && isMountedRef.current) {
                     setUserSummary([]);
                     setLoading(true);
-                    const today = new Date();
-                    const created_at_gte = fromDate ? fromDate.toISOString().split("T")[0] : today.toISOString().split("T")[0];
-                    const created_at_lte = toDate ? toDate.toISOString().split("T")[0] : today.toISOString().split("T")[0];
-                    const activities = await fetchCommonData({
-                        name: "customer_delivery_summary",
-                        params: {
-                            created_at_gte,
-                            created_at_lte,
-                            member_id: customerValue,
-                        },
-                    });
-                    if (activities['error']) {
-                        Alert.alert("Error", activities?.message ?? JSON.stringify(activities));
-                        return
-                    }
-                    setUserSummary(activities || []);
-                    setMemberTotals(activities);
+                }
 
-                } catch (error) {
-                    console.error("Error loading user summary:", error);
-                    Alert.alert("Error", `Failed to load user summary report ${JSON.stringify(error)}`);
-                } finally {
+                const online = await checkConnectivity();
+                if (!online) {
+                    if (!cancelled && isMountedRef.current) {
+                        setUserSummary([]);
+                        setMemberTotals([]);
+                    }
+                    return;
+                }
+
+                const today = new Date();
+                const created_at_gte = fromDate
+                    ? fromDate.toISOString().split("T")[0]
+                    : today.toISOString().split("T")[0];
+                const created_at_lte = toDate
+                    ? toDate.toISOString().split("T")[0]
+                    : today.toISOString().split("T")[0];
+                const activities = await fetchCommonData({
+                    name: "customer_delivery_summary",
+                    cachable: false,
+                    direct: true,
+                    logContext: "CustomerMilkDeliverySummary",
+                    params: {
+                        created_at_gte,
+                        created_at_lte,
+                        customer_id: selectedCustomerId,
+                    },
+                });
+
+                if (cancelled || !isMountedRef.current) {
+                    return;
+                }
+
+                const records = Array.isArray(activities) ? activities : [];
+                setUserSummary(records);
+                setMemberTotals(records);
+            } catch (error) {
+                console.error("Error loading user summary:", error);
+                if (!cancelled && isMountedRef.current) {
+                    Alert.alert("Error", "Failed to load delivery summary.");
+                }
+            } finally {
+                if (!cancelled && isMountedRef.current) {
                     setLoading(false);
                 }
             }
         };
 
         loadReport(customerValue);
-    }, [fromDate, toDate, customerValue]);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [fromDate, toDate, customerValue, reportRefreshKey]);
 
     // Helper: Connect to saved printer or scan and connect to first InnerPrinter
     const connectToPrinterForPrinting = useCallback(async (): Promise<boolean> => {
@@ -396,7 +496,23 @@ const UserBalanceSummaryScreen = () => {
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={true}
             >
-                <Text style={styles.title}>Member Milk Delivery</Text>
+                <View style={styles.headerRow}>
+                    <Text style={styles.title}>Customer Milk Delivery</Text>
+                    {canCreateDelivery && (
+                        <TouchableOpacity
+                            style={styles.newDeliveryButton}
+                            onPress={() => setDeliveryModalVisible(true)}
+                        >
+                            <Icon name="add-circle-outline" size={22} color="#fff" />
+                            <Text style={styles.newDeliveryText}>New Delivery</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+
+                <ReferenceDataMissingBanner
+                    visible={referenceDataMissing}
+                    message={CORE_DATA_SETTINGS_MESSAGE}
+                />
                 
                 <View style={styles.filtersContainer}>
                     <View style={styles.row}>
@@ -459,23 +575,25 @@ const UserBalanceSummaryScreen = () => {
                 </View>
 
                 {/* Select Customer */}
-                <View style={[styles.col, { marginHorizontal: 0, marginBottom: 16 }]}>
+                <View style={[styles.col, { marginHorizontal: 0, marginBottom: 16, zIndex: deliveryModalVisible ? 1 : 2000 }]}>
                     <Text style={styles.label}>Member</Text>
                     <DropDownPicker
+                    {...getDropdownPickerModalProps("Select customer")}
                     open={customerOpen}
                     value={customerValue}
                     items={customerItems}
                     setOpen={setCustomerOpen}
-                    setValue={setCustomerValue}
+                    setValue={(callback) => {
+                        const next = resolveDropDownPickerValue(callback, customerValue);
+                        setCustomerValue(next as number | null);
+                    }}
                     setItems={setCustomerItems}
                     searchable={true}
                     placeholder="Select customer"
-                    listMode="SCROLLVIEW"
                     style={styles.dropdown}
                     dropDownContainerStyle={styles.dropdownBox}
-                    zIndex={2000}
-                    zIndexInverse={2500}
-                    scrollViewProps={{ nestedScrollEnabled: true }}
+                    zIndex={deliveryModalVisible ? 1 : 2000}
+                    zIndexInverse={deliveryModalVisible ? 1 : 2500}
                 />
                 </View>
                 </View>
@@ -490,20 +608,17 @@ const UserBalanceSummaryScreen = () => {
                             No deliveries found for the selected period
                         </Text>
                     ) : (
-                            <FlatList
-                            data={userSummary}
-                            keyExtractor={(item, idx) => idx.toString()}
-                            scrollEnabled={false}
-                            nestedScrollEnabled={true}
-                            renderItem={({ item }) => {
+                        <View>
+                            {userSummary.map((item, idx) => {
                                 const deliveryDate = item?.created_at || item?.transaction_date
                                     ? new Date(item.created_at || item.transaction_date).toLocaleDateString()
                                     : 'N/A';
                                 const shiftName = item?.shift?.name || item?.shift_name || 'N/A';
-                                const quantity = parseFloat(item?.quantity || item?.kgs || 0);
+                                const quantity = parseFloat(item?.quantity || item?.kgs || item?.quantity_accepted || 0);
 
                                 return (
                                     <TouchableOpacity
+                                        key={String(item?.id ?? idx)}
                                         style={styles.deliveryRow}
                                         onPress={() => handleTransactionClick(item)}
                                         activeOpacity={0.7}
@@ -520,22 +635,24 @@ const UserBalanceSummaryScreen = () => {
                                         </View>
                                     </TouchableOpacity>
                                 );
-                            }}
-                            ListFooterComponent={() => {
-                                // Calculate total quantity
-                                const totalQuantity = userSummary.reduce((sum, item) => {
-                                    const quantity = parseFloat(item?.quantity || item?.kgs || 0);
-                                    return sum + quantity;
-                                }, 0);
-
-                                return (
-                                    <View style={styles.totalRow}>
-                                        <Text style={styles.totalLabel}>Total Milk Delivered:</Text>
-                                        <Text style={styles.totalValue}>{totalQuantity.toFixed(2)} KG</Text>
-                                    </View>
-                                );
-                            }}
-                        />
+                            })}
+                            {userSummary.length > 0 && (
+                                <View style={styles.totalRow}>
+                                    <Text style={styles.totalLabel}>Total Milk Delivered:</Text>
+                                    <Text style={styles.totalValue}>
+                                        {userSummary
+                                            .reduce((sum, item) => {
+                                                const quantity = parseFloat(
+                                                    item?.quantity || item?.kgs || item?.quantity_accepted || 0
+                                                );
+                                                return sum + (Number.isFinite(quantity) ? quantity : 0);
+                                            }, 0)
+                                            .toFixed(2)}{' '}
+                                        KG
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
                     )}
                 </View>
 
@@ -683,6 +800,20 @@ const UserBalanceSummaryScreen = () => {
                 </View>
             </Modal>
 
+            <CustomerMilkDeliveryModal
+                visible={deliveryModalVisible}
+                onClose={() => setDeliveryModalVisible(false)}
+                onSave={handleDeliverySaved}
+                commonData={commonData}
+            />
+
+            <SuccessModal
+                visible={deliverySuccessVisible}
+                title="Success"
+                message="Milk delivery recorded successfully."
+                onClose={() => setDeliverySuccessVisible(false)}
+            />
+
             {/* Printer Connection Modal */}
             <BluetoothConnectionModal
                 visible={printerModalVisible}
@@ -751,8 +882,29 @@ const styles = StyleSheet.create({
     title: {
         fontSize: 20,
         fontWeight: 'bold',
-        marginBottom: 20,
         color: '#333',
+        flexShrink: 1,
+        marginRight: 12,
+    },
+    headerRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 20,
+    },
+    newDeliveryButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#16a34a',
+        paddingVertical: 8,
+        paddingHorizontal: 14,
+        borderRadius: 8,
+    },
+    newDeliveryText: {
+        marginLeft: 6,
+        fontSize: 14,
+        color: '#fff',
+        fontWeight: '600',
     },
     filtersContainer: {
         marginBottom: 20,

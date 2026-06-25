@@ -14,8 +14,9 @@ import {
 // @ts-ignore - react-native-sqlite-storage doesn't have types
 import SQLite from 'react-native-sqlite-storage';
 import BluetoothConnectionModal from '../../components/modals/BluetoothConnectionModal';
+import ReferenceDataMissingBanner from '../../components/ReferenceDataMissingBanner';
 import useBluetoothService from "../../hooks/useBluetoothService";
-import { isBleAdapterReady } from "../../utils/sharedBleManager";
+import { isBleAdapterReady, subscribeBleStateChange } from "../../utils/sharedBleManager";
 
 // Use require for hooks to avoid import issues
 // const useBLEService = require("../../hooks/useBLEService").default;
@@ -201,18 +202,34 @@ import makeRequest from "../../components/utils/makeRequest.ts";
 import useCan from "../../hooks/useCan";
 import { can as checkPermission } from "../../utils/permissions";
 import useMemberDropdownSearch from "../../hooks/useMemberDropdownSearch";
-import { getMilkCanTare } from "../../utils/milkCan";
+import { getMilkCanLabel, getMilkCanTare, toMilkCanDropdownItems } from "../../utils/milkCan";
 import { toMemberDropdownItems } from "../../utils/referenceDataFetch";
-import { getTransporterDisplayName } from "../../utils/transporter";
-import { getRouteDisplayName, getRouteCenterDisplayName, toRouteCenterDropdownItems } from "../../utils/route";
-import { getMeasuringCan, saveMeasuringCan, initDatabase } from "../../services/offlineDatabase";
+import { getTransporterDisplayName, toTransporterDropdownItems } from "../../utils/transporter";
 import {
-    fetchRouteCentersForRoute,
+    getRouteDisplayName,
+    getRouteCenterDisplayName,
+    filterRouteCentersForRoute,
+    toRouteCenterDropdownItems,
+    toRouteDropdownItems,
+} from "../../utils/route";
+import { toShiftDropdownItems } from "../../utils/dropdownItems";
+import {
+    describeShiftPeriod,
+    findShiftForCurrentTime,
+    getCurrentShiftPeriod,
+} from "../../utils/shift";
+import { getMeasuringCan, saveMeasuringCan, initDatabase, insertOfflineData, OFFLINE_SYNC_ENDPOINTS, MEMBER_KILOS_SYNC_KEY } from "../../services/offlineDatabase";
+import {
     hasMemberKilosReferenceData,
     loadMemberKilosReferenceDataFromSQLite,
-    refreshMemberKilosReferenceDataFromServer,
 } from "../../services/offlineReferenceData";
 import { checkConnectivity } from "../../services/offlineSync";
+import { useSync } from "../../context/SyncContext";
+import {
+    assertOfflineReferenceAvailable,
+    getOfflineBlockedMessage,
+} from "../../utils/offlineSaveGate";
+import { getMemberDisplayName, getMemberNumber } from "../../utils/referenceDataFetch";
 import {
     buildMemberKilosJournalPayload,
     findRouteById,
@@ -222,6 +239,7 @@ import {
 } from "../../utils/memberKilosJournalPayload";
 import {
     buildMemberKilosReceipts,
+    buildOfflineCollectionReceipts,
     getPendingReceiptsStorageKey,
     logMilkJournalPost,
 } from "../../utils/memberKilosJournalReceipts";
@@ -255,15 +273,6 @@ const getDropdownColStyle = (zIndex: number) => ({
     zIndex,
     elevation: zIndex / 1000,
 });
-
-const getMilkCanLabel = (can: any) =>
-    can?.can_id || can?.name || `Can ${can?.id ?? ""}`;
-
-const toMilkCanDropdownItems = (cans: any[]) =>
-    (cans || []).map((c: any) => ({
-        label: getMilkCanLabel(c),
-        value: c.id,
-    }));
 
 const autoSelectRouteForTransporter = (
     selectedTransporter: any,
@@ -313,6 +322,14 @@ const MemberKilosScreen = () => {
     const canViewKilos = useCan(PERM_MILK_JOURNALS_VIEW);
     const canCreateKilos = useCan(PERM_MILK_JOURNALS_CREATE);
     const canToggleKilos = canViewKilos && canCreateKilos;
+    const {
+        collectionGate,
+        isSyncing,
+        enableCollectionGateCheck,
+        refreshCollectionGate,
+    } = useSync();
+    const { requiresOnlinePush } = collectionGate;
+    const isOfflineSaveBlocked = isSyncing || requiresOnlinePush;
     const [customer_type, setCustomerType] = useState<string>("member");
     const [can, setCan] = useState<any>({});
     const [totalCans, setTotalCans] = useState<number>(0);
@@ -328,6 +345,7 @@ const MemberKilosScreen = () => {
     const [scaleWeightText, setScaleWeightText] = useState<string>("");
     const [commonData, setCommonData] = useState<any>({});
     const [loading, setLoading] = useState(false);
+    const [referenceDataMissing, setReferenceDataMissing] = useState(false);
     const [memberCreditLimit, setMemberCreditLimit] = useState<number | null>(null);
     const [fetchingCredit, setFetchingCredit] = useState(false);
     const [memberTotals, setMemberTotals] = useState<any>(null);
@@ -345,6 +363,7 @@ const MemberKilosScreen = () => {
     const [shiftItems, setShiftItems] = useState<any[]>([]);
     const [routeItems, setRouteItems] = useState<any[]>([]);
     const [centerItems, setCenterItems] = useState<any[]>([]);
+    const [allRouteCenters, setAllRouteCenters] = useState<any[]>([]);
     const [canItems, setCanItems] = useState<any[]>([]);
     const [measuringCanItems, setMeasuringCanItems] = useState<any[]>([]);
 
@@ -415,7 +434,13 @@ const MemberKilosScreen = () => {
     useFocusEffect(
         useCallback(() => {
             loadScaleSettings();
-        }, [loadScaleSettings])
+            enableCollectionGateCheck();
+            void refreshCollectionGate();
+            void (async () => {
+                const referenceData = await loadMemberKilosReferenceDataFromSQLite();
+                setReferenceDataMissing(!hasMemberKilosReferenceData(referenceData));
+            })();
+        }, [enableCollectionGateCheck, loadScaleSettings, refreshCollectionGate])
     );
 
     // Auto-select route when transporter changes
@@ -567,7 +592,7 @@ const MemberKilosScreen = () => {
                         }
                         if (stillConnected) {
                             console.log('[MemberKilos] CONTINUOUS RECONNECT: Already connected, stopping reconnection');
-                            stopContinuousReconnection();
+                            setIsContinuousReconnecting(false);
                             return;
                         }
                     } catch (error) {
@@ -608,26 +633,23 @@ const MemberKilosScreen = () => {
                 lastReconnectionAttempt.current = now;
 
                 try {
-                    if (scanForScaleDevices) {
-                        scanForScaleDevices();
-                    }
-
-                    // Wait for scan to complete
-                    await new Promise(resolve => setTimeout(resolve, 3000));
-
                     if (connectToScaleDevice && isMountedRef.current) {
                         const result = await connectToScaleDevice(deviceId);
                         if (result) {
                             console.log('[MemberKilos] CONTINUOUS RECONNECT: ✓ Successfully reconnected!');
-                            // The device should already be saved, but let's ensure it
                             const deviceInfo = {
                                 id: lastScale.device_id,
                                 name: lastScale.device_name,
                                 address: lastScale.device_address,
-                                type: lastScale.connection_type
+                                type: lastScale.connection_type,
                             };
-                            await persistLastScale(deviceInfo);
-                            stopContinuousReconnection();
+                            await saveLastScaleDevice({
+                                id: lastScale.device_id,
+                                name: lastScale.device_name,
+                                address: lastScale.device_address,
+                                type: lastScale.connection_type,
+                            });
+                            setIsContinuousReconnecting(false);
                         }
                     }
                 } catch (connectError: any) {
@@ -643,7 +665,7 @@ const MemberKilosScreen = () => {
         await attemptReconnection();
         setIsContinuousReconnecting(false);
 
-    }, [connectedScaleDevice, scaleHook, scanForScaleDevices, connectToScaleDevice, isContinuousReconnecting]);
+    }, [connectedScaleDevice, scaleHook, connectToScaleDevice, isContinuousReconnecting]);
 
     const stopContinuousReconnection = useCallback(() => {
         console.log('[MemberKilos] Stopping continuous reconnection');
@@ -662,64 +684,42 @@ const MemberKilosScreen = () => {
             try {
                 const bleReady = await isBleAdapterReady();
                 if (!bleReady) {
-                    console.log('[MemberKilos] INITIALIZING: Bluetooth is off, skipping auto scale connect');
+                    console.log('[MemberKilos] INITIALIZING: Bluetooth is off, will retry when powered on');
                     return;
                 }
 
-                // First, try to connect to the last saved device
                 const lastScale = await getLastScaleDevice();
-                if (lastScale) {
-                    console.log(`[MemberKilos] INITIALIZING: Found saved device ${lastScale.device_name}, attempting connection...`);
-
-                    const deviceId = lastScale.device_id;
-                    if (deviceId && connectToScaleDevice && scanForScaleDevices) {
-                        try {
-                            // Quick scan and connect attempt
-                            scanForScaleDevices();
-                            await new Promise(resolve => setTimeout(resolve, 2000));
-
-                            if (isMountedRef.current) {
-                                const result = await connectToScaleDevice(deviceId);
-                                if (result) {
-                                    console.log('[MemberKilos] INITIALIZING: ✓ Successfully connected to saved device');
-                                    // Ensure the device is saved (should already be, but be safe)
-                                    const deviceInfo = {
-                                        id: lastScale.device_id,
-                                        name: lastScale.device_name,
-                                        address: lastScale.device_address,
-                                        type: lastScale.connection_type
-                                    };
-                                    await persistLastScale(deviceInfo);
-                                    return;
-                                }
-                            }
-                        } catch (error: any) {
-                            console.log('[MemberKilos] INITIALIZING: Failed to connect to saved device:', error?.message ?? error?.reason ?? error);
-                        }
+                if (lastScale?.device_id && connectToScaleDevice) {
+                    console.log(
+                        `[MemberKilos] INITIALIZING: Connecting to saved scale ${lastScale.device_name}...`
+                    );
+                    const result = await connectToScaleDevice(lastScale.device_id);
+                    if (result && isMountedRef.current) {
+                        console.log('[MemberKilos] INITIALIZING: Connected to saved scale');
+                        return;
                     }
                 }
 
-                // If no saved device or connection failed, start a single automatic reconnection attempt
                 console.log('[MemberKilos] INITIALIZING: Starting automatic reconnection (single attempt)');
                 startContinuousReconnection();
-
             } catch (error: any) {
-                console.error('[MemberKilos] INITIALIZING: Error during initialization:', error?.message ?? error);
+                console.error(
+                    '[MemberKilos] INITIALIZING: Error during initialization:',
+                    error?.message ?? error
+                );
                 startContinuousReconnection();
             }
         };
 
-        // Only run automatic initialization once per mount
         if (hasAutoScaleInitRunRef.current) {
             return;
         }
         hasAutoScaleInitRunRef.current = true;
 
-        // Delay initialization to allow hooks to be ready
         const initTimeout = setTimeout(initializeScaleConnection, 1000);
 
         return () => clearTimeout(initTimeout);
-    }, [scaleSettingsLoaded, connectToScaleDevice, scanForScaleDevices, startContinuousReconnection]);
+    }, [scaleSettingsLoaded, connectToScaleDevice, startContinuousReconnection]);
 
     // Cleanup continuous reconnection on unmount
     useEffect(() => {
@@ -769,6 +769,64 @@ const MemberKilosScreen = () => {
             console.error("[MemberKilos] persistLastScale: Failed to save scale", error);
         }
     }, []);
+
+    const tryAutoConnectLastScale = useCallback(async () => {
+        if (!isMountedRef.current || !connectToScaleDevice) {
+            return false;
+        }
+
+        const bleReady = await isBleAdapterReady();
+        if (!bleReady) {
+            return false;
+        }
+
+        const lastScale = await getLastScaleDevice();
+        if (!lastScale?.device_id) {
+            return false;
+        }
+
+        console.log(
+            `[MemberKilos] AUTO-CONNECT: Trying saved scale ${lastScale.device_name}...`
+        );
+        const result = await connectToScaleDevice(lastScale.device_id);
+        if (result) {
+            await persistLastScale({
+                id: lastScale.device_id,
+                name: lastScale.device_name,
+                address: lastScale.device_address,
+                type: lastScale.connection_type,
+            });
+            stopContinuousReconnection();
+            return true;
+        }
+
+        return false;
+    }, [connectToScaleDevice, persistLastScale, stopContinuousReconnection]);
+
+    useEffect(() => {
+        if (!connectedScaleDevice) {
+            return;
+        }
+
+        setScaleModalVisible(false);
+        stopContinuousReconnection();
+        persistLastScale(connectedScaleDevice);
+    }, [connectedScaleDevice, persistLastScale, stopContinuousReconnection]);
+
+    useEffect(() => {
+        if (!scaleSettingsLoaded) {
+            return;
+        }
+
+        return subscribeBleStateChange((state) => {
+            if (state !== "PoweredOn" || connectedScaleDevice) {
+                return;
+            }
+
+            console.log("[MemberKilos] Bluetooth powered on — retrying saved scale connection");
+            void tryAutoConnectLastScale();
+        });
+    }, [scaleSettingsLoaded, connectedScaleDevice, tryAutoConnectLastScale]);
 
     // Helper: Persist printer to AsyncStorage (similar to StoreSaleModal)
     const persistLastPrinter = useCallback(async (device: any) => {
@@ -837,36 +895,27 @@ const MemberKilosScreen = () => {
             shifts,
             members,
             cans,
+            routeCenters,
         }: {
             transporters: any[];
             routes: any[];
             shifts: any[];
             members: any[];
             cans: any[];
+            routeCenters: any[];
         }) => {
+            setAllRouteCenters(routeCenters || []);
             setCommonData({
                 transporters,
                 routes,
                 shifts,
                 members,
                 cans,
-                route_centers: [],
+                route_centers: routeCenters || [],
             });
-            setTransporterItems(
-                (transporters || []).map((t: any) => ({
-                    label: getTransporterDisplayName(t),
-                    value: t.id,
-                }))
-            );
-            setShiftItems(
-                (shifts || []).map((s: any) => ({ label: s.name, value: s.id }))
-            );
-            setRouteItems(
-                (routes || []).map((r: any) => ({
-                    label: getRouteDisplayName(r),
-                    value: r.id,
-                }))
-            );
+            setTransporterItems(toTransporterDropdownItems(transporters));
+            setShiftItems(toShiftDropdownItems(shifts));
+            setRouteItems(toRouteDropdownItems(routes));
             const memberDropdownItems = toMemberDropdownItems(members);
             setAllMemberItems(memberDropdownItems);
             setMemberItems(memberDropdownItems);
@@ -879,42 +928,15 @@ const MemberKilosScreen = () => {
             try {
                 await initDatabase();
 
-                let referenceData = await loadMemberKilosReferenceDataFromSQLite();
-                if (hasMemberKilosReferenceData(referenceData)) {
-                    applyReferenceData(referenceData);
-                    console.log("[MemberKilos] Loaded reference data from SQLite");
-                }
-
-                const online = await checkConnectivity();
-                if (online) {
-                    try {
-                        referenceData = await refreshMemberKilosReferenceDataFromServer({
-                            logContext: "MemberKilos",
-                        });
-                        applyReferenceData(referenceData);
-                        console.log(
-                            "[MemberKilos] Refreshed reference data from server and saved to SQLite"
-                        );
-                    } catch (refreshError) {
-                        console.warn(
-                            "[MemberKilos] Server refresh failed, using SQLite cache:",
-                            refreshError
-                        );
-                        referenceData = await loadMemberKilosReferenceDataFromSQLite();
-                        if (hasMemberKilosReferenceData(referenceData)) {
-                            applyReferenceData(referenceData);
-                        }
-                        if (!hasMemberKilosReferenceData(referenceData)) {
-                            throw refreshError;
-                        }
-                    }
-                } else if (!hasMemberKilosReferenceData(referenceData)) {
-                    Alert.alert(
-                        "No Reference Data",
-                        "Open Member Kilos while online first to download transporters, members, routes, shifts, and cans into SQLite."
-                    );
+                const referenceData = await loadMemberKilosReferenceDataFromSQLite();
+                if (!hasMemberKilosReferenceData(referenceData)) {
+                    setReferenceDataMissing(true);
                     return;
                 }
+
+                setReferenceDataMissing(false);
+                applyReferenceData(referenceData);
+                console.log("[MemberKilos] Loaded reference data from SQLite");
 
                 const { transporters, routes, shifts, members, cans } = referenceData;
 
@@ -947,53 +969,29 @@ const MemberKilosScreen = () => {
                     console.warn("[MemberKilos] Failed to restore saved measuring can:", restoreError);
                 }
 
-                // Auto-select shift based on current time period (morning, afternoon, evening)
+                // Auto-select shift from current time (AM / noon / PM)
                 if (shifts && shifts.length > 0) {
-                    const currentTime = new Date();
-                    const currentHours = currentTime.getHours();
+                    const currentPeriod = getCurrentShiftPeriod();
+                    const matchingShift = findShiftForCurrentTime(shifts);
 
-                    // Determine current time period
-                    let currentPeriod: string;
-                    if (currentHours >= 6 && currentHours < 12) {
-                        currentPeriod = "morning";
-                    } else if (currentHours >= 12 && currentHours < 18) {
-                        currentPeriod = "afternoon";
-                    } else {
-                        // Evening: 18:00 (6 PM) to 06:00 (6 AM next day)
-                        currentPeriod = "evening";
-                    }
-
-                    console.log(`[MemberKilos] Current time: ${currentHours}:${currentTime.getMinutes()} - Period: ${currentPeriod}`);
-                    console.log(`[MemberKilos] Available shifts:`, shifts.map((s: any) => ({ id: s.id, name: s.name, time: s.time })));
-
-                    // Find shift that matches current time period
-                    const matchingShift = shifts?.find((s: any) => {
-                        if (!s.time) {
-                            console.log(`[MemberKilos] Shift ${s.id} (${s.name}) has no time field`);
-                            return false;
-                        }
-
-                        // Normalize the time field to lowercase and remove any extra whitespace
-                        const shiftTime = s.time.toString().trim().toLowerCase();
-
-                        // More flexible matching - check if the time field contains the period
-                        // This handles cases like "Morning Shift", "morning", "MORNING", etc.
-                        const matches = shiftTime === currentPeriod ||
-                            shiftTime.includes(currentPeriod) ||
-                            currentPeriod.includes(shiftTime);
-
-                        console.log(`[MemberKilos] Shift ${s.id} (${s.name}): time="${s.time}" -> normalized="${shiftTime}", currentPeriod="${currentPeriod}", matches=${matches}`);
-
-                        return matches;
-                    });
+                    console.log(
+                        `[MemberKilos] Current period: ${describeShiftPeriod(currentPeriod)}`
+                    );
+                    console.log(
+                        `[MemberKilos] Available shifts:`,
+                        shifts.map((s: any) => ({ id: s.id, name: s.name, time: s.time }))
+                    );
 
                     if (matchingShift) {
-                        setShiftValue(matchingShift?.id);
+                        setShiftValue(matchingShift.id);
                         setShift(matchingShift);
-                        console.log(`[MemberKilos] ✅ Auto-selected shift: ${matchingShift.name} (ID: ${matchingShift.id}) - Time period: ${currentPeriod}`);
+                        console.log(
+                            `[MemberKilos] Auto-selected shift: ${matchingShift.name} (ID: ${matchingShift.id})`
+                        );
                     } else {
-                        console.log(`[MemberKilos] ❌ No shift found matching current time period: ${currentPeriod}`);
-                        console.log(`[MemberKilos] Available shift times:`, shifts.map((s: any) => s.time).filter(Boolean));
+                        console.log(
+                            `[MemberKilos] No shift matched current period: ${describeShiftPeriod(currentPeriod)}`
+                        );
                     }
                 } else {
                     console.log(`[MemberKilos] No shifts available for auto-selection`);
@@ -1266,61 +1264,30 @@ const MemberKilosScreen = () => {
         setCenterValue(null);
         setCenter(null);
         setCenterItems([]);
-        setCommonData((prev: any) => ({ ...prev, route_centers: [] }));
     }, []);
 
-    // Fetch route centers when route is selected
+    // Filter cached route centers when a route is selected
     useEffect(() => {
-        let cancelled = false;
-
-        const loadRouteCenters = async () => {
-            if (routeValue == null || routeValue === "") {
-                clearRouteCenterSelection();
-                return;
-            }
-
+        if (routeValue == null || routeValue === "") {
             clearRouteCenterSelection();
+            return;
+        }
 
-            try {
-                console.log(`[MemberKilos] Loading route centers for route_id: ${routeValue}`);
-                const centers = await fetchRouteCentersForRoute(routeValue as number, {
-                    logContext: "MemberKilos",
-                    preferOnline: true,
-                });
+        setCenterValue(null);
+        setCenter(null);
 
-                if (cancelled) {
-                    return;
-                }
+        const centers = filterRouteCentersForRoute(allRouteCenters, routeValue as number);
+        setCenterItems(toRouteCenterDropdownItems(centers));
 
-                setCommonData((prev: any) => ({
-                    ...prev,
-                    route_centers: centers,
-                }));
-                setCenterItems(toRouteCenterDropdownItems(centers));
-
-                if (centers.length === 1) {
-                    const onlyCenter = centers[0];
-                    setCenterValue(onlyCenter.id);
-                    setCenter({
-                        id: onlyCenter.id,
-                        center: getRouteCenterDisplayName(onlyCenter),
-                    });
-                }
-            } catch (error: any) {
-                if (cancelled) {
-                    return;
-                }
-                console.error("[MemberKilos] Error loading route centers:", error);
-                clearRouteCenterSelection();
-            }
-        };
-
-        loadRouteCenters();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [routeValue, clearRouteCenterSelection]);
+        if (centers.length === 1) {
+            const onlyCenter = centers[0];
+            setCenterValue(onlyCenter.id);
+            setCenter({
+                id: onlyCenter.id,
+                center: getRouteCenterDisplayName(onlyCenter),
+            });
+        }
+    }, [routeValue, allRouteCenters, clearRouteCenterSelection]);
 
     useEffect(() => {
         if (measuringCanValue && Array.isArray(commonData?.cans)) {
@@ -1988,7 +1955,6 @@ const MemberKilosScreen = () => {
         const requiredFields = [
             { field: 'transporter', value: transporterValue, label: 'Transporter' },
             { field: 'route', value: routeValue, label: 'Route' },
-            { field: 'center', value: centerValue, label: 'Route Center' },
             { field: 'shift', value: shiftValue, label: 'Milk Delivery Shift' },
         ];
 
@@ -2087,6 +2053,80 @@ const MemberKilosScreen = () => {
 
             console.log("[MemberKilos] Sending milk journal payload:", payload);
 
+            const online = await checkConnectivity();
+
+            if (!online) {
+                if (isOfflineSaveBlocked) {
+                    setLoading(false);
+                    Alert.alert(
+                        "Go Online to Push",
+                        getOfflineBlockedMessage({
+                            isSyncing,
+                            requiresOnlinePush,
+                            maxOfflineHours: Math.round(
+                                collectionGate.maxOfflineIntakeMs / (60 * 60 * 1000)
+                            ) || undefined,
+                        })
+                    );
+                    return;
+                }
+
+                const moduleReady = await assertOfflineReferenceAvailable(MEMBER_KILOS_SYNC_KEY);
+                if (!moduleReady.allowed) {
+                    setLoading(false);
+                    Alert.alert("Offline Unavailable", moduleReady.message || "Cannot save offline.");
+                    return;
+                }
+
+                const capturedShiftName =
+                    (commonData.shifts || []).find((s: any) => s.id === shiftValue)?.name || "";
+                const primaryEntry = capturedEntries[0];
+                const primaryMember =
+                    (commonData.members || []).find((m: any) => m.id === primaryEntry?.member_id) ||
+                    null;
+
+                await insertOfflineData({
+                    endpoint: OFFLINE_SYNC_ENDPOINTS.MILK_JOURNALS,
+                    data: payload,
+                    summary_label:
+                        getMemberDisplayName(primaryMember) ||
+                        getMemberNumber(primaryMember) ||
+                        "Member kilos",
+                });
+
+                enableCollectionGateCheck();
+                await refreshCollectionGate();
+
+                const receiptTexts = buildOfflineCollectionReceipts({
+                    response: null,
+                    payload,
+                    localEntries: capturedEntries,
+                    commonData: {
+                        ...capturedCommonData,
+                        route_centers: capturedCommonData.route_centers?.length
+                            ? capturedCommonData.route_centers
+                            : center
+                              ? [center]
+                              : [],
+                    },
+                    transporterId: capturedTransporterValue,
+                    shiftId: capturedShiftValue,
+                    routeId: capturedRouteValue,
+                    centerId: capturedCenterValue,
+                });
+
+                if (receiptTexts.length > 0) {
+                    await printMemberKilosReceipts(receiptTexts);
+                }
+
+                setSuccessModalVisible(true);
+                setEntries([]);
+                setTotalCans(0);
+                setTotalQuantity(0);
+                setLoading(false);
+                return;
+            }
+
             const [status, response] = await makeRequest({
                 url: "milk-journals",
                 method: "POST",
@@ -2184,6 +2224,8 @@ const MemberKilosScreen = () => {
                 keyboardShouldPersistTaps="handled"
                 scrollEnabled={!isAnyDropdownOpen}
             >
+                <ReferenceDataMissingBanner visible={referenceDataMissing} />
+
                 {/* --- View/Record Toggle --- */}
                 <View style={styles.toggleContainer}>
                     <Text style={styles.toggleLabel}>{viewMode ? "View Kilos" : "Record Kilos"}</Text>
@@ -2593,7 +2635,14 @@ const MemberKilosScreen = () => {
 
                         {/* Bluetooth Connection Status - Compact */}
                         <View style={{ marginVertical: 6, padding: 8, backgroundColor: '#f8fafc', borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0' }}>
-                            {isScanningScale ? (
+                            {isConnectingScale && !connectedScaleDevice ? (
+                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                                    <ActivityIndicator size="small" color="#3b82f6" />
+                                    <Text style={{ marginLeft: 6, color: '#3b82f6', fontWeight: '500', fontSize: 12 }}>
+                                        Connecting to scale...
+                                    </Text>
+                                </View>
+                            ) : isScanningScale ? (
                                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
                                     <ActivityIndicator size="small" color="#3b82f6" />
                                     <Text style={{ marginLeft: 6, color: '#3b82f6', fontWeight: '500', fontSize: 12 }}>

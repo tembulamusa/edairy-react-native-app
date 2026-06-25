@@ -1,3 +1,5 @@
+import { sortDropdownItemsByLabel } from "./dropdownItems";
+
 type RouteLike = {
     name?: string;
     description?: string;
@@ -72,9 +74,43 @@ export function filterRouteCentersForRoute(
     });
 }
 
+export function toRouteDropdownItems(routes: any[]) {
+    return sortDropdownItemsByLabel(
+        (routes || []).map((route) => ({
+            label: getRouteDisplayName(route),
+            value: route.id,
+        }))
+    );
+}
+
 export function toRouteCenterDropdownItems(centers: any[]) {
-    return (centers || []).map((center) => ({
-        label: getRouteCenterDisplayName(center),
-        value: center.id,
-    }));
+    return sortDropdownItemsByLabel(
+        (centers || []).map((center) => ({
+            label: getRouteCenterDisplayName(center),
+            value: center.id,
+        }))
+    );
+}
+
+/** When a transporter is chosen, pick their default route if it exists in the list. */
+export function autoSelectRouteForTransporter(
+    selectedTransporter: any,
+    routes: any[],
+    setRouteValue: (value: number) => void
+): number | null {
+    const routeId =
+        selectedTransporter?.route_id ?? selectedTransporter?.default_route_id;
+    if (routeId == null || !routes?.length) {
+        return null;
+    }
+
+    const matchingRoute = routes.find(
+        (route: any) => Number(route.id) === Number(routeId)
+    );
+    if (matchingRoute) {
+        setRouteValue(matchingRoute.id);
+        return matchingRoute.id;
+    }
+
+    return null;
 }

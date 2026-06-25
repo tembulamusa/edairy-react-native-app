@@ -25,7 +25,7 @@ const ConnectivityToast: React.FC = () => {
     
     if (!isOnline) {
       // Going offline
-      setToastMessage('No internet connection');
+      setToastMessage('You are offline — you can keep working');
       setToastType('offline');
       setShowToast(true);
     } else if (showToast && toastType === 'offline') {

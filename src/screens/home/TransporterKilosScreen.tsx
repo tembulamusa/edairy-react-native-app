@@ -23,6 +23,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import useBluetoothService from "../../hooks/useBluetoothService";
 import BluetoothConnectionModal from "../../components/modals/BluetoothConnectionModal";
 import SuccessModal from "../../components/modals/SuccessModal";
+import { findShiftForCurrentTime, getCurrentShiftPeriod, describeShiftPeriod } from "../../utils/shift";
 
 const TransporterKilosScreen = () => {
     const [commonData, setCommonData] = useState<any>({});
@@ -158,52 +159,24 @@ const TransporterKilosScreen = () => {
             }))
         );
 
-        // Auto-select shift based on current time period (morning, afternoon, evening)
+        // Auto-select shift from current time (AM / noon / PM)
         if (commonData?.shifts && commonData.shifts.length > 0) {
-            const currentTime = new Date();
-            const currentHours = currentTime.getHours();
+            const currentPeriod = getCurrentShiftPeriod();
+            const matchingShift = findShiftForCurrentTime(commonData.shifts);
 
-            // Determine current time period
-            let currentPeriod: string;
-            if (currentHours >= 6 && currentHours < 12) {
-                currentPeriod = "morning";
-            } else if (currentHours >= 12 && currentHours < 18) {
-                currentPeriod = "afternoon";
-            } else {
-                // Evening: 18:00 (6 PM) to 06:00 (6 AM next day)
-                currentPeriod = "evening";
-            }
-
-            console.log(`[TransporterKilos] Current time: ${currentHours}:${currentTime.getMinutes()} - Period: ${currentPeriod}`);
-            console.log(`[TransporterKilos] Available shifts:`, commonData.shifts.map((s: any) => ({ id: s.id, name: s.name, time: s.time })));
-
-            // Find shift that matches current time period
-            const matchingShift = commonData.shifts.find((s: any) => {
-                if (!s.time) {
-                    console.log(`[TransporterKilos] Shift ${s.id} (${s.name}) has no time field`);
-                    return false;
-                }
-
-                // Normalize the time field to lowercase and remove any extra whitespace
-                const shiftTime = s.time.toString().trim().toLowerCase();
-
-                // More flexible matching - check if the time field contains the period
-                // This handles cases like "Morning Shift", "morning", "MORNING", etc.
-                const matches = shiftTime === currentPeriod ||
-                    shiftTime.includes(currentPeriod) ||
-                    currentPeriod.includes(shiftTime);
-
-                console.log(`[TransporterKilos] Shift ${s.id} (${s.name}): time="${s.time}" -> normalized="${shiftTime}", currentPeriod="${currentPeriod}", matches=${matches}`);
-
-                return matches;
-            });
+            console.log(
+                `[TransporterKilos] Current period: ${describeShiftPeriod(currentPeriod)}`
+            );
 
             if (matchingShift) {
                 setShiftValue(matchingShift.id);
-                console.log(`[TransporterKilos] ✅ Auto-selected shift: ${matchingShift.name} (ID: ${matchingShift.id}) - Time period: ${currentPeriod}`);
+                console.log(
+                    `[TransporterKilos] Auto-selected shift: ${matchingShift.name} (ID: ${matchingShift.id})`
+                );
             } else {
-                console.log(`[TransporterKilos] ❌ No shift found matching current time period: ${currentPeriod}`);
-                console.log(`[TransporterKilos] Available shift times:`, commonData.shifts.map((s: any) => s.time).filter(Boolean));
+                console.log(
+                    `[TransporterKilos] No shift matched current period: ${describeShiftPeriod(currentPeriod)}`
+                );
             }
         }
     }, [commonData]);

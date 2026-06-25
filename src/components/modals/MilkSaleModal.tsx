@@ -16,6 +16,7 @@ import {
 import Icon from "react-native-vector-icons/MaterialIcons";
 import DropDownPicker from "react-native-dropdown-picker";
 import makeRequest from "../utils/makeRequest";
+import { toCustomerDropdownItems } from "../../utils/referenceDataFetch";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import useBluetoothService from "../../hooks/useBluetoothService";
 import BluetoothConnectionModal from "./BluetoothConnectionModal";
@@ -89,12 +90,7 @@ const MilkSaleModal: React.FC<MilkSaleModalProps> = ({
                 })) || []
             );
 
-            setCustomerItems(
-                commonData?.customers?.map((c) => ({
-                    label: `${c.first_name} ${c.last_name}`,
-                    value: c.id,
-                })) || []
-            );
+            setCustomerItems(toCustomerDropdownItems(commonData?.customers || []));
 
             setShiftItems([
                 { label: "All Shifts", value: "all" },

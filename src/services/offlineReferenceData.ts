@@ -16,13 +16,14 @@ import {
     saveMemberKilosReferenceSyncMeta,
     saveMembers,
     saveRoutes,
+    saveAllRouteCenters,
     saveRouteCentersForRoute,
     saveShifts,
     saveTransporters,
 } from "./offlineDatabase";
 import { referenceDataLimitParams } from "../utils/referenceDataFetch";
 import { filterRouteCentersForRoute } from "../utils/route";
-import { checkConnectivity } from "./offlineSync";
+import { checkConnectivity } from "./connectivity";
 
 export type MemberKilosReferenceDataInput = {
     transporters?: any[];
@@ -38,6 +39,7 @@ export type MemberKilosReferenceData = {
     routes: any[];
     shifts: any[];
     cans: any[];
+    routeCenters: any[];
 };
 
 export {
@@ -81,6 +83,7 @@ async function persistReferenceSyncCountsFromSQLite(): Promise<void> {
         routes: snapshot.routes.length,
         shifts: snapshot.shifts.length,
         cans: snapshot.cans.length,
+        route_centers: snapshot.routeCenters.length,
     });
 }
 
@@ -88,13 +91,15 @@ async function persistReferenceSyncCountsFromSQLite(): Promise<void> {
 export async function loadMemberKilosReferenceDataFromSQLite(): Promise<MemberKilosReferenceData> {
     await initDatabase();
 
-    const [transporters, members, routes, shifts, measuringCans] = await Promise.all([
-        getTransporters(),
-        getMembers(),
-        getRoutes(),
-        getShifts(),
-        getMeasuringCans(),
-    ]);
+    const [transporters, members, routes, shifts, measuringCans, routeCenters] =
+        await Promise.all([
+            getTransporters(),
+            getMembers(),
+            getRoutes(),
+            getShifts(),
+            getMeasuringCans(),
+            getRouteCenters(),
+        ]);
 
     return {
         transporters: transporters || [],
@@ -102,6 +107,7 @@ export async function loadMemberKilosReferenceDataFromSQLite(): Promise<MemberKi
         routes: routes || [],
         shifts: shifts || [],
         cans: normalizeMemberKilosCans(measuringCans || []),
+        routeCenters: routeCenters || [],
     };
 }
 
@@ -235,6 +241,14 @@ export async function refreshMemberKilosReferenceDataFromServer(
     if (cans.length > 0) {
         await saveMeasuringCans(cans);
         console.log(`[REF-DATA] Saved ${cans.length} milk cans to SQLite`);
+    }
+
+    const routeCenters = ensureRecordArray(
+        await fetchCommonData({ name: "route-centers", ...fetchOptions })
+    );
+    if (routeCenters.length > 0) {
+        await saveAllRouteCenters(routeCenters);
+        console.log(`[REF-DATA] Saved ${routeCenters.length} route centers to SQLite`);
     }
 
     await persistReferenceSyncCountsFromSQLite();

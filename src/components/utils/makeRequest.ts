@@ -1,5 +1,5 @@
 import { Alert } from "react-native";
-import { getItem } from "./local-storage";
+import { getAuthToken } from "./local-storage";
 import NetInfo from '@react-native-community/netinfo';
 
 let hasShownNetworkAlert = false;
@@ -11,15 +11,53 @@ const getServerUrl = async (): Promise<string> => {
     return `${DEFAULT_BASE_URL}/api/`;
 };
 
-type MakeRequestOptions = {
+export type MakeRequestOptions = {
     url: string;
     method: string;
     data?: any;
     use_jwt?: boolean;
     responseType?: string;
+    /** When true, send `data` as multipart/form-data. Auto-detected when `data` is FormData. */
     isFormData?: boolean;
     skipAuth?: boolean;
 };
+
+/** True when the request body should be sent as multipart/form-data. */
+export function isMultipartRequestBody(data: unknown, isFormData = false): boolean {
+    if (isFormData) {
+        return true;
+    }
+    if (data == null || typeof data !== "object") {
+        return false;
+    }
+    if (typeof FormData !== "undefined" && data instanceof FormData) {
+        return true;
+    }
+    // React Native FormData polyfill
+    return "_parts" in data;
+}
+
+/**
+ * Prepare fetch body + content type.
+ * JSON is the default; multipart is used for FormData (do not set Content-Type — RN adds the boundary).
+ */
+export function prepareRequestBody(
+    data: unknown,
+    isFormData = false
+): { body: FormData | string; contentType: string | null } | { body: undefined; contentType: null } {
+    if (data == null) {
+        return { body: undefined, contentType: null };
+    }
+
+    if (isMultipartRequestBody(data, isFormData)) {
+        return { body: data as FormData, contentType: null };
+    }
+
+    return {
+        body: JSON.stringify(data),
+        contentType: "application/json",
+    };
+}
 
 const makeRequest = async ({
     url,
@@ -68,15 +106,17 @@ const makeRequest = async ({
         accept: "application/json",
     };
 
-    if (!isFormData) {
-        headers["content-type"] = "application/json";
+    const prepared = prepareRequestBody(data, isFormData);
+    if (prepared.contentType) {
+        headers["content-type"] = prepared.contentType;
     }
 
     if (!skipAuth) {
-        const user = await getItem("user");
-        const token = user?.access_token || user?.token;
+        const token = await getAuthToken();
         if (token) {
             headers.Authorization = `Bearer ${token}`;
+        } else {
+            console.warn("[makeRequest] No auth token available for", endpoint);
         }
     }
 
@@ -86,8 +126,8 @@ const makeRequest = async ({
             headers,
         };
 
-        if (data) {
-            request.body = isFormData ? data : JSON.stringify(data);
+        if (prepared.body != null) {
+            request.body = prepared.body;
         }
 
         const response = await fetch(fullUrl, request);

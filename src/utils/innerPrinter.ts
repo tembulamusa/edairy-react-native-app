@@ -1,5 +1,6 @@
 import RNBluetoothClassic from "react-native-bluetooth-classic";
 import filterBluetoothDevices from "../components/utils/device-filter";
+import { requestAndroidBluetoothPermissions } from "./bluetoothPermissions";
 
 export function isInnerPrinterDevice(
     name?: string | null,
@@ -17,6 +18,12 @@ export function isInnerPrinterDevice(
 
 export async function findFirstClassicInnerPrinter(): Promise<any | null> {
     try {
+        const permitted = await requestAndroidBluetoothPermissions();
+        if (!permitted) {
+            console.warn("[INNER-PRINTER] Bluetooth permissions not granted");
+            return null;
+        }
+
         const bonded = await RNBluetoothClassic.getBondedDevices();
         const bondedPrinters = await filterBluetoothDevices(bonded || [], "printer");
         const bondedInner = bondedPrinters.find((device) =>

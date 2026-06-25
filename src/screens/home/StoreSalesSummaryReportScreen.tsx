@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
     View,
     Text,
@@ -15,12 +16,38 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 // @ts-ignore - library lacks TypeScript declarations in current setup
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import DropDownPicker from 'react-native-dropdown-picker';
+import { renderDropdownItem } from '../../assets/styles/all';
+import { globalStyles, getDropdownPickerModalProps } from '../../styles';
+import { resolveDropDownPickerValue } from '../../utils/dropdownItems';
+import { toMemberDropdownItems, toStoreDropdownItems, pickDefaultStoreValue } from '../../utils/storeSales';
+import {
+    fetchStoreSalesSummary,
+    hasStoreSalesReferenceData,
+    loadStoreSalesReferenceDataFromSQLite,
+    checkConnectivity,
+} from '../../services/storeSalesReferenceData';
+import { initDatabase } from '../../services/offlineDatabase';
 import StoreSaleModal from '../../components/modals/StoreSaleModal';
-import fetchCommonData from '../../components/utils/fetchCommonData';
+import ReferenceDataMissingBanner from '../../components/ReferenceDataMissingBanner';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import useBluetoothService from '../../hooks/useBluetoothService';
 import BluetoothConnectionModal from '../../components/modals/BluetoothConnectionModal';
 import SuccessModal from '../../components/modals/SuccessModal';
+import { ensureClassicBluetoothEnabled } from '../../utils/bluetoothPermissions';
+import useCan from '../../hooks/useCan';
+import { useSync } from '../../context/SyncContext';
+
+const PERM_STORE_SALES_CREATE = 'store-sales.create';
+
+const DROPDOWN_STACK = {
+    store: { zIndex: 4000, zIndexInverse: 2000 },
+    member: { zIndex: 3500, zIndexInverse: 2500 },
+} as const;
+
+const getDropdownColStyle = (zIndex: number) => ({
+    zIndex,
+    elevation: zIndex / 1000,
+});
 
 const SalesReportScreen = () => {
     const [fromDate, setFromDate] = useState(new Date());
@@ -32,7 +59,8 @@ const SalesReportScreen = () => {
     const [commonData, setCommonData] = useState<any>({});
     const [storeSalesSummary, setStoreSalesSummary] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
-    const [canCreateSale, setCanCreateSale] = useState(false);
+    const canCreateSale = useCan(PERM_STORE_SALES_CREATE);
+    const { enableCollectionGateCheck, refreshCollectionGate } = useSync();
 
     // Dropdowns
     const [storeOpen, setStoreOpen] = useState(false);
@@ -43,12 +71,16 @@ const SalesReportScreen = () => {
     const [memberValue, setMemberValue] = useState<number | null>(null);
     const [memberItems, setMemberItems] = useState<any[]>([]);
 
-    const [stockOpen, setStockOpen] = useState(false);
-    const [stockValue, setStockValue] = useState<number | null>(null);
-    const [stockItems, setStockItems] = useState<any[]>([]);
+    const closeOtherDropdowns = useCallback((current: string) => {
+        if (current !== 'store') setStoreOpen(false);
+        if (current !== 'member') setMemberOpen(false);
+    }, []);
+
+    const isAnyDropdownOpen = storeOpen || memberOpen;
 
     const [printing, setPrinting] = useState(false);
     const [printerModalVisible, setPrinterModalVisible] = useState(false);
+    const [referenceDataMissing, setReferenceDataMissing] = useState(false);
 
     const {
         devices: printerDevices,
@@ -59,7 +91,7 @@ const SalesReportScreen = () => {
         isConnecting: isConnectingPrinter,
         disconnect: disconnectPrinter,
         printText: printTextToPrinter,
-    } = useBluetoothService({ deviceType: 'printer' });
+    } = useBluetoothService({ deviceType: 'printer', autoConnectOnMount: false });
 
     const printerDevicesRef = useRef<any[]>(printerDevices || []);
     const isMountedRef = useRef(true);
@@ -75,72 +107,50 @@ const SalesReportScreen = () => {
     }, []);
 
 
-    // Check user permissions
-    useEffect(() => {
-        const checkUserPermissions = async () => {
-            try {
-                const userDataString = await AsyncStorage.getItem('user');
-                if (userDataString) {
-                    const userData = JSON.parse(userDataString);
-                    const userGroups = userData?.user_groups || [];
-                    
-                    // User can create sale if they are employee or transporter
-                    const canCreate = userGroups.includes('employee') || userGroups.includes('transporter');
-                    setCanCreateSale(canCreate);
-                } else {
-                    setCanCreateSale(false);
-                }
-            } catch (error) {
-                console.error('Error checking user permissions:', error);
-                setCanCreateSale(false);
-            }
-        };
-
-        checkUserPermissions();
+    const applyReferenceData = useCallback((data: {
+        members: any[];
+        employees: any[];
+        vendors: any[];
+        transporters: any[];
+        suppliers: any[];
+        stores: any[];
+    }) => {
+        setCommonData(data);
+        setMemberItems(toMemberDropdownItems(data.members));
+        const storeDropdownItems = toStoreDropdownItems(data.stores);
+        setStoreItems(storeDropdownItems);
+        setStoreValue((current) => pickDefaultStoreValue(storeDropdownItems, current));
     }, []);
 
-    // Load static common data once
-    useEffect(() => {
-        const loadCommonData = async () => {
-            try {
-                const [members, employees, vendors, transporters, suppliers, stores, stock_items] = await Promise.all([
-                    fetchCommonData({ name: 'members' }),
-                    fetchCommonData({ name: 'employees' }),
-                    fetchCommonData({ name: 'vendors' }),
-                    fetchCommonData({ name: 'transporters' }),
-                    fetchCommonData({ name: 'suppliers' }),
-                    fetchCommonData({ name: 'stores' }),
-                    fetchCommonData({ name: 'stock_items' }),
-                ]);
-                const allData = { members, employees, vendors, transporters, suppliers, stores, stock_items };
-                setCommonData(allData);
+    const loadReferenceData = useCallback(async () => {
+        try {
+            await initDatabase();
 
-                setMemberItems(
-                    members?.map((m: any) => ({
-                        label: `${m.first_name} ${m.last_name}`,
-                        value: m.id,
-                    })) || []
-                );
-                setStoreItems(
-                    stores?.map((s: any) => ({
-                        label: s.description || s.name || `Store ${s.id}`,
-                        value: s.id,
-                    })) || []
-                );
-                setStockItems(
-                    stock_items?.map((s: any) => ({
-                        label: s.name,
-                        value: s.id,
-                        unit_price: s.unit_price,
-                    })) || []
-                );
-            } catch (error: any) {
-                Alert.alert('Error', `Failed to load common data: ${error.message || error}`);
+            const referenceData = await loadStoreSalesReferenceDataFromSQLite();
+            if (!hasStoreSalesReferenceData(referenceData)) {
+                setReferenceDataMissing(true);
+                return;
             }
-        };
 
-        loadCommonData();
+            setReferenceDataMissing(false);
+            applyReferenceData(referenceData);
+            console.log('[StoreSales] Loaded reference data from SQLite');
+        } catch (error: any) {
+            Alert.alert('Error', `Failed to load common data: ${error.message || error}`);
+        }
+    }, [applyReferenceData]);
+
+    useEffect(() => {
+        loadReferenceData();
+        enableCollectionGateCheck();
+        void refreshCollectionGate();
     }, []);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadReferenceData();
+        }, [loadReferenceData])
+    );
 
     useEffect(() => {
         const loadSalesData = async () => {
@@ -148,6 +158,13 @@ const SalesReportScreen = () => {
                 // if no store selected, clear summary
                 if (!storeValue) {
                     setStoreSalesSummary([]);
+                    return;
+                }
+
+                const online = await checkConnectivity();
+                if (!online) {
+                    setStoreSalesSummary([]);
+                    setLoading(false);
                     return;
                 }
 
@@ -168,11 +185,7 @@ const SalesReportScreen = () => {
                 if (memberValue) params["member_id"] = memberValue;
                 if (saleType && saleType !== "all") params["sale_type"] = saleType;
 
-                const data = await fetchCommonData({
-                    name: "store_sales",
-                    cachable: false,
-                    params,
-                });
+                const data = await fetchStoreSalesSummary(params, 'StoreSales');
                 setStoreSalesSummary(data || []);
             } catch (error) {
                 console.error("Error loading sales report:", error);
@@ -623,9 +636,14 @@ const SalesReportScreen = () => {
             return;
         }
 
+        const bluetoothReady = await ensureClassicBluetoothEnabled({ promptIfDisabled: true });
+        if (!bluetoothReady) {
+            return;
+        }
+
         // Get selected store and member
         const selectedStore = (commonData?.stores || []).find((s: any) => s.id === storeValue);
-        const selectedMember = (commonData?.customers || []).find((m: any) => m.id === memberValue);
+        const selectedMember = (commonData?.members || []).find((m: any) => m.id === memberValue);
 
         // Format receipt
         let receiptText = "";
@@ -726,6 +744,12 @@ const SalesReportScreen = () => {
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={true}
                 nestedScrollEnabled={true}
+                scrollEnabled={!isAnyDropdownOpen}
+                keyboardShouldPersistTaps="handled"
+                onScrollBeginDrag={() => {
+                    if (storeOpen) setStoreOpen(false);
+                    if (memberOpen) setMemberOpen(false);
+                }}
             >
                 <View style={styles.headerRow}>
                     <Text style={styles.title}>Store Sales</Text>
@@ -739,6 +763,8 @@ const SalesReportScreen = () => {
                         </TouchableOpacity>
                     )}
                 </View>
+
+                <ReferenceDataMissingBanner visible={referenceDataMissing} />
 
                 <View style={styles.content}>
                     {/* From & To in same row */}
@@ -801,44 +827,63 @@ const SalesReportScreen = () => {
 
                     {/* Store & Member in same row */}
                     <View style={styles.row}>
-                        <View style={styles.col}>
+                        <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.store.zIndex)]}>
                             <Text style={styles.label}>Store</Text>
                             <DropDownPicker
+                                {...getDropdownPickerModalProps('Select store')}
                                 open={storeOpen}
                                 value={storeValue}
                                 items={storeItems}
-                                setOpen={setStoreOpen}
-                                setValue={setStoreValue}
+                                setOpen={(open) => {
+                                    setStoreOpen(open);
+                                    if (open) closeOtherDropdowns('store');
+                                }}
+                                setValue={(callback) => {
+                                    const next = resolveDropDownPickerValue(callback, storeValue);
+                                    setStoreValue(next as number | null);
+                                }}
                                 setItems={setStoreItems}
                                 placeholder="Select Store"
-                                listMode="SCROLLVIEW"
-                                zIndex={2500}
-                                zIndexInverse={2000}
-                                style={styles.dropdown}
-                                dropDownContainerStyle={styles.dropdownBox}
-                                searchable={true}
+                                searchable
                                 searchPlaceholder="Search store..."
-                                scrollViewProps={{ nestedScrollEnabled: true }}
+                                renderListItem={renderDropdownItem}
+                                zIndex={DROPDOWN_STACK.store.zIndex}
+                                zIndexInverse={DROPDOWN_STACK.store.zIndexInverse}
+                                style={globalStyles.basedropdown}
+                                dropDownContainerStyle={[
+                                    globalStyles.basedropdown,
+                                    globalStyles.dropdownListContainer,
+                                ]}
                             />
                         </View>
 
-                        <View style={styles.col}>
+                        <View style={[styles.col, getDropdownColStyle(DROPDOWN_STACK.member.zIndex)]}>
                             <Text style={styles.label}>Member</Text>
                             <DropDownPicker
+                                {...getDropdownPickerModalProps('Select member')}
                                 open={memberOpen}
                                 value={memberValue}
                                 items={memberItems}
-                                setOpen={setMemberOpen}
-                                setValue={setMemberValue}
+                                setOpen={(open) => {
+                                    setMemberOpen(open);
+                                    if (open) closeOtherDropdowns('member');
+                                }}
+                                setValue={(callback) => {
+                                    const next = resolveDropDownPickerValue(callback, memberValue);
+                                    setMemberValue(next as number | null);
+                                }}
                                 setItems={setMemberItems}
-                                listMode="SCROLLVIEW"
-                                searchable={true}
                                 placeholder="Select Member"
-                                style={styles.dropdown}
-                                dropDownContainerStyle={styles.dropdownBox}
-                                zIndex={2000}
-                                zIndexInverse={2500}
-                                scrollViewProps={{ nestedScrollEnabled: true }}
+                                searchable
+                                searchPlaceholder="Search members..."
+                                renderListItem={renderDropdownItem}
+                                zIndex={DROPDOWN_STACK.member.zIndex}
+                                zIndexInverse={DROPDOWN_STACK.member.zIndexInverse}
+                                style={globalStyles.basedropdown}
+                                dropDownContainerStyle={[
+                                    globalStyles.basedropdown,
+                                    globalStyles.dropdownListContainer,
+                                ]}
                             />
                         </View>
                     </View>
@@ -933,17 +978,24 @@ const SalesReportScreen = () => {
             </ScrollView>
 
             {/* Modals */}
-            <StoreSaleModal
-                visible={modalVisible}
-                onClose={() => setModalVisible(false)}
-                onSave={async (data) => {
-                    console.log('New Sale Data:', data);
-                    Alert.alert('Success', 'New sale saved!');
-                    setModalVisible(false);
-                    return;
-                }}
-                commonData={commonData}
-            />
+            {modalVisible && (
+                <StoreSaleModal
+                    visible={modalVisible}
+                    onClose={() => setModalVisible(false)}
+                    onSave={async (data) => {
+                        setModalVisible(false);
+                        if (data?.offline) {
+                            Alert.alert(
+                                'Saved',
+                                'Sale saved locally. It will upload automatically when you are back online.'
+                            );
+                        } else {
+                            Alert.alert('Success', 'Sale recorded successfully');
+                        }
+                    }}
+                    commonData={commonData}
+                />
+            )}
             <BluetoothConnectionModal
                 visible={printerModalVisible}
                 onClose={() => {

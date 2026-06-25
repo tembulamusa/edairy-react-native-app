@@ -8,20 +8,43 @@ import {
     TextInput,
     ActivityIndicator,
     Alert,
-    FlatList,
     ScrollView,
     KeyboardAvoidingView,
     Platform,
 } from "react-native";
-import DateTimePickerModal from "react-native-modal-datetime-picker";
 // @ts-ignore - library lacks TypeScript declarations in current setup
 import Icon from "react-native-vector-icons/MaterialIcons";
 import DropDownPicker from "react-native-dropdown-picker";
 import { renderDropdownItem } from "../../assets/styles/all";
+import { globalStyles, getDropdownPickerModalProps } from "../../styles";
+import { resolveDropDownPickerValue } from "../../utils/dropdownItems";
+import {
+    toMemberDropdownItems,
+    toPersonDropdownItems,
+    toStoreDropdownItems,
+    toStockDropdownItems,
+    toTransporterDropdownItems,
+    pickDefaultStoreValue,
+    getStockItemName,
+    getStockAvailableQuantity,
+} from "../../utils/storeSales";
+import { fetchStoreStocks } from "../../services/storeSalesReferenceData";
 import makeRequest from "../utils/makeRequest";
 import BluetoothConnectionModal from "./BluetoothConnectionModal";
 import useBluetoothService from "../../hooks/useBluetoothService";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { ensureClassicBluetoothEnabled } from "../../utils/bluetoothPermissions";
+import { checkConnectivity } from "../../services/offlineSync";
+import {
+    insertOfflineData,
+    OFFLINE_SYNC_ENDPOINTS,
+    STORE_SALES_SYNC_KEY,
+} from "../../services/offlineDatabase";
+import { useSync } from "../../context/SyncContext";
+import {
+    assertOfflineReferenceAvailable,
+    getOfflineBlockedMessage,
+} from "../../utils/offlineSaveGate";
 
 type CustomerType = "member" | "employee" | "vendor" | "transporter" | "supplier" | "guest";
 
@@ -36,21 +59,20 @@ type StoreSaleModalProps = {
         transporters?: { id: number; first_name: string; last_name: string; transporter_no?: string }[];
         suppliers?: { id: number; first_name: string; last_name: string; supplier_no?: string }[];
         stores: { id: number; description: string }[];
-        stock_items: Array<{
-            id: number;
-            name?: string;
-            unit_price?: number;
-            selling_price?: number;
-            item?: {
-                description?: string;
-                selling_price?: number;
-                unit_price?: number;
-                name?: string;
-            };
-            [key: string]: any;
-        }>;
     };
 };
+
+const DROPDOWN_STACK = {
+    customerType: { zIndex: 5000, zIndexInverse: 1000 },
+    member: { zIndex: 4500, zIndexInverse: 1500 },
+    store: { zIndex: 4000, zIndexInverse: 2000 },
+    stock: { zIndex: 3500, zIndexInverse: 2500 },
+} as const;
+
+const getDropdownColStyle = (zIndex: number) => ({
+    zIndex,
+    elevation: zIndex / 1000,
+});
 
 const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
     visible,
@@ -61,10 +83,17 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
     const [errors, setErrors] = useState<any | null>({});
     const [transactionDate, setTransactionDate] = useState<Date>(new Date());
     const [saving, setSaving] = useState(false);
-    const [showDatePicker, setShowDatePicker] = useState(false);
+    const {
+        collectionGate,
+        isSyncing,
+        enableCollectionGateCheck,
+        refreshCollectionGate,
+    } = useSync();
+    const { requiresOnlinePush } = collectionGate;
+    const isOfflineSaveBlocked = isSyncing || requiresOnlinePush;
 
     // Customer type selection
-    const [customerType, setCustomerType] = useState<CustomerType>("member");
+    const [customerType, setCustomerType] = useState<CustomerType>("guest");
     const [customerTypeItems] = useState([
         { label: "Member", value: "member" },
         { label: "Employee", value: "employee" },
@@ -89,6 +118,17 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
     const [stockOpen, setStockOpen] = useState(false);
     const [stockValue, setStockValue] = useState<number | null>(null);
     const [stockItems, setStockItems] = useState<{ label: string; value: number }[]>([]);
+    const [storeStocks, setStoreStocks] = useState<any[]>([]);
+    const [loadingStocks, setLoadingStocks] = useState(false);
+
+    const closeOtherDropdowns = useCallback((current: string) => {
+        if (current !== "customerType") setCustomerTypeOpen(false);
+        if (current !== "member") setMemberOpen(false);
+        if (current !== "store") setStoreOpen(false);
+        if (current !== "stock") setStockOpen(false);
+    }, []);
+
+    const isAnyDropdownOpen = customerTypeOpen || memberOpen || storeOpen || stockOpen;
 
     type EntryItem = {
         id: number;
@@ -125,7 +165,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         isConnecting: isConnectingPrinter,
         printText,
         printRaw
-    } = useBluetoothService({ deviceType: 'printer' });
+    } = useBluetoothService({ deviceType: 'printer', autoConnectOnMount: true });
 
     const printerDevicesRef = useRef<any[]>(printerDevices || []);
     useEffect(() => {
@@ -257,122 +297,99 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
     // Load dropdowns whenever commonData or customerType changes
     useEffect(() => {
-        // Clear dropdown first when switching customer types
         setMemberItems([]);
         setMemberValue(null);
         setMemberOpen(false);
 
-        // Load customer items based on customer type
         if (customerType === "member") {
             if (commonData?.members) {
-                setMemberItems([
-                    ...commonData.members.map((m) => {
-                        const name = `${m?.first_name ?? ""} ${m?.last_name ?? ""}`.trim() || "Unknown";
-                        const no = m?.member_no ?? m?.id;
-                        return { label: `${name} (${no})`, value: m.id };
-                    }),
-                ]);
+                setMemberItems(toMemberDropdownItems(commonData.members));
             } else {
-                // Members not loaded yet, keep dropdown empty
-                console.log('StoreSaleModal: Members data not available yet');
+                console.log("StoreSaleModal: Members data not available yet");
                 setMemberItems([]);
             }
         } else if (customerType === "employee") {
             if (commonData?.employees) {
-                setMemberItems([
-                    ...commonData.employees.map((e) => {
-                        const name = `${e?.first_name ?? ""} ${e?.last_name ?? ""}`.trim() || "Unknown";
-                        const no = e?.employee_no ?? e?.id;
-                        return { label: `${name} (${no})`, value: e.id };
-                    }),
-                ]);
+                setMemberItems(toPersonDropdownItems(commonData.employees, "employee_no"));
             } else {
-                // Employees not loaded yet, keep dropdown empty
-                console.log('StoreSaleModal: Employees data not available yet');
+                console.log("StoreSaleModal: Employees data not available yet");
                 setMemberItems([]);
             }
         } else if (customerType === "vendor") {
             if (commonData?.vendors) {
-                setMemberItems([
-                    ...commonData.vendors.map((v) => {
-                        const name = `${v?.first_name ?? ""} ${v?.last_name ?? ""}`.trim() || "Unknown";
-                        const no = v?.vendor_no ?? v?.id;
-                        return { label: `${name} (${no})`, value: v.id };
-                    }),
-                ]);
+                setMemberItems(toPersonDropdownItems(commonData.vendors, "vendor_no"));
             } else {
-                console.log('StoreSaleModal: Vendors data not available yet');
+                console.log("StoreSaleModal: Vendors data not available yet");
                 setMemberItems([]);
             }
         } else if (customerType === "transporter") {
             if (commonData?.transporters) {
-                setMemberItems([
-                    ...commonData.transporters.map((t) => {
-                        const name = `${t?.first_name ?? ""} ${t?.last_name ?? ""}`.trim() || "Unknown";
-                        const no = t?.transporter_no ?? t?.id;
-                        return { label: `${name} (${no})`, value: t.id };
-                    }),
-                ]);
+                setMemberItems(toTransporterDropdownItems(commonData.transporters));
             } else {
-                console.log('StoreSaleModal: Transporters data not available yet');
+                console.log("StoreSaleModal: Transporters data not available yet");
                 setMemberItems([]);
             }
         } else if (customerType === "supplier") {
             if (commonData?.suppliers) {
-                setMemberItems([
-                    ...commonData.suppliers.map((s) => {
-                        const name = `${s?.first_name ?? ""} ${s?.last_name ?? ""}`.trim() || "Unknown";
-                        const no = s?.supplier_no ?? s?.id;
-                        return { label: `${name} (${no})`, value: s.id };
-                    }),
-                ]);
+                setMemberItems(toPersonDropdownItems(commonData.suppliers, "supplier_no"));
             } else {
-                console.log('StoreSaleModal: Suppliers data not available yet');
+                console.log("StoreSaleModal: Suppliers data not available yet");
                 setMemberItems([]);
             }
         } else if (customerType === "guest") {
-            // For guest, no dropdown is shown, so clear items and selection
             setMemberItems([]);
             setMemberValue(null);
             setMemberOpen(false);
         }
+
         if (commonData?.stores) {
-            setStoreItems(
-                commonData.stores.map((s) => ({
-                    label: s.description || `Store ${s.id}`,
-                    value: s.id,
-                }))
-            );
+            const items = toStoreDropdownItems(commonData.stores);
+            setStoreItems(items);
+            setStoreValue((current) => pickDefaultStoreValue(items, current));
         }
     }, [commonData, customerType]);
 
-    // Load stock items whenever commonData changes
     useEffect(() => {
-        if (commonData?.stock_items) {
-            setStockItems(
-                commonData.stock_items.map((s) => {
-                    const itemName = s?.item?.description
-                        ? String(s.item.description)
-                        : s?.name
-                            ? String(s.name)
-                            : `Item ${s.id}`;
-
-                    // Get available stock quantity (check multiple possible field names)
-                    const stockQty = s?.quantity ?? s?.stock ?? s?.available_quantity ?? s?.stock_quantity ?? s?.available_stock ?? null;
-
-                    // Add quantity in brackets if available (remove decimals)
-                    const label = stockQty !== null && stockQty !== undefined
-                        ? `${itemName} (${Math.floor(Number(stockQty))})`
-                        : itemName;
-
-                    return {
-                        label,
-                        value: s.id,
-                    };
-                })
-            );
+        if (!visible || !storeValue) {
+            setStoreStocks([]);
+            setStockItems([]);
+            setStockValue(null);
+            return;
         }
-    }, [commonData]);
+
+        let cancelled = false;
+
+        const loadStoreStocks = async () => {
+            setLoadingStocks(true);
+            try {
+                const stocks = await fetchStoreStocks(storeValue, "StoreSale");
+                if (cancelled) {
+                    return;
+                }
+                setStoreStocks(stocks);
+                setStockItems(toStockDropdownItems(stocks));
+                setStockValue(null);
+                setEntries([]);
+            } catch (error) {
+                console.error("[StoreSale] Failed to load store stocks:", error);
+                if (!cancelled) {
+                    setStoreStocks([]);
+                    setStockItems([]);
+                    setStockValue(null);
+                }
+            } finally {
+                if (!cancelled) {
+                    setLoadingStocks(false);
+                }
+            }
+        };
+
+        loadStoreStocks();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [storeValue, visible]);
 
     // Reset member selection when customer type changes
     useEffect(() => {
@@ -389,32 +406,143 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
         }
     }, [customerType]);
 
-    const addStockEntry = (stockId: number) => {
-        const stock = commonData.stock_items.find((s) => s.id === stockId);
-        if (stock && !entries.find((e) => e.id === stock.id)) {
-            // Get available stock quantity (check multiple possible field names)
-            const availableStock = stock?.quantity ?? stock?.stock ?? stock?.available_quantity ?? stock?.stock_quantity ?? stock?.available_stock ?? null;
+    useEffect(() => {
+        if (!visible) {
+            return;
+        }
 
-            setEntries([
-                ...entries,
+        setTransactionDate(new Date());
+
+        if (commonData?.stores?.length) {
+            const items = toStoreDropdownItems(commonData.stores);
+            setStoreValue((current) => pickDefaultStoreValue(items, current));
+        }
+    }, [visible, commonData?.stores]);
+
+    const addStockEntry = useCallback((stockId: number) => {
+        const stock = storeStocks.find((s) => s.id === stockId);
+        if (!stock) {
+            return;
+        }
+
+        const availableStock = getStockAvailableQuantity(stock);
+        const maxQty =
+            availableStock != null ? Math.floor(availableStock) : Number.POSITIVE_INFINITY;
+        const unitPrice =
+            Number(
+                stock?.selling_price ??
+                    stock?.unit_price ??
+                    stock?.item?.selling_price ??
+                    stock?.item?.unit_price ??
+                    0
+            ) || 0;
+
+        setEntries((prev) => {
+            const existingIndex = prev.findIndex((entry) => entry.id === stock.id);
+            if (existingIndex >= 0) {
+                const updated = [...prev];
+                const currentQty = parseInt(updated[existingIndex].quantity || "0", 10) || 0;
+                const nextQty = Math.min(currentQty + 1, maxQty);
+                updated[existingIndex] = {
+                    ...updated[existingIndex],
+                    quantity: String(nextQty),
+                };
+                return updated;
+            }
+
+            return [
+                ...prev,
                 {
                     ...stock,
-                    unit_price:
-                        Number(
-                            stock?.selling_price ??
-                            stock?.unit_price ??
-                            stock?.item?.selling_price ??
-                            stock?.item?.unit_price ??
-                            0
-                        ) || 0,
+                    item_name: getStockItemName(stock),
+                    unit_price: unitPrice,
                     quantity: "1",
-                    // Store available stock for validation
                     available_stock: availableStock,
                 },
-            ]);
-        }
-        // setStockValue(null);
-    };
+            ];
+        });
+    }, [storeStocks]);
+
+    const renderStoreStockListItem = useCallback(
+        (props: any) => {
+            const isSelected = entries.some((entry) => entry.id === props.item.value);
+
+            return (
+                <TouchableOpacity
+                    style={{
+                        padding: 12,
+                        backgroundColor: isSelected ? "#d1fae5" : "#fff",
+                        borderBottomWidth: 1,
+                        borderBottomColor: "#f3f4f6",
+                    }}
+                    onPress={() => props.onPress(props)}
+                    activeOpacity={0.7}
+                >
+                    <Text
+                        style={{
+                            color: isSelected ? "#065f46" : "#111827",
+                            fontWeight: isSelected ? "600" : "400",
+                        }}
+                    >
+                        {props.item.label}
+                    </Text>
+                </TouchableOpacity>
+            );
+        },
+        [entries]
+    );
+
+    const updateEntryQuantity = useCallback((index: number, rawValue: string) => {
+        setEntries((prev) => {
+            const entry = prev[index];
+            if (!entry) {
+                return prev;
+            }
+
+            const digitsOnly = rawValue.replace(/[^0-9]/g, "");
+            const maxQty =
+                entry.available_stock ?? getStockAvailableQuantity(entry);
+            const maxAllowed =
+                maxQty != null ? Math.floor(Number(maxQty)) : Number.POSITIVE_INFINITY;
+
+            let nextQuantity = digitsOnly;
+            if (digitsOnly !== "") {
+                const parsed = parseInt(digitsOnly, 10);
+                if (Number.isFinite(parsed) && parsed > maxAllowed) {
+                    nextQuantity = String(maxAllowed);
+                }
+            }
+
+            const updated = [...prev];
+            updated[index] = { ...updated[index], quantity: nextQuantity };
+            return updated;
+        });
+    }, []);
+
+    const finalizeEntryQuantity = useCallback((index: number) => {
+        setEntries((prev) => {
+            const entry = prev[index];
+            if (!entry) {
+                return prev;
+            }
+
+            const maxQty =
+                entry.available_stock ?? getStockAvailableQuantity(entry);
+            const maxAllowed =
+                maxQty != null ? Math.floor(Number(maxQty)) : Number.POSITIVE_INFINITY;
+
+            let parsed = parseInt(entry.quantity || "0", 10);
+            if (!Number.isFinite(parsed) || parsed < 1) {
+                parsed = 1;
+            } else if (parsed > maxAllowed) {
+                parsed = maxAllowed;
+            }
+
+            const updated = [...prev];
+            updated[index] = { ...updated[index], quantity: String(parsed) };
+            return updated;
+        });
+    }, []);
     const getEntryPrice = useCallback((entry: any): number => {
         const price =
             entry?.selling_price ??
@@ -508,6 +636,11 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
             return;
         }
 
+        const bluetoothReady = await ensureClassicBluetoothEnabled({ promptIfDisabled: true });
+        if (!bluetoothReady) {
+            return;
+        }
+
         setPendingPrintData(saleData);
         const autoConnected = await attemptAutoConnectPrinter();
 
@@ -549,6 +682,12 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
         const autoConnectToLastPrinter = async () => {
             try {
+                const bluetoothReady = await ensureClassicBluetoothEnabled({ promptIfDisabled: false });
+                if (!bluetoothReady) {
+                    console.log('[StoreSale] AUTO-CONNECT PRINTER: Bluetooth not ready, skipping silent auto-connect');
+                    return;
+                }
+
                 // Skip if already connected
                 if (connectedPrinter) {
                     try {
@@ -608,18 +747,11 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                     return;
                 }
 
-                // First, trigger a scan to discover devices
-                console.log('[StoreSale] AUTO-CONNECT PRINTER: Starting device scan to find saved printer...');
-                scanForPrinters(); // Don't await - let it run in background
+                // Scan briefly for the saved printer, then connect
+                console.log('[StoreSale] AUTO-CONNECT PRINTER: Scanning for saved printer...');
+                await scanForPrinters();
+                await new Promise<void>((r) => setTimeout(() => r(), 2500));
 
-                // Wait for scan to complete (18 seconds for full scan)
-                console.log('[StoreSale] AUTO-CONNECT PRINTER: Waiting for scan to complete (18 seconds)...');
-                await new Promise<void>(r => setTimeout(() => r(), 18000)); // Wait 18 seconds for scan to finish
-
-                // Re-check printerDevices after waiting
-                await new Promise<void>(r => setTimeout(() => r(), 500));
-
-                console.log('[StoreSale] AUTO-CONNECT PRINTER: Checking for printer after scan...');
                 console.log('[StoreSale] AUTO-CONNECT PRINTER: Looking for printer ID:', deviceId);
 
                 try {
@@ -667,16 +799,24 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
 
         // Validate quantities don't exceed available stock
         for (const entry of entries) {
-            const requestedQty = parseFloat(entry?.quantity || "0");
-            const availableStock = entry?.available_stock ?? entry?.quantity ?? entry?.stock ?? entry?.available_quantity ?? entry?.stock_quantity ?? null;
+            const requestedQty = parseInt(entry?.quantity || "0", 10);
+            if (!Number.isFinite(requestedQty) || requestedQty < 1) {
+                Alert.alert(
+                    "Invalid Quantity",
+                    `${getStockItemName(entry)}: Enter a quantity of at least 1.`
+                );
+                return;
+            }
+
+            const availableStock =
+                entry?.available_stock ?? getStockAvailableQuantity(entry);
 
             if (availableStock !== null && availableStock !== undefined) {
-                const maxQty = parseFloat(String(availableStock)) || 0;
+                const maxQty = Math.floor(Number(availableStock));
                 if (requestedQty > maxQty) {
-                    const itemName = entry?.item?.description || entry?.name || entry?.label || `Item ${entry.id}`;
                     Alert.alert(
                         "Invalid Quantity",
-                        `${itemName}: Requested quantity (${requestedQty}) exceeds available stock (${maxQty}).`
+                        `${getStockItemName(entry)}: Requested quantity (${requestedQty}) exceeds available stock (${maxQty}).`
                     );
                     return;
                 }
@@ -704,14 +844,62 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 transaction_date: transactionDate.toISOString().split("T")[0],
                 sale_type: paymentType,
                 items,
+            };
+
+            const online = await checkConnectivity();
+
+            if (!online) {
+                if (isOfflineSaveBlocked) {
+                    Alert.alert(
+                        "Go Online to Push",
+                        getOfflineBlockedMessage({
+                            isSyncing,
+                            requiresOnlinePush,
+                            maxOfflineHours: Math.round(
+                                collectionGate.maxOfflineIntakeMs / (60 * 60 * 1000)
+                            ) || undefined,
+                        })
+                    );
+                    return;
+                }
+
+                const moduleReady = await assertOfflineReferenceAvailable(STORE_SALES_SYNC_KEY);
+                if (!moduleReady.allowed) {
+                    Alert.alert("Offline Unavailable", moduleReady.message || "Cannot save offline.");
+                    return;
+                }
+
+                const storeLabel =
+                    storeItems.find((item) => item.value === storeValue)?.label || "Store sale";
+                await insertOfflineData({
+                    endpoint: OFFLINE_SYNC_ENDPOINTS.STORE_SALE,
+                    data,
+                    summary_label: storeLabel,
+                });
+
+                enableCollectionGateCheck();
+                await refreshCollectionGate();
+
+                await handlePrintAfterSale({
+                    ...data,
+                    offline: true,
+                    items: entries,
+                });
+
+                setEntries([]);
+                setMemberValue(null);
+                setStoreValue(null);
+                onSave({ offline: true, ...data });
+                onClose();
+                return;
             }
+
             const [status, response] = await makeRequest({
                 url: "store-sale",
                 method: "POST",
                 data,
             });
 
-            Alert?.alert("Debug Info", `Status: ${status}\nResponse: ${JSON.stringify(response)} \nData Sent: ${JSON.stringify(data)}`);
             if (![200, 201].includes(status)) {
                 if (!response?.errors) {
                     Alert.alert("Error", response?.message || "Failed to save sale");
@@ -722,8 +910,6 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                 }
                 return;
             } else {
-                Alert.alert("Success", "Sale recorded successfully");
-
                 await handlePrintAfterSale(response?.data);
 
                 setEntries([]);
@@ -762,36 +948,50 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                     <ScrollView
                         style={styles.contentScroll}
                         contentContainerStyle={styles.contentContainer}
-                        keyboardShouldPersistTaps="handled"
+                        keyboardShouldPersistTaps="always"
                         showsVerticalScrollIndicator={false}
+                        scrollEnabled={!isAnyDropdownOpen}
+                        onScrollBeginDrag={() => {
+                            if (customerTypeOpen) setCustomerTypeOpen(false);
+                            if (memberOpen) setMemberOpen(false);
+                            if (storeOpen) setStoreOpen(false);
+                            if (stockOpen) setStockOpen(false);
+                        }}
                     >
                         {/* Customer Type Selection */}
-                        <Text style={styles.customerTypeLabel}>Customer Type</Text>
-                        <DropDownPicker
-                            open={customerTypeOpen}
-                            value={customerType}
-                            items={customerTypeItems}
-                            setOpen={setCustomerTypeOpen}
-                            setValue={setCustomerType}
-                            setItems={() => { }} // Read-only items
-                            placeholder="Select Customer Type"
-                            placeholderStyle={styles.customerTypeDropdownText}
-                            textStyle={styles.customerTypeDropdownText}
-                            labelStyle={styles.customerTypeDropdownText}
-                            listItemLabelStyle={styles.customerTypeListItemText}
-                            selectedItemLabelStyle={styles.customerTypeDropdownText}
-                            selectedItemContainerStyle={styles.customerTypeSelectedItem}
-                            listMode="SCROLLVIEW"
-                            zIndex={4000}
-                            zIndexInverse={500}
-                            style={styles.customerTypeDropdown}
-                            dropDownContainerStyle={styles.customerTypeDropdownBox}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
-                        />
+                        <View style={getDropdownColStyle(DROPDOWN_STACK.customerType.zIndex)}>
+                            <Text style={styles.customerTypeLabel}>Customer Type</Text>
+                            <DropDownPicker
+                                {...getDropdownPickerModalProps("Select customer type")}
+                                open={customerTypeOpen}
+                                value={customerType}
+                                items={customerTypeItems}
+                                setOpen={(open) => {
+                                    setCustomerTypeOpen(open);
+                                    if (open) closeOtherDropdowns("customerType");
+                                }}
+                                setValue={(callback) => {
+                                    const next = resolveDropDownPickerValue(callback, customerType);
+                                    if (next) setCustomerType(next as CustomerType);
+                                }}
+                                setItems={() => {}}
+                                placeholder="Select Customer Type"
+                                searchable
+                                searchPlaceholder="Search customer type..."
+                                renderListItem={renderDropdownItem}
+                                zIndex={DROPDOWN_STACK.customerType.zIndex}
+                                zIndexInverse={DROPDOWN_STACK.customerType.zIndexInverse}
+                                style={globalStyles.basedropdown}
+                                dropDownContainerStyle={[
+                                    globalStyles.basedropdown,
+                                    globalStyles.dropdownListContainer,
+                                ]}
+                            />
+                        </View>
 
                         {/* Customer Selection - Only shown for non-guest types */}
                         {customerType !== "guest" && (
-                            <>
+                            <View style={getDropdownColStyle(DROPDOWN_STACK.member.zIndex)}>
                                 <Text style={styles.label}>
                                     {customerType === "member" ? "Select Member" :
                                         customerType === "employee" ? "Select Employee" :
@@ -800,11 +1000,24 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                                     customerType === "supplier" ? "Select Supplier" : "Select Customer"}
                                 </Text>
                                 <DropDownPicker
+                                    {...getDropdownPickerModalProps(
+                                        customerType === "member" ? "Select member" :
+                                        customerType === "employee" ? "Select employee" :
+                                        customerType === "vendor" ? "Select vendor" :
+                                        customerType === "transporter" ? "Select transporter" :
+                                        customerType === "supplier" ? "Select supplier" : "Select customer"
+                                    )}
                                     open={memberOpen}
                                     value={memberValue}
                                     items={memberItems}
-                                    setOpen={setMemberOpen}
-                                    setValue={setMemberValue}
+                                    setOpen={(open) => {
+                                        setMemberOpen(open);
+                                        if (open) closeOtherDropdowns("member");
+                                    }}
+                                    setValue={(callback) => {
+                                        const next = resolveDropDownPickerValue(callback, memberValue);
+                                        setMemberValue(next as number | null);
+                                    }}
                                     setItems={setMemberItems}
                                     placeholder={
                                         customerType === "member" ? "Select Member" :
@@ -813,10 +1026,7 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                                     customerType === "transporter" ? "Select Transporter" :
                                                         customerType === "supplier" ? "Select Supplier" : "Select Customer"
                                     }
-                                    listMode="SCROLLVIEW"
-                                    zIndex={3000}
-                                    zIndexInverse={1000}
-                                    searchable={true}
+                                    searchable
                                     searchPlaceholder={
                                         customerType === "member" ? "Search members..." :
                                             customerType === "employee" ? "Search employees..." :
@@ -824,178 +1034,183 @@ const StoreSaleModal: React.FC<StoreSaleModalProps> = ({
                                                     customerType === "transporter" ? "Search transporters..." :
                                                         customerType === "supplier" ? "Search suppliers..." : "Search customers..."
                                     }
-                                    style={styles.dropdown}
-                                    dropDownContainerStyle={styles.dropdownBox}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
+                                    renderListItem={renderDropdownItem}
+                                    zIndex={DROPDOWN_STACK.member.zIndex}
+                                    zIndexInverse={DROPDOWN_STACK.member.zIndexInverse}
+                                    style={globalStyles.basedropdown}
+                                    dropDownContainerStyle={[
+                                        globalStyles.basedropdown,
+                                        globalStyles.dropdownListContainer,
+                                    ]}
                                 />
-                            </>
+                            </View>
                         )}
 
                         {/* Pair: Store + Date */}
                         <View style={styles.row}>
-                            <View style={styles.half}>
+                            <View style={[styles.half, getDropdownColStyle(DROPDOWN_STACK.store.zIndex)]}>
                                 <Text style={styles.label}>Store</Text>
                                 <DropDownPicker
+                                    {...getDropdownPickerModalProps("Select store")}
                                     open={storeOpen}
                                     value={storeValue}
                                     items={storeItems}
-                                    setOpen={setStoreOpen}
-                                    setValue={setStoreValue}
+                                    setOpen={(open) => {
+                                        setStoreOpen(open);
+                                        if (open) closeOtherDropdowns("store");
+                                    }}
+                                    setValue={(callback) => {
+                                        const next = resolveDropDownPickerValue(callback, storeValue);
+                                        setStoreValue(next as number | null);
+                                    }}
                                     setItems={setStoreItems}
                                     placeholder="Select Store"
-                                    listMode="SCROLLVIEW"
-                                    zIndex={2500}
-                                    zIndexInverse={2000}
-                                    searchable={true}
+                                    searchable
                                     searchPlaceholder="Search stores..."
-                                    style={styles.dropdown}
-                                    dropDownContainerStyle={styles.dropdownBox}
-                                    scrollViewProps={{ nestedScrollEnabled: true }}
+                                    renderListItem={renderDropdownItem}
+                                    zIndex={DROPDOWN_STACK.store.zIndex}
+                                    zIndexInverse={DROPDOWN_STACK.store.zIndexInverse}
+                                    style={globalStyles.basedropdown}
+                                    dropDownContainerStyle={[
+                                        globalStyles.basedropdown,
+                                        globalStyles.dropdownListContainer,
+                                    ]}
                                 />
                             </View>
 
                             <View style={styles.half}>
                                 <Text style={styles.label}>Transaction Date</Text>
-                                <TouchableOpacity
-                                    style={styles.datePicker}
-                                    onPress={() => setShowDatePicker(true)}
-                                >
-                                    <Text style={styles.dateText}>{transactionDate.toISOString().split("T")[0]}</Text>
-                                    <Icon name="date-range" size={20} color="#333" />
-                                </TouchableOpacity>
-                                <DateTimePickerModal
-                                    isVisible={showDatePicker}
-                                    mode="date"
-                                    date={transactionDate}
-                                    maximumDate={new Date()}
-                                    onConfirm={(date) => {
-                                        setTransactionDate(date);
-                                        setShowDatePicker(false);
-                                    }}
-                                    onCancel={() => setShowDatePicker(false)}
-                                />
+                                <View style={[styles.datePicker, styles.datePickerDisabled]}>
+                                    <Text style={styles.dateText}>
+                                        {transactionDate.toISOString().split("T")[0]}
+                                    </Text>
+                                    <Icon name="date-range" size={20} color="#9ca3af" />
+                                </View>
                             </View>
                         </View>
 
-                        {/* // Stock selection */}
-                        <Text style={styles.label}>Add Stock Item</Text>
-
-                        <DropDownPicker
-                            open={stockOpen}
-                            value={stockValue}
-                            items={stockItems}
-                            setOpen={setStockOpen}
-                            setValue={setStockValue}
-                            setItems={setStockItems}
-                            placeholder="Select Stock Item"
-                            listMode="SCROLLVIEW"
-                            searchable={true}
-                            searchPlaceholder="Search stock..."
-                            onChangeValue={(val) => {
-                                setStockValue(val);
-                                if (val) {
-                                    addStockEntry(val);  // ✅ Add entry when selected
+                        {/* Stock selection */}
+                        <View style={getDropdownColStyle(DROPDOWN_STACK.stock.zIndex)}>
+                            <Text style={styles.label}>Add Stock Item</Text>
+                            <DropDownPicker
+                                {...getDropdownPickerModalProps("Select stock item")}
+                                open={stockOpen}
+                                value={stockValue}
+                                items={stockItems}
+                                closeAfterSelecting={false}
+                                setOpen={(open) => {
+                                    setStockOpen(open);
+                                    if (open) closeOtherDropdowns("stock");
+                                }}
+                                setValue={(callback) => {
+                                    const next = resolveDropDownPickerValue(callback, stockValue);
+                                    setStockValue(next as number | null);
+                                }}
+                                onSelectItem={(item) => {
+                                    if (item?.value != null) {
+                                        addStockEntry(item.value as number);
+                                    }
+                                }}
+                                setItems={setStockItems}
+                                placeholder={
+                                    loadingStocks
+                                        ? "Loading stock..."
+                                        : !storeValue
+                                          ? "Select a store first"
+                                          : "Tap items to add"
                                 }
-                            }}
-                            renderListItem={renderDropdownItem as any}
-                            zIndex={1000}
-                            zIndexInverse={2000}
-                            style={styles.dropdown}
-                            dropDownContainerStyle={styles.dropdownBox}
-                            scrollViewProps={{ nestedScrollEnabled: true }}
-                        />
+                                searchable
+                                searchPlaceholder="Search stock..."
+                                disabled={loadingStocks || !storeValue}
+                                renderListItem={renderStoreStockListItem}
+                                selectedItemContainerStyle={{
+                                    backgroundColor: "#d1fae5",
+                                }}
+                                selectedItemLabelStyle={{
+                                    color: "#065f46",
+                                    fontWeight: "600",
+                                }}
+                                zIndex={DROPDOWN_STACK.stock.zIndex}
+                                zIndexInverse={DROPDOWN_STACK.stock.zIndexInverse}
+                                style={globalStyles.basedropdown}
+                                dropDownContainerStyle={[
+                                    globalStyles.basedropdown,
+                                    globalStyles.dropdownListContainer,
+                                ]}
+                            />
+                        </View>
 
                         {/* Entries list */}
                         <Text style={[styles.label, { marginTop: 12 }]}>Selected items</Text>
-                        <FlatList
-                            data={entries}
-                            keyExtractor={(item) => item.id.toString()}
-                            nestedScrollEnabled
-                            scrollEnabled={false}
-                            style={styles.entriesList}
-                            contentContainerStyle={
-                                entries.length === 0 ? styles.emptyEntriesContainer : undefined
-                            }
-                            ListEmptyComponent={
+                        <View style={styles.entriesList}>
+                            {entries.length === 0 ? (
                                 <Text style={styles.emptyEntriesText}>No items added yet.</Text>
-                            }
-                            renderItem={({ item, index }) => {
-                                const itemName = item?.item?.description || item?.name || item?.label || `Item ${index + 1}`;
-                                // Get available stock quantity (check multiple possible field names)
-                                const availableStock = item?.available_stock ?? item?.quantity ?? item?.stock ?? item?.available_quantity ?? item?.stock_quantity ?? null;
-                                // Add quantity in brackets if available (remove decimals)
-                                const displayName = availableStock !== null && availableStock !== undefined
-                                    ? `${itemName} (${Math.floor(Number(availableStock))})`
-                                    : itemName;
+                            ) : (
+                                entries.map((item, index) => {
+                                    const itemName = getStockItemName(item);
+                                    const availableStock =
+                                        item.available_stock ?? getStockAvailableQuantity(item);
+                                    const maxQty =
+                                        availableStock != null
+                                            ? Math.floor(Number(availableStock))
+                                            : null;
 
-                                return (
-                                    <View style={styles.entry}>
-                                        <Text style={styles.entryDescription}>
-                                            {displayName}
-                                        </Text>
-                                        <TextInput
-                                            style={[
-                                                styles.entryInput,
-                                                saving && { backgroundColor: "#f5f5f5", color: "#888" },
-                                            ]}
-                                            keyboardType="numeric"
-                                            placeholder="1"
-                                            value={item.quantity?.toString() ?? "1"}
-                                            onChangeText={(val) => {
-                                                if (!saving) {
-                                                    // Get available stock for this item
-                                                    const availableStock = item?.available_stock ?? item?.quantity ?? item?.stock ?? item?.available_quantity ?? item?.stock_quantity ?? null;
-
-                                                    // Allow empty string for clearing the input
-                                                    if (val === '' || val === '.') {
-                                                        const updated = [...entries];
-                                                        updated[index].quantity = val;
-                                                        setEntries(updated);
-                                                        return;
-                                                    }
-
-                                                    // Parse input value
-                                                    const inputQty = parseFloat(val);
-
-                                                    // Validate: don't allow quantity to exceed available stock
-                                                    if (availableStock !== null && availableStock !== undefined && !isNaN(inputQty)) {
-                                                        const maxQty = parseFloat(String(availableStock)) || 0;
-                                                        if (inputQty > maxQty) {
-                                                            // Silently cap at max available quantity
-                                                            val = String(maxQty);
+                                    return (
+                                        <View key={item.id.toString()} style={styles.entry}>
+                                            <Text style={styles.entryDescription} numberOfLines={2}>
+                                                {itemName}
+                                                {maxQty != null ? ` (max ${maxQty})` : ""}
+                                            </Text>
+                                            <View style={styles.qtyFieldWrap}>
+                                                <Text style={styles.qtyLabel}>Qty</Text>
+                                                <TextInput
+                                                    style={[
+                                                        styles.entryInput,
+                                                        saving && styles.entryInputDisabled,
+                                                    ]}
+                                                    keyboardType="number-pad"
+                                                    placeholder="1"
+                                                    placeholderTextColor="#9ca3af"
+                                                    maxLength={maxQty != null ? String(maxQty).length : 6}
+                                                    value={item.quantity ?? ""}
+                                                    onChangeText={(val) => {
+                                                        if (!saving) {
+                                                            updateEntryQuantity(index, val);
                                                         }
-                                                    }
-
-                                                    const updated = [...entries];
-                                                    updated[index].quantity = val;
-                                                    setEntries(updated);
+                                                    }}
+                                                    onBlur={() => {
+                                                        if (!saving) {
+                                                            finalizeEntryQuantity(index);
+                                                        }
+                                                    }}
+                                                    selectTextOnFocus
+                                                    editable={!saving}
+                                                />
+                                            </View>
+                                            <Text style={styles.priceText}>
+                                                @ {getEntryPrice(item).toFixed(2)} ={" "}
+                                                {(() => {
+                                                    const qty = parseFloat(item?.quantity || "0");
+                                                    const price = getEntryPrice(item);
+                                                    const total = qty * price;
+                                                    return Number.isFinite(total) ? total.toFixed(2) : "0.00";
+                                                })()}
+                                            </Text>
+                                            <TouchableOpacity
+                                                onPress={() =>
+                                                    !saving &&
+                                                    setEntries(entries.filter((e) => e.id !== item.id))
                                                 }
-                                            }}
-                                            editable={!saving}   // ✅ disable editing
-                                        />
-                                        <Text style={styles.priceText}>
-                                            @ {getEntryPrice(item).toFixed(2)} ={" "}
-                                            {(() => {
-                                                const qty = parseFloat(item?.quantity || "0");
-                                                const price = getEntryPrice(item);
-                                                const total = qty * price;
-                                                return Number.isFinite(total) ? total.toFixed(2) : "0.00";
-                                            })()}
-                                        </Text>
-                                        <TouchableOpacity
-                                            onPress={() =>
-                                                !saving &&
-                                                setEntries(entries.filter((e) => e.id !== item.id))
-                                            }
-                                            style={[styles.removeButton, saving && { opacity: 0.4 }]}
-                                            disabled={saving}   // ✅ disable deleting
-                                        >
-                                            <Icon name="delete" size={22} color="#d11a2a" />
-                                        </TouchableOpacity>
-                                    </View>
-                                );
-                            }}
-                        />
+                                                style={[styles.removeButton, saving && { opacity: 0.4 }]}
+                                                disabled={saving}
+                                            >
+                                                <Icon name="delete" size={22} color="#d11a2a" />
+                                            </TouchableOpacity>
+                                        </View>
+                                    );
+                                })
+                            )}
+                        </View>
                         {/* Overall Total */}
                         <View style={styles.totalRow}>
                             <Text style={styles.totalLabel}>Overall Total:</Text>
@@ -1176,43 +1391,63 @@ const styles = StyleSheet.create({
         padding: 10,
         marginTop: 6,
     },
+    datePickerDisabled: {
+        backgroundColor: "#f3f4f6",
+        borderColor: "#e5e7eb",
+    },
     dateText: {
-        color: "#1f2937",
+        color: "#6b7280",
     },
     entriesList: {
-        maxHeight: 220,
         marginTop: 8,
     },
     entryDescription: {
         flex: 1,
+        flexShrink: 1,
         textTransform: "capitalize",
+        marginRight: 8,
     },
     entry: {
         flexDirection: "row",
         alignItems: "center",
-        paddingVertical: 8,
+        paddingVertical: 10,
         borderBottomWidth: 1,
         borderBottomColor: "#f3f4f6",
     },
+    qtyFieldWrap: {
+        alignItems: "center",
+        marginHorizontal: 8,
+    },
+    qtyLabel: {
+        fontSize: 11,
+        color: "#6b7280",
+        marginBottom: 2,
+    },
     entryInput: {
         borderWidth: 1,
-        borderColor: "#e2e8f0",
+        borderColor: "#0f766e",
         borderRadius: 6,
-        padding: 6,
-        width: 60,
-        marginHorizontal: 10,
+        paddingVertical: 8,
+        paddingHorizontal: 10,
+        minWidth: 56,
+        minHeight: 40,
+        backgroundColor: "#fff",
+        color: "#111827",
+        fontSize: 16,
+        fontWeight: "600",
         textAlign: "center",
     },
-    priceText: { fontWeight: "600" },
-    emptyEntriesContainer: {
-        flexGrow: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        paddingVertical: 16,
+    entryInputDisabled: {
+        backgroundColor: "#f5f5f5",
+        color: "#888",
+        borderColor: "#e2e8f0",
     },
+    priceText: { fontWeight: "600" },
     emptyEntriesText: {
         color: "#6b7280",
         fontStyle: "italic",
+        textAlign: "center",
+        paddingVertical: 16,
     },
     actions: {
         flexDirection: "row",

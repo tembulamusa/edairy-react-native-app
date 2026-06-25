@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useState, useRef } from "react";
 import {
     View,
     Text,
@@ -12,363 +12,366 @@ import {
 } from "react-native";
 import Icon from "react-native-vector-icons/MaterialIcons";
 import DateTimePicker, { Event } from "@react-native-community/datetimepicker";
-import { globalStyles } from "../../styles";
-import fetchCommonData from "../utils/fetchCommonData";
 import DropDownPicker from "react-native-dropdown-picker";
+import { globalStyles, getDropdownPickerModalProps } from "../../styles";
 import { renderDropdownItem } from "../../assets/styles/all";
 import { useFocusEffect } from "@react-navigation/native";
+import type { MemberPersonalInfo } from "../../types/memberRegistration";
+import { sanitizePersonalForMemberType } from "../../types/memberRegistration";
+import { isIndividualMemberType, getMemberPrimaryNameLabel, getMemberPrimaryNamePlaceholder, getPersonalInfoStepTitle } from "../../utils/memberType";
 
 interface PersonalInfoFormProps {
-    onNext: (data: any) => void;
-    initialData?: any;
+    memberTypeName: string;
+    memberTypeId: string;
+    onNext: (data: MemberPersonalInfo) => void;
+    onPrevious: () => void;
+    initialData?: Partial<MemberPersonalInfo>;
 }
 
-const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext, initialData }) => {
-    const firstNameInputRef = useRef<TextInput>(null);
-    const [dataLoaded, setDataLoaded] = useState(false);
+const TITLE_OPTIONS = [
+    { label: "Mr", value: "mr" },
+    { label: "Mrs", value: "mrs" },
+    { label: "Ms", value: "ms" },
+    { label: "Dr", value: "dr" },
+    { label: "Prof", value: "prof" },
+];
 
-    const [form, setForm] = React.useState({
-        firstName: initialData?.firstName || "",
-        lastName: initialData?.lastName || "",
-        idNo: initialData?.idNo || "",
+const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({
+    memberTypeName,
+    memberTypeId,
+    onNext,
+    onPrevious,
+    initialData,
+}) => {
+    const firstNameInputRef = useRef<TextInput>(null);
+    const isIndividual = isIndividualMemberType(memberTypeName);
+
+    const [titleOpen, setTitleOpen] = useState(false);
+    const [titleValue, setTitleValue] = useState<string | null>(initialData?.title || null);
+    const [titleItems, setTitleItems] = useState(TITLE_OPTIONS);
+
+    const [form, setForm] = useState<MemberPersonalInfo>({
+        member_type_id: memberTypeId,
+        member_type_name: memberTypeName,
+        first_name: initialData?.first_name || "",
+        last_name: initialData?.last_name || "",
+        other_names: initialData?.other_names || "",
+        id_no: initialData?.id_no || "",
         gender: initialData?.gender || "",
-        dob: initialData?.dob || "",
-        phone: initialData?.phone || "",
-        secondaryPhone: initialData?.secondaryPhone || "",
-        maritalStatus: initialData?.maritalStatus || "",
-        birthCity: initialData?.birthCity || "",
-        idDateOfIssue: initialData?.idDateOfIssue || "",
-        taxNumber: initialData?.taxNumber || "",
+        marital_status: initialData?.marital_status || "",
+        date_of_birth: initialData?.date_of_birth || "",
+        primary_phone: initialData?.primary_phone || "",
+        secondary_phone: initialData?.secondary_phone || "",
+        birth_city: initialData?.birth_city || "",
+        id_date_of_issue: initialData?.id_date_of_issue || "",
+        tax_number: initialData?.tax_number || "",
+        email: initialData?.email || "",
+        title: initialData?.title || "",
     });
 
-    const [showDatePicker, setShowDatePicker] = React.useState(false);
-    const [showIdDateOfIssuePicker, setShowIdDateOfIssuePicker] = React.useState(false);
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const [showIdDateOfIssuePicker, setShowIdDateOfIssuePicker] = useState(false);
 
-    const handleChange = (field: string, value: string) => {
-        setForm((prevForm) => ({ ...prevForm, [field]: value }));
+    const handleChange = (field: keyof MemberPersonalInfo, value: string) => {
+        setForm((prev) => ({ ...prev, [field]: value }));
     };
 
-    useEffect(() => {
-        setDataLoaded(true);
-    }, []);
-
-    // Focus first name input when screen comes into focus and data is loaded
     useFocusEffect(
         React.useCallback(() => {
-            // Delay focus slightly to ensure component is fully mounted
-            const timer = setTimeout(() => {
-                if (dataLoaded && firstNameInputRef.current) {
-                    firstNameInputRef.current.focus();
-                }
-            }, 300);
+            const timer = setTimeout(() => firstNameInputRef.current?.focus(), 300);
             return () => clearTimeout(timer);
-        }, [dataLoaded])
+        }, [])
     );
+
     const isAtLeast18YearsOld = (dateOfBirth: string): boolean => {
         const today = new Date();
         const birthDate = new Date(dateOfBirth);
-
-        // Calculate age
         let age = today.getFullYear() - birthDate.getFullYear();
         const monthDiff = today.getMonth() - birthDate.getMonth();
-
-        // Adjust age if birthday hasn't occurred this year
         if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
             age--;
         }
-
         return age >= 18;
     };
 
     const handleNext = () => {
-        if (
-            !form.firstName ||
-            !form.lastName ||
-            !form.idNo ||
-            !form.gender ||
-            !form.dob ||
-            !form.idDateOfIssue ||
-            !form.birthCity ||
-            !form.phone ||
-            !form.maritalStatus ||
-            !form.secondaryPhone
-        ) {
+        const nameValid = isIndividual
+            ? form.first_name && form.last_name
+            : Boolean(form.first_name.trim());
+
+        const sharedRequired = isIndividual
+            ? nameValid && form.date_of_birth && form.birth_city
+            : nameValid;
+
+        const individualRequired = !isIndividual || (form.gender && form.marital_status);
+
+        if (!sharedRequired || !individualRequired) {
             Alert.alert("Missing Fields", "Please fill in all required fields.");
             return;
         }
 
-        // Check age requirement
-        if (!isAtLeast18YearsOld(form.dob)) {
-            Alert.alert(
-                "Age Requirement",
-                "You must be at least 18 years old to register as a member."
-            );
+        if (isIndividual && !isAtLeast18YearsOld(form.date_of_birth)) {
+            Alert.alert("Age Requirement", "You must be at least 18 years old to register as a member.");
             return;
         }
 
-        onNext(form);
+        onNext(
+            sanitizePersonalForMemberType(
+                {
+                    ...form,
+                    member_type_id: memberTypeId,
+                    member_type_name: memberTypeName,
+                    title: isIndividual ? titleValue || form.title : "",
+                    last_name: isIndividual ? form.last_name : "",
+                    other_names: isIndividual ? form.other_names : "",
+                    date_of_birth: isIndividual ? form.date_of_birth : "",
+                    birth_city: form.birth_city,
+                    id_no: isIndividual ? form.id_no : "",
+                    id_date_of_issue: isIndividual ? form.id_date_of_issue : "",
+                    gender: isIndividual ? form.gender : "",
+                    marital_status: isIndividual ? form.marital_status : "",
+                },
+                memberTypeName
+            )
+        );
     };
 
-
     const onDateChange = (event: Event, selectedDate?: Date) => {
-        setShowDatePicker(Platform.OS === "ios"); // keep picker open on iOS
+        setShowDatePicker(Platform.OS === "ios");
         if (selectedDate) {
-            const formatted = selectedDate.toISOString().split("T")[0]; // YYYY-MM-DD
-            handleChange("dob", formatted);
+            handleChange("date_of_birth", selectedDate.toISOString().split("T")[0]);
         }
     };
 
     const onIdDateOfIssueChange = (event: Event, selectedDate?: Date) => {
-        setShowIdDateOfIssuePicker(Platform.OS === "ios"); // keep picker open on iOS
+        setShowIdDateOfIssuePicker(Platform.OS === "ios");
         if (selectedDate) {
-            const formatted = selectedDate.toISOString().split("T")[0]; // YYYY-MM-DD
-            handleChange("idDateOfIssue", formatted);
+            handleChange("id_date_of_issue", selectedDate.toISOString().split("T")[0]);
         }
     };
 
-    return (
-        <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === "ios" ? "padding" : "padding"}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+    const renderRadio = (
+        field: "gender" | "marital_status",
+        value: string,
+        label: string
+    ) => (
+        <TouchableOpacity
+            key={value}
+            style={globalStyles.radioOption}
+            onPress={() => handleChange(field, value)}
         >
+            <View
+                style={[
+                    globalStyles.radioCircle,
+                    form[field].toUpperCase() === value.toUpperCase() && globalStyles.radioSelected,
+                ]}
+            />
+            <Text style={globalStyles.radioLabel}>{label}</Text>
+        </TouchableOpacity>
+    );
+
+    return (
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "padding"}>
             <ScrollView
                 nestedScrollEnabled
                 contentContainerStyle={styles.container}
                 keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-                scrollEventThrottle={16}
+                onScrollBeginDrag={() => titleOpen && setTitleOpen(false)}
             >
                 <Text style={globalStyles.pageTitle}>Member Registration</Text>
-                <Text style={globalStyles.pageSubTitle}>Personal Info</Text>
+                <Text style={globalStyles.pageSubTitle}>{getPersonalInfoStepTitle(memberTypeName)}</Text>
+                <Text style={styles.typeBadge}>{memberTypeName}</Text>
 
-                {/* First & Last Name */}
-                <View style={globalStyles.row}>
-                    <View style={{ flex: 1, marginRight: 8 }}>
+                {isIndividual && (
+                    <View style={styles.dropdownCol}>
+                        <Text style={globalStyles.label}>Title</Text>
+                        <DropDownPicker
+                            {...getDropdownPickerModalProps("Select title")}
+                            open={titleOpen}
+                            value={titleValue}
+                            items={titleItems}
+                            setOpen={setTitleOpen}
+                            setValue={setTitleValue}
+                            setItems={setTitleItems}
+                            placeholder="Select title"
+                            searchable
+                            searchPlaceholder="Search title..."
+                            renderListItem={renderDropdownItem}
+                            style={globalStyles.basedropdown}
+                            dropDownContainerStyle={[
+                                globalStyles.basedropdown,
+                                globalStyles.dropdownListContainer,
+                            ]}
+                            zIndex={7000}
+                            zIndexInverse={2000}
+                        />
+                    </View>
+                )}
+
+                {isIndividual ? (
+                    <View style={globalStyles.row}>
+                        <View style={{ flex: 1, marginRight: 8 }}>
+                            <Text style={globalStyles.label}>
+                                First Name <Text style={styles.required}>*</Text>
+                            </Text>
+                            <TextInput
+                                ref={firstNameInputRef}
+                                style={[globalStyles.input, styles.input]}
+                                value={form.first_name}
+                                onChangeText={(v) => handleChange("first_name", v)}
+                                placeholder="First name"
+                            />
+                        </View>
+                        <View style={{ flex: 1, marginLeft: 8 }}>
+                            <Text style={globalStyles.label}>
+                                Last Name <Text style={styles.required}>*</Text>
+                            </Text>
+                            <TextInput
+                                style={[globalStyles.input, styles.input]}
+                                value={form.last_name}
+                                onChangeText={(v) => handleChange("last_name", v)}
+                                placeholder="Last name"
+                            />
+                        </View>
+                    </View>
+                ) : (
+                    <View>
                         <Text style={globalStyles.label}>
-                            First Name <Text style={styles.required}>*</Text>
+                            {getMemberPrimaryNameLabel(memberTypeName)}{" "}
+                            <Text style={styles.required}>*</Text>
                         </Text>
                         <TextInput
                             ref={firstNameInputRef}
                             style={[globalStyles.input, styles.input]}
-                            value={form.firstName}
-                            onChangeText={(v) => handleChange("firstName", v)}
-                            placeholder="First Name"
-                            blurOnSubmit={false}
-                            returnKeyType="next"
+                            value={form.first_name}
+                            onChangeText={(v) => handleChange("first_name", v)}
+                            placeholder={getMemberPrimaryNamePlaceholder(memberTypeName)}
                         />
                     </View>
-                    <View style={{ flex: 1, marginLeft: 8 }}>
-                        <Text style={globalStyles.label}>
-                            Last Name <Text style={globalStyles.required}>*</Text>
-                        </Text>
+                )}
+
+                {isIndividual && (
+                    <View>
+                        <Text style={globalStyles.label}>Other Names</Text>
                         <TextInput
                             style={[globalStyles.input, styles.input]}
-                            value={form.lastName}
-                            onChangeText={(v) => handleChange("lastName", v)}
-                            placeholder="Last Name"
+                            value={form.other_names}
+                            onChangeText={(v) => handleChange("other_names", v)}
+                            placeholder="Middle or other names"
                         />
                     </View>
-                </View>
+                )}
 
-                {/* ID No */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        ID No. <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TextInput
-                        style={[globalStyles.input, styles.input]}
-                        value={form.idNo}
-                        onChangeText={(v) => handleChange("idNo", v)}
-                        placeholder="Enter ID Number"
-                        keyboardType="numeric"
-                    />
-                </View>
-
-                {/* Gender */}
-                <Text style={[globalStyles.label, { marginTop: 16 }]}>
-                    Gender <Text style={styles.required}>*</Text>
-                </Text>
-                <View style={globalStyles.row}>
-                    <TouchableOpacity
-                        style={globalStyles.radioOption}
-                        onPress={() => handleChange("gender", "Male")}
-                    >
-                        <View
-                            style={[
-                                globalStyles.radioCircle,
-                                form.gender === "Male" && globalStyles.radioSelected,
-                            ]}
+                {isIndividual && (
+                    <View>
+                        <Text style={globalStyles.label}>ID No.</Text>
+                        <TextInput
+                            style={[globalStyles.input, styles.input]}
+                            value={form.id_no}
+                            onChangeText={(v) => handleChange("id_no", v)}
+                            placeholder="National ID number"
+                            keyboardType="default"
                         />
-                        <Text style={globalStyles.radioLabel}>Male</Text>
-                    </TouchableOpacity>
+                    </View>
+                )}
 
-                    <TouchableOpacity
-                        style={globalStyles.radioOption}
-                        onPress={() => handleChange("gender", "Female")}
-                    >
-                        <View
-                            style={[
-                                globalStyles.radioCircle,
-                                form.gender === "Female" && globalStyles.radioSelected,
-                            ]}
-                        />
-                        <Text style={globalStyles.radioLabel}>Female</Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Marital Status */}
-                <Text style={[globalStyles.label, { marginTop: 16 }]}>
-                    Marital Status <Text style={styles.required}>*</Text>
-                </Text>
-                <View style={globalStyles.row}>
-                    <TouchableOpacity
-                        style={globalStyles.radioOption}
-                        onPress={() => handleChange("maritalStatus", "Single")}
-                    >
-                        <View
-                            style={[
-                                globalStyles.radioCircle,
-                                form.maritalStatus === "Single" && globalStyles.radioSelected,
-                            ]}
-                        />
-                        <Text style={globalStyles.radioLabel}>Single</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={globalStyles.radioOption}
-                        onPress={() => handleChange("maritalStatus", "Married")}
-                    >
-                        <View
-                            style={[
-                                globalStyles.radioCircle,
-                                form.maritalStatus === "Married" && globalStyles.radioSelected,
-                            ]}
-                        />
-                        <Text style={globalStyles.radioLabel}>Married</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={globalStyles.radioOption}
-                        onPress={() => handleChange("maritalStatus", "Divorced")}
-                    >
-                        <View
-                            style={[
-                                globalStyles.radioCircle,
-                                form.maritalStatus === "Divorced" && globalStyles.radioSelected,
-                            ]}
-                        />
-                        <Text style={globalStyles.radioLabel}>Divorced</Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Date of Birth */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        Date of Birth <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TouchableOpacity
-                        style={globalStyles.inputWithIcon}
-                        onPress={() => setShowDatePicker(true)}
-                    >
-                        <Text style={{ flex: 1, color: form.dob ? "#111827" : "#9ca3af" }}>
-                            {form.dob || "Select DOB"}
+                {isIndividual && (
+                    <>
+                        <Text style={[globalStyles.label, { marginTop: 16 }]}>
+                            Gender <Text style={styles.required}>*</Text>
                         </Text>
-                        <Icon name="calendar-today" size={20} color="#009688" />
-                    </TouchableOpacity>
+                        <View style={globalStyles.row}>
+                            {renderRadio("gender", "MALE", "Male")}
+                            {renderRadio("gender", "FEMALE", "Female")}
+                        </View>
 
-                    {showDatePicker && (
-                        <DateTimePicker
-                            value={form.dob ? new Date(form.dob) : new Date()}
-                            mode="date"
-                            display="spinner" // 👈 works on both iOS & Android
-                            onChange={onDateChange}
-                        />
-                    )}
-                </View>
-
-                {/* ID Date of Issue */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        ID Date of Issue <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TouchableOpacity
-                        style={globalStyles.inputWithIcon}
-                        onPress={() => setShowIdDateOfIssuePicker(true)}
-                    >
-                        <Text style={{ flex: 1, color: form.idDateOfIssue ? "#111827" : "#9ca3af" }}>
-                            {form.idDateOfIssue || "Select ID Date of Issue"}
+                        <Text style={[globalStyles.label, { marginTop: 16 }]}>
+                            Marital Status <Text style={styles.required}>*</Text>
                         </Text>
-                        <Icon name="calendar-today" size={20} color="#009688" />
+                        <View style={globalStyles.row}>
+                            {renderRadio("marital_status", "SINGLE", "Single")}
+                            {renderRadio("marital_status", "MARRIED", "Married")}
+                            {renderRadio("marital_status", "DIVORCED", "Divorced")}
+                        </View>
+                    </>
+                )}
+
+                {isIndividual && (
+                    <View>
+                        <Text style={globalStyles.label}>
+                            Date of Birth <Text style={styles.required}>*</Text>
+                        </Text>
+                        <TouchableOpacity style={globalStyles.inputWithIcon} onPress={() => setShowDatePicker(true)}>
+                            <Text style={{ flex: 1, color: form.date_of_birth ? "#111827" : "#9ca3af" }}>
+                                {form.date_of_birth || "Select date"}
+                            </Text>
+                            <Icon name="calendar-today" size={20} color="#009688" />
+                        </TouchableOpacity>
+                        {showDatePicker && (
+                            <DateTimePicker
+                                value={form.date_of_birth ? new Date(form.date_of_birth) : new Date()}
+                                mode="date"
+                                display="spinner"
+                                onChange={onDateChange}
+                            />
+                        )}
+                    </View>
+                )}
+
+                {isIndividual && (
+                    <View>
+                        <Text style={globalStyles.label}>ID Date of Issue</Text>
+                        <TouchableOpacity
+                            style={globalStyles.inputWithIcon}
+                            onPress={() => setShowIdDateOfIssuePicker(true)}
+                        >
+                            <Text style={{ flex: 1, color: form.id_date_of_issue ? "#111827" : "#9ca3af" }}>
+                                {form.id_date_of_issue || "Select ID issue date"}
+                            </Text>
+                            <Icon name="calendar-today" size={20} color="#009688" />
+                        </TouchableOpacity>
+                        {showIdDateOfIssuePicker && (
+                            <DateTimePicker
+                                value={form.id_date_of_issue ? new Date(form.id_date_of_issue) : new Date()}
+                                mode="date"
+                                display="spinner"
+                                onChange={onIdDateOfIssueChange}
+                            />
+                        )}
+                    </View>
+                )}
+
+                <View>
+                    <Text style={globalStyles.label}>
+                        {isIndividual ? "Birth City" : "City / Location"}
+                        {isIndividual ? <Text style={styles.required}> *</Text> : null}
+                    </Text>
+                    <TextInput
+                        style={[globalStyles.input, styles.input]}
+                        value={form.birth_city}
+                        onChangeText={(v) => handleChange("birth_city", v)}
+                        placeholder="City"
+                    />
+                </View>
+
+                <View>
+                    <Text style={globalStyles.label}>Tax Number (KRA PIN)</Text>
+                    <TextInput
+                        style={[globalStyles.input, styles.input]}
+                        value={form.tax_number}
+                        onChangeText={(v) => handleChange("tax_number", v)}
+                        placeholder="Tax number"
+                    />
+                </View>
+
+                <View style={globalStyles.navRow}>
+                    <TouchableOpacity style={globalStyles.navButtonOutline} onPress={onPrevious}>
+                        <Text style={[globalStyles.navButtonText, { color: "#009688" }]}>← Previous</Text>
                     </TouchableOpacity>
-
-                    {showIdDateOfIssuePicker && (
-                        <DateTimePicker
-                            value={form.idDateOfIssue ? new Date(form.idDateOfIssue) : new Date()}
-                            mode="date"
-                            display="spinner" // 👈 works on both iOS & Android
-                            onChange={onIdDateOfIssueChange}
-                        />
-                    )}
+                    <TouchableOpacity style={globalStyles.navButtonFilled} onPress={handleNext}>
+                        <Text style={globalStyles.navButtonText}>Next →</Text>
+                    </TouchableOpacity>
                 </View>
-
-                {/* Phone No */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        Phone No. <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TextInput
-                        style={[globalStyles.input, styles.input]}
-                        placeholder="Enter Phone Number"
-                        value={form.phone}
-                        onChangeText={(v) => handleChange("phone", v)}
-                        keyboardType="phone-pad"
-                    />
-                </View>
-                <View>
-                    <Text style={globalStyles.label}>
-                        Alternative Phone No. <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TextInput
-                        style={[globalStyles.input, styles.input]}
-                        placeholder="Enter Alternative Phone Number"
-                        value={form.secondaryPhone}
-                        onChangeText={(v) => handleChange("secondaryPhone", v)}
-                        keyboardType="phone-pad"
-                    />
-                </View>
-                {/* Birth City */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        Birth City <Text style={styles.required}>*</Text>
-                    </Text>
-                    <TextInput
-                        style={[globalStyles.input, styles.input]}
-                        placeholder="Enter Birth City"
-                        value={form.birthCity}
-                        onChangeText={(v) => handleChange("birthCity", v)}
-                        keyboardType="default"
-                    />
-                </View>
-
-                {/* Membership Number */}
-                <View>
-                    <Text style={globalStyles.label}>
-                        tax Number <Text style={styles.required}></Text>
-                    </Text>
-                    <TextInput
-                        style={[globalStyles.input, styles.input]}
-                        placeholder="Enter Tax Number"
-                        value={form.taxNumber}
-                        onChangeText={(v) => handleChange("taxNumber", v)}
-                        keyboardType="default"
-                    />
-                </View>
-
-
-                <TouchableOpacity style={globalStyles.nextButton} onPress={handleNext}>
-                    <Text style={globalStyles.nextButtonText}>Next</Text>
-                    <Icon name="arrow-forward" size={16} color="#fff" />
-                </TouchableOpacity>
             </ScrollView>
         </KeyboardAvoidingView>
     );
@@ -377,7 +380,24 @@ const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({ onNext, initialData
 const styles = StyleSheet.create({
     container: {
         padding: 20,
-        paddingBottom: 100, // Extra padding for bottom tab bar (60px) + keyboard clearance
+        paddingBottom: 100,
+    },
+    typeBadge: {
+        alignSelf: "flex-start",
+        backgroundColor: "#e0f2f1",
+        color: "#00796b",
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 16,
+        fontSize: 13,
+        fontWeight: "600",
+        marginBottom: 16,
+        overflow: "hidden",
+    },
+    dropdownCol: {
+        zIndex: 7000,
+        elevation: 7,
+        marginBottom: 16,
     },
     input: {
         borderWidth: 1,

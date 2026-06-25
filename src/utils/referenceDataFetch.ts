@@ -1,6 +1,7 @@
 import fetchCommonData from "../components/utils/fetchCommonData";
 import { saveMembers } from "../services/offlineDatabase";
 import { checkConnectivity } from "../services/offlineSync";
+import { sortDropdownItemsByLabel } from "./dropdownItems";
 
 export const REFERENCE_DATA_FETCH_LIMIT = 300;
 
@@ -24,14 +25,45 @@ export function getMemberDisplayName(member: any): string {
 }
 
 export function toMemberDropdownItems(members: any[]) {
-    return (members || []).map((m: any) => {
-        const memberNo = getMemberNumber(m);
-        const name = getMemberDisplayName(m);
-        return {
-            label: memberNo ? `${name} (${memberNo})` : name,
-            value: m.id,
-        };
-    });
+    return sortDropdownItemsByLabel(
+        (members || []).map((m: any) => {
+            const memberNo = getMemberNumber(m);
+            const name = getMemberDisplayName(m);
+            return {
+                label: memberNo ? `${name} (${memberNo})` : name,
+                value: m.id,
+            };
+        })
+    );
+}
+
+export function getCustomerRecordName(customer: any): string {
+    const person = customer?.customer ?? customer;
+    const fullName = String(
+        customer?.full_names ?? person?.full_names ?? ""
+    ).trim();
+
+    if (fullName) {
+        return fullName;
+    }
+
+    const name = `${person?.first_name ?? ""} ${person?.last_name ?? ""}`.trim();
+    const phone = String(person?.primary_phone ?? customer?.primary_phone ?? "").trim();
+
+    if (name && phone) {
+        return `${name} (${phone})`;
+    }
+
+    return name || phone || `Customer ${customer?.id ?? ""}`;
+}
+
+export function toCustomerDropdownItems(customers: any[]) {
+    return sortDropdownItemsByLabel(
+        (customers || []).map((customer) => ({
+            label: getCustomerRecordName(customer),
+            value: customer.id,
+        }))
+    );
 }
 
 export function filterMemberDropdownItems(

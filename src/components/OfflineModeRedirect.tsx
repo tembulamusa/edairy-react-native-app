@@ -4,9 +4,7 @@ import { AuthContext } from "../AuthContext";
 import { useConnectivity } from "../context/ConnectivityContext";
 import { isNetworkOnlineFromFlags } from "../utils/networkState";
 import {
-    isOnOfflineCollectionScreen,
     navigateToLoginWhenOffline,
-    navigateToOfflineCollection,
 } from "../services/offlineNavigation";
 
 type OfflineModeRedirectProps = {
@@ -15,8 +13,8 @@ type OfflineModeRedirectProps = {
 };
 
 /**
- * When the device goes offline, route the user into offline milk collection
- * (if authenticated) or back to login (if not).
+ * When offline, keep the user on their current screen. Only unauthenticated users
+ * are sent back to login.
  */
 const OfflineModeRedirect: React.FC<OfflineModeRedirectProps> = ({
     navigationRef,
@@ -46,12 +44,7 @@ const OfflineModeRedirect: React.FC<OfflineModeRedirectProps> = ({
             return;
         }
 
-        if (isOnOfflineCollectionScreen(nav)) {
-            return;
-        }
-
         if (userTokenRef.current) {
-            navigateToOfflineCollection(nav);
             return;
         }
 

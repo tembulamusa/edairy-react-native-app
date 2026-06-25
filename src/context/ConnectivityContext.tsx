@@ -1,7 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
-import { Alert } from 'react-native';
-
 interface ConnectivityContextType {
   isConnected: boolean;
   connectionType: string;
@@ -87,7 +85,7 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
       setShowOfflineBanner(false);
     }
 
-    // Offline — banner only; OfflineModeRedirect sends the user to offline collection.
+    // Offline — show banner only; dashboard links open offline-capable screens directly.
     if (!state.isConnected || !state.isInternetReachable) {
       setShowOfflineBanner(true);
 
@@ -98,26 +96,8 @@ export const ConnectivityProvider: React.FC<ConnectivityProviderProps> = ({ chil
         setHasShownInitialAlert(true);
       }
     } else {
-      // Connection restored - show "back online" notification
-      const wasOffline = !wasConnected || !wasInternetReachable;
       setShowOfflineBanner(false);
       setHasShownInitialAlert(true);
-
-      // Show "back online" notification if we were previously offline
-      if (wasOffline && hasShownInitialAlert) {
-        setTimeout(() => {
-          Alert.alert(
-            'You\'re back online!',
-            'Your internet connection has been restored.',
-            [
-              {
-                text: 'OK',
-                onPress: () => { },
-              },
-            ]
-          );
-        }, 200);
-      }
     }
 
     // Log connection changes for debugging

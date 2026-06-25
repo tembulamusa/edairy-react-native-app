@@ -15,6 +15,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import DropDownPicker from 'react-native-dropdown-picker';
 import fetchCommonData from '../../components/utils/fetchCommonData';
+import { toCustomerDropdownItems } from '../../utils/referenceDataFetch';
 import MilkSaleModal from '../../components/modals/MilkSaleModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import useBluetoothService from '../../hooks/useBluetoothService';
@@ -88,12 +89,7 @@ const MilkSalesScreen = () => {
                 );
 
                 // ✅ Customers
-                setCustomerItems(
-                    customers?.map((s: any) => ({
-                        label: `${s.customer?.first_name} ${s?.customer?.last_name}`,
-                        value: s.id,
-                    })) || []
-                );
+                setCustomerItems(toCustomerDropdownItems(customers || []));
 
                 setShiftItems([
                     { label: "All Shifts", value: "all" },

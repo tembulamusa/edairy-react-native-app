@@ -1,3 +1,5 @@
+import { sortDropdownItemsByLabel } from "./dropdownItems";
+
 type TransporterLike = {
     transporter_no?: string;
     category?: string;
@@ -62,4 +64,13 @@ export function getTransporterDisplayName(
     }
 
     return name;
+}
+
+export function toTransporterDropdownItems(transporters: any[]) {
+    return sortDropdownItemsByLabel(
+        (transporters || []).map((transporter) => ({
+            label: getTransporterDisplayName(transporter),
+            value: transporter.id,
+        }))
+    );
 }

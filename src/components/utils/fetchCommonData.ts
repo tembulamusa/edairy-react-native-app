@@ -92,7 +92,8 @@ const fetchCommonData = async ({
             if (![200, 201].includes(status)) {
                 return [];
             }
-            result = response?.data ?? [];
+            const payload = response?.data ?? response;
+            result = Array.isArray(payload) ? payload : [];
             if (useCache) {
                 const newData = { ...parsed, [name]: result };
                 await AsyncStorage.setItem("commonData", JSON.stringify(newData));

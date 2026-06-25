@@ -13,9 +13,9 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 // @ts-ignore - library lacks TypeScript declarations in current setup
 import Icon from "react-native-vector-icons/MaterialIcons";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import DropDownPicker from "react-native-dropdown-picker";
-import NetInfo from "@react-native-community/netinfo";
+import { useSync } from "../../context/SyncContext";
 import fetchCommonData, { clearCommonDataCache } from "../../components/utils/fetchCommonData";
 import {
     saveMeasuringCan,
@@ -25,12 +25,18 @@ import {
     saveShifts,
     hasMeasuringCans,
     saveMeasuringCans,
-    saveTransporterStatus
+    saveTransporterStatus,
+    getFailedSyncQueueCount,
+    MAX_SYNC_QUEUE_RETRIES,
 } from "../../services/offlineDatabase";
 import {
     USER_PREFERENCES_KEY,
     DEFAULT_DAIRY_NAME,
+    DEFAULT_OFFLINE_REFERENCE_SYNC_HOURS,
+    formatDbuBrandingName,
     saveDairyName,
+    saveOfflineReferenceSyncHours,
+    getOfflineReferenceSyncHours,
 } from "../../utils/userPreferences";
 import { notifyHeaderRefresh } from "../../utils/headerRefresh";
 
@@ -40,26 +46,48 @@ type PreferenceKey =
     | "dark_mode_enabled"
     | "auto_print_enabled"
     | "scale_connection_type"
-    | "dairy_name";
+    | "dairy_name"
+    | "offline_reference_sync_hours";
 
-const preferenceDefaults: Record<PreferenceKey, boolean | string> = {
+const OFFLINE_SYNC_HOUR_OPTIONS = [2, 4, 6, 12, 24];
+
+const preferenceDefaults: Record<PreferenceKey, boolean | string | number> = {
     notifications_enabled: true,
     biometrics_enabled: false,
     dark_mode_enabled: false,
     auto_print_enabled: true,
-    scale_connection_type: "ble", // Default to BLE
+    scale_connection_type: "ble",
     dairy_name: DEFAULT_DAIRY_NAME,
+    offline_reference_sync_hours: DEFAULT_OFFLINE_REFERENCE_SYNC_HOURS,
 };
 
 const SettingsScreen: React.FC = () => {
-    const navigation = useNavigation();
+    const navigation = useNavigation<any>();
+
+    const refreshFailedSyncCount = useCallback(async () => {
+        try {
+            const count = await getFailedSyncQueueCount();
+            setFailedSyncCount(count);
+        } catch {
+            setFailedSyncCount(0);
+        }
+    }, []);
+
+    useFocusEffect(
+        useCallback(() => {
+            void refreshFailedSyncCount();
+        }, [refreshFailedSyncCount])
+    );
+    const { updateOnlineReferenceData, isUpdatingOnlineData } = useSync();
     const [user, setUser] = useState<any | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [preferences, setPreferences] = useState<Record<PreferenceKey, boolean | string>>(preferenceDefaults);
+    const [preferences, setPreferences] = useState<Record<PreferenceKey, boolean | string | number>>(preferenceDefaults);
 
     // Scale connection type dropdown state
     const [scaleTypeOpen, setScaleTypeOpen] = useState(false);
+    const [offlineSyncHoursOpen, setOfflineSyncHoursOpen] = useState(false);
+    const [failedSyncCount, setFailedSyncCount] = useState(0);
     const [scaleTypeItems, setScaleTypeItems] = useState([
         { label: "Bluetooth Low Energy (BLE)", value: "ble" },
         { label: "Classic Bluetooth", value: "classic" },
@@ -118,9 +146,14 @@ const SettingsScreen: React.FC = () => {
                 setPreferences({
                     ...preferenceDefaults,
                     ...parsed,
+                    offline_reference_sync_hours:
+                        Number(parsed.offline_reference_sync_hours) ||
+                        DEFAULT_OFFLINE_REFERENCE_SYNC_HOURS,
                 });
                 setDairyNameInput(
-                    (parsed.dairy_name || DEFAULT_DAIRY_NAME).trim() || DEFAULT_DAIRY_NAME
+                    formatDbuBrandingName(
+                        (parsed.dairy_name || DEFAULT_DAIRY_NAME).trim() || DEFAULT_DAIRY_NAME
+                    )
                 );
             } else {
                 setPreferences(preferenceDefaults);
@@ -198,131 +231,47 @@ const SettingsScreen: React.FC = () => {
         }
     }, []);
 
-    // Check and fetch shifts and measuring cans
-    const checkAndFetchOfflineData = useCallback(async () => {
-        try {
-            setSyncingData(true);
-            setSyncStatus("Initializing database...");
-
-            // Initialize database
-            await initDatabase();
-
-            // Get user data to check if transporter
-            const storedUser = await AsyncStorage.getItem("user");
-            let userData = null;
-            let isUserTransporter = false;
-            let userTransporterId = null;
-
-            if (storedUser) {
-                userData = JSON.parse(storedUser);
-                const userGroups = userData?.user_groups || [];
-                isUserTransporter = userGroups.includes("transporter");
-
-                // If user is transporter, get transporter ID
-                if (isUserTransporter && userData?.member_id) {
-                    console.log('[SETTINGS] User is a transporter, fetching transporter ID...');
-                    try {
-                        const transporters = await fetchCommonData({ name: "transporters", cachable: false });
-                        const matchedTransporter = (transporters || []).find((t: any) => t.member_id === userData.member_id);
-                        if (matchedTransporter) {
-                            userTransporterId = matchedTransporter.id;
-                            console.log('[SETTINGS] ✅ Found transporter ID:', userTransporterId);
-                        }
-                    } catch (error) {
-                        console.error('[SETTINGS] Error fetching transporter ID:', error);
-                    }
-                }
-
-                // Save transporter status to SQLite
-                setSyncStatus("Saving user profile...");
-                await saveTransporterStatus({
-                    user_id: userData.member_id,
-                    is_transporter: isUserTransporter,
-                    transporter_id: userTransporterId
-                });
-                console.log('[SETTINGS] ✅ Transporter status saved:', isUserTransporter);
-            }
-
-            // Check if online
-            const state = await NetInfo.fetch();
-            const online = state.isConnected === true && state.isInternetReachable !== false;
-
-            if (!online) {
-                console.log('[SETTINGS] Offline, cannot fetch data');
-                setSyncStatus("Offline - data sync skipped");
-                setTimeout(() => setSyncStatus(""), 3000);
-                return;
-            }
-
-            let syncedItems = 0;
-
-            // Check and fetch shifts
-            const shiftsExist = await hasShifts();
-            if (!shiftsExist) {
-                setSyncStatus("Fetching shifts...");
-                console.log('[SETTINGS] Fetching shifts from API...');
-                const shifts = await fetchCommonData({ name: "shifts", cachable: false });
-                if (shifts && shifts.length > 0) {
-                    await saveShifts(shifts);
-                    syncedItems++;
-                    console.log('[SETTINGS] ✅ Shifts fetched and saved:', shifts.length);
-                }
-            } else {
-                console.log('[SETTINGS] Shifts already exist in database');
-            }
-
-            // Check and fetch measuring cans (only for transporters)
-            if (isUserTransporter) {
-                const measuringCansExist = await hasMeasuringCans();
-                if (!measuringCansExist) {
-                    setSyncStatus("Fetching measuring cans...");
-                    console.log('[SETTINGS] Fetching measuring cans from API...');
-                    const measuringCans = await fetchCommonData({ name: "measuring_cans", cachable: false });
-                    if (measuringCans && measuringCans.length > 0) {
-                        await saveMeasuringCans(measuringCans);
-                        syncedItems++;
-                        console.log('[SETTINGS] ✅ Measuring cans fetched and saved:', measuringCans.length);
-                    }
-                } else {
-                    console.log('[SETTINGS] Measuring cans already exist in database');
-                }
-            } else {
-                console.log('[SETTINGS] User is not a transporter, skipping measuring cans fetch');
-            }
-
-            if (syncedItems > 0) {
-                setSyncStatus(`✓ Synced ${syncedItems} data types`);
-                Alert.alert(
-                    "Data Sync Complete",
-                    "Offline data has been successfully synchronized. You can now use offline collection.",
-                    [{ text: "OK" }]
-                );
-            } else {
-                setSyncStatus("All data up to date");
-            }
-
-            setTimeout(() => setSyncStatus(""), 5000);
-        } catch (error) {
-            console.error('[SETTINGS] Error fetching offline data:', error);
-            setSyncStatus("Sync failed - try again later");
-            setTimeout(() => setSyncStatus(""), 5000);
-        } finally {
-            setSyncingData(false);
-        }
-    }, []);
-
     useEffect(() => {
         loadSettings();
-        // Check and fetch offline data on mount
-        checkAndFetchOfflineData();
-    }, [loadSettings, checkAndFetchOfflineData]);
+    }, [loadSettings]);
 
-    const handleToggle = async (key: PreferenceKey, value: boolean | string) => {
+    const handleUpdateOnlineData = useCallback(async () => {
+        try {
+            setSyncingData(true);
+            setSyncStatus("Updating online data...");
+
+            const ok = await updateOnlineReferenceData();
+            if (ok) {
+                setSyncStatus("✓ Online data updated");
+                Alert.alert(
+                    "Update Complete",
+                    "Core offline data has been downloaded: members, customers, stores, routes, route centers, transporters, shifts, and cans."
+                );
+            } else {
+                setSyncStatus("Update failed — check your connection");
+                Alert.alert(
+                    "Update Failed",
+                    "Could not download online data. Make sure you are connected to the internet and try again."
+                );
+            }
+        } catch (error) {
+            console.error("[SETTINGS] Update online data failed:", error);
+            setSyncStatus("Update failed — try again later");
+        } finally {
+            setSyncingData(false);
+            setTimeout(() => setSyncStatus(""), 5000);
+        }
+    }, [updateOnlineReferenceData]);
+
+    const handleToggle = async (key: PreferenceKey, value: boolean | string | number) => {
         try {
             setSaving(true);
             const nextPrefs = { ...preferences, [key]: value };
             setPreferences(nextPrefs);
             await AsyncStorage.setItem(USER_PREFERENCES_KEY, JSON.stringify(nextPrefs));
+            if (key === "offline_reference_sync_hours") {
+                await saveOfflineReferenceSyncHours(Number(value));
+            }
         } catch (error) {
             Alert.alert("Error", "Failed to save preference. Please try again.");
         } finally {
@@ -696,6 +645,95 @@ const SettingsScreen: React.FC = () => {
                         />
                         <Text style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
                             Current: {preferences.scale_connection_type === "ble" ? "Bluetooth Low Energy" : "Classic Bluetooth"}
+                        </Text>
+                    </View>
+                    <View style={{ marginVertical: 8 }}>
+                        <Text style={styles.listTitle}>Update Online Data</Text>
+                        <Text style={styles.listSubtitle}>
+                            Download core offline data (members, customers, stores, routes, route centers, transporters, shifts, and cans). This does not push your saved records — that happens automatically when you go online.
+                        </Text>
+                        <TouchableOpacity
+                            style={[styles.saveServerButton, { marginTop: 12 }, (syncingData || isUpdatingOnlineData) && { opacity: 0.6 }]}
+                            onPress={handleUpdateOnlineData}
+                            disabled={syncingData || isUpdatingOnlineData}
+                        >
+                            {syncingData || isUpdatingOnlineData ? (
+                                <ActivityIndicator color="#fff" />
+                            ) : (
+                                <Text style={styles.saveServerButtonText}>Update Online Data</Text>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                    {failedSyncCount > 0 ? (
+                        <View style={{ marginVertical: 8 }}>
+                            <Text style={styles.listTitle}>Failed Syncs</Text>
+                            <Text style={styles.listSubtitle}>
+                                {failedSyncCount} record(s) could not be uploaded after{" "}
+                                {MAX_SYNC_QUEUE_RETRIES} attempts and are no longer retried
+                                automatically.
+                            </Text>
+                            <TouchableOpacity
+                                style={[styles.saveServerButton, { marginTop: 12, backgroundColor: "#b91c1c" }]}
+                                onPress={() =>
+                                    navigation.navigate("Members", { screen: "FailedSyncs" })
+                                }
+                            >
+                                <Text style={styles.saveServerButtonText}>
+                                    View Failed Syncs ({failedSyncCount})
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : null}
+                    <View style={{ marginVertical: 8 }}>
+                        <Text style={styles.listTitle}>Maximum offline intake time</Text>
+                        <Text style={styles.listSubtitle}>
+                            Maximum time since the first unpushed offline record (milk collection, store sale, or milk delivery) before further offline saving is blocked until records are pushed online.
+                        </Text>
+                        <DropDownPicker
+                            listMode="SCROLLVIEW"
+                            open={offlineSyncHoursOpen}
+                            value={Number(
+                                preferences.offline_reference_sync_hours ||
+                                    DEFAULT_OFFLINE_REFERENCE_SYNC_HOURS
+                            )}
+                            items={OFFLINE_SYNC_HOUR_OPTIONS.map((hours) => ({
+                                label: `${hours} hour${hours === 1 ? "" : "s"}`,
+                                value: hours,
+                            }))}
+                            setOpen={setOfflineSyncHoursOpen}
+                            setValue={(callback) => {
+                                const current = Number(
+                                    preferences.offline_reference_sync_hours ||
+                                        DEFAULT_OFFLINE_REFERENCE_SYNC_HOURS
+                                );
+                                const value =
+                                    typeof callback === "function"
+                                        ? callback(current)
+                                        : callback;
+                                if (value != null) {
+                                    handleToggle("offline_reference_sync_hours", Number(value));
+                                }
+                            }}
+                            setItems={() => {}}
+                            placeholder="Select sync interval"
+                            style={{
+                                marginTop: 8,
+                                borderColor: '#0f766e',
+                                borderWidth: 2,
+                                borderRadius: 8,
+                                backgroundColor: '#f8fafc',
+                            }}
+                            dropDownContainerStyle={{
+                                borderColor: '#0f766e',
+                                borderWidth: 2,
+                                borderRadius: 8,
+                                backgroundColor: '#ffffff',
+                            }}
+                            zIndex={950}
+                            zIndexInverse={3050}
+                        />
+                        <Text style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                            Default: {DEFAULT_OFFLINE_REFERENCE_SYNC_HOURS} hours from the first unsaved record. Pending records push automatically when you reconnect.
                         </Text>
                     </View>
                     {/* Measuring Can Selector - Only for transporters */}

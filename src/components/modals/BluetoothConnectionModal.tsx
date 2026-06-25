@@ -98,6 +98,24 @@ const BluetoothConnectionModal: React.FC<BluetoothConnectionModalProps> = ({
     }
   }, [visible, type]);
 
+  React.useEffect(() => {
+    if (!visible || !connectedDevice) {
+      return;
+    }
+
+    setConnectingId(null);
+    setModalStatus('success');
+    setModalMessage(
+      `Connected to ${connectedDevice.name || connectedDevice.address || 'device'}`
+    );
+
+    const timer = setTimeout(() => {
+      handleClose();
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [connectedDevice, visible]);
+
   const handleClose = () => {
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
@@ -118,7 +136,8 @@ const BluetoothConnectionModal: React.FC<BluetoothConnectionModalProps> = ({
       if (result) {
         setModalStatus('success');
         setModalMessage(`Connected to ${device.name || 'device'} (${device.type?.toUpperCase() || 'UNKNOWN'})`);
-        setTimeout(() => handleClose(), 1500);
+        setConnectingId(null);
+        setTimeout(() => handleClose(), 400);
       } else {
         setModalStatus('error');
         setModalMessage('Connection failed. Ensure device is powered and nearby.');
@@ -264,7 +283,9 @@ const BluetoothConnectionModal: React.FC<BluetoothConnectionModalProps> = ({
                   style={styles.devicesList}
                   renderItem={({ item }) => {
                     const id = item.id || item.address;
-                    const isConnectingThis = connectingId === id || isConnecting;
+                    const isConnectingThis =
+                        (connectingId === id || (isConnecting && !connectedDevice)) &&
+                        !isConnected;
                     const isDisconnecting = disconnectingId === id;
                     const isBusy = isConnectingThis || isDisconnecting;
                     const isConnected = connectedDevice && (

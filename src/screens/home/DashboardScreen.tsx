@@ -21,21 +21,25 @@ type QuickLink = {
     navigateTo: string;
     screenName: string;
     iconColor: string;
-    offlineOnly?: boolean;
 };
 
-const screenWidth = Dimensions.get('window').width;
-const iconSize = screenWidth / 4 - 20;
+/** Screens that work offline (SQLite queue + auto-push when online). */
+const OFFLINE_CAPABLE_SCREENS = new Set([
+    'MemberKilos',
+    'StoreSales',
+    'UserBalanceSummary',
+]);
 
-const quickLinks = [
+const screenWidth = Dimensions.get('window').width;
+
+const quickLinks: QuickLink[] = [
     { name: 'Farmer Registration', icon: 'person-add', navigateTo: 'Members', screenName: 'MemberRegistration', iconColor: '#1b7f74' },
     { name: 'Member Kilos', icon: 'assignment', navigateTo: 'Members', screenName: 'MemberKilos', iconColor: '#e76f51' },
     { name: 'Cashout', icon: 'account-balance-wallet', navigateTo: 'Members', screenName: 'MemberCashout', iconColor: '#1b7f74' },
-    { name: 'Offline Collection', icon: 'cloud-off', navigateTo: 'Members', screenName: 'OfflineMilkCollection', iconColor: '#9333EA', offlineOnly: true },
     { name: 'Transporter Kilos', icon: 'local-shipping', navigateTo: 'Members', screenName: 'TransporterKilos', iconColor: '#e9c46a' },
     { name: 'Store Sales', icon: 'store', navigateTo: 'Members', screenName: 'StoreSales', iconColor: '#1b7f74' },
     { name: 'Milk Sales', icon: 'local-drink', navigateTo: 'Members', screenName: 'MilkSales', iconColor: '#264653' },
-    { name: 'Delivery Summary', icon: 'money-off', navigateTo: 'Members', screenName: 'UserBalanceSummary', iconColor: '#f4a261' },
+    { name: 'Customer Milk Delivery', icon: 'local-shipping', navigateTo: 'Members', screenName: 'UserBalanceSummary', iconColor: '#f4a261' },
     { name: 'Transporter Summary', icon: 'bar-chart', navigateTo: 'Members', screenName: 'ShiftSummaryReport', iconColor: '#8ab17d' },
 ];
 
@@ -51,20 +55,19 @@ const chartData = [
 
 const DashboardScreen = () => {
     const navigation = useNavigation();
-    const [userIsMemberOnly, setUserIsMemberOnly] = useState<boolean>(false);
     const [filteredLinks, setFilteredLinks] = useState(quickLinks);
     const [isOnline, setIsOnline] = useState(true);
 
-    // Network monitoring
     useEffect(() => {
-        const unsubscribe = NetInfo.addEventListener(state => {
-            const online = state.isConnected === true && state.isInternetReachable !== false;
+        const unsubscribe = NetInfo.addEventListener((state) => {
+            const online =
+                state.isConnected === true && state.isInternetReachable !== false;
             setIsOnline(online);
         });
 
-        // Check initial state
-        NetInfo.fetch().then(state => {
-            const online = state.isConnected === true && state.isInternetReachable !== false;
+        NetInfo.fetch().then((state) => {
+            const online =
+                state.isConnected === true && state.isInternetReachable !== false;
             setIsOnline(online);
         });
 
@@ -75,62 +78,66 @@ const DashboardScreen = () => {
         const checkUserType = async () => {
             try {
                 const userDataString = await AsyncStorage.getItem('user');
-                if (userDataString) {
-                    const userData = JSON.parse(userDataString);
-                    const userGroups = userData?.user_groups || [];
+                if (!userDataString) {
+                    setFilteredLinks(quickLinks);
+                    return;
+                }
 
-                    const isMemberOnly =
-                        !userGroups.includes('transporter') &&
-                        !userGroups.includes('employee');
+                const userData = JSON.parse(userDataString);
+                const userGroups = userData?.user_groups || [];
 
-                    setUserIsMemberOnly(isMemberOnly);
+                const isMemberOnly =
+                    !userGroups.includes('transporter') &&
+                    !userGroups.includes('employee');
 
-                    if (isMemberOnly) {
-                        // show limited menu for member
-                        const memberAllowedScreens = [
-                            'MemberKilos',
-                            'MemberCashout',
-                            'StoreSales',
-                            'UserBalanceSummary',
-                            'ShiftSummaryReport',
-                        ];
-                        let filtered = quickLinks.filter(link =>
+                if (isMemberOnly) {
+                    const memberAllowedScreens = [
+                        'MemberRegistration',
+                        'MemberKilos',
+                        'MemberCashout',
+                        'StoreSales',
+                        'UserBalanceSummary',
+                        'ShiftSummaryReport',
+                    ];
+                    setFilteredLinks(
+                        quickLinks.filter((link) =>
                             memberAllowedScreens.includes(link.screenName)
-                        );
-
-                        // Add offline collection when offline
-                        if (!isOnline) {
-                            const offlineCollection = quickLinks.find(link => link.screenName === 'OfflineMilkCollection');
-                            if (offlineCollection) {
-                                filtered = [...filtered, offlineCollection];
-                            }
-                        }
-
-                        setFilteredLinks(filtered);
-                    } else {
-                        // full dashboard - add offline collection when offline
-                        let filtered = [...quickLinks];
-                        if (!isOnline) {
-                            // Offline collection is already in quickLinks, no need to add
-                            filtered = quickLinks;
-                        } else {
-                            // Remove offline collection when online
-                            filtered = quickLinks.filter(link => !link.offlineOnly);
-                        }
-                        setFilteredLinks(filtered);
-                    }
+                        )
+                    );
+                } else {
+                    setFilteredLinks(quickLinks);
                 }
             } catch (error) {
                 console.error('Error checking user type:', error);
+                setFilteredLinks(quickLinks);
             }
         };
 
         checkUserType();
-    }, [isOnline]);
+    }, []);
+
+    const handleQuickLinkPress = (item: QuickLink) => {
+        const offlineCapable = OFFLINE_CAPABLE_SCREENS.has(item.screenName);
+
+        if (!isOnline && !offlineCapable) {
+            Alert.alert(
+                'Internet Required',
+                'This feature requires an internet connection. Please check your connection and try again.',
+                [{ text: 'OK' }]
+            );
+            return;
+        }
+
+        if (item.navigateTo) {
+            navigation.navigate(
+                item.navigateTo as never,
+                { screen: item.screenName } as never
+            );
+        }
+    };
 
     return (
         <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-            {/* --- Stats Card --- */}
             <View style={styles.statsCard}>
                 <Text style={styles.statsTitle}>Milk Delivery Stats 2025</Text>
 
@@ -156,51 +163,31 @@ const DashboardScreen = () => {
                 </View>
             </View>
 
-            {/* --- Quick Links --- */}
             <View style={globalStyles.dashboardGrid}>
-                {filteredLinks.map((item, index) => (
-                    <TouchableOpacity
-                        key={index}
-                        style={[
-                            globalStyles.dashboardLink,
-                            !isOnline && item.screenName !== 'OfflineMilkCollection' && styles.offlineDisabled
-                        ]}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                            if (item.screenName === 'OfflineMilkCollection') {
-                                navigation.navigate(
-                                    'Members' as never,
-                                    { screen: 'OfflineMilkCollection' } as never
-                                );
-                                return;
-                            }
+                {filteredLinks.map((item, index) => {
+                    const offlineCapable = OFFLINE_CAPABLE_SCREENS.has(item.screenName);
+                    const disabledOffline = !isOnline && !offlineCapable;
 
-                            if (!isOnline) {
-                                Alert.alert(
-                                    'Internet Required',
-                                    'This feature requires an internet connection. Please check your connection and try again.',
-                                    [{ text: 'OK' }]
-                                );
-                                return;
-                            }
-
-                            if (item.navigateTo) {
-                                navigation.navigate(
-                                    item.navigateTo as never,
-                                    { screen: item.screenName } as never
-                                );
-                            }
-                        }}
-                    >
-                        <Icon
-                            style={globalStyles.dashboardLinkIcon}
-                            name={item.icon}
-                            size={28}
-                            color={item.iconColor}
-                        />
-                        <Text style={globalStyles.dashboardIconLabel}>{item.name}</Text>
-                    </TouchableOpacity>
-                ))}
+                    return (
+                        <TouchableOpacity
+                            key={index}
+                            style={[
+                                globalStyles.dashboardLink,
+                                disabledOffline && styles.offlineDisabled,
+                            ]}
+                            activeOpacity={0.7}
+                            onPress={() => handleQuickLinkPress(item)}
+                        >
+                            <Icon
+                                style={globalStyles.dashboardLinkIcon}
+                                name={item.icon}
+                                size={28}
+                                color={item.iconColor}
+                            />
+                            <Text style={globalStyles.dashboardIconLabel}>{item.name}</Text>
+                        </TouchableOpacity>
+                    );
+                })}
             </View>
         </ScrollView>
     );

@@ -19,3 +19,4 @@ export { default as ScaleTestScreen } from './ScaleTestScreen';
 export { default as ProfileScreen } from './ProfileScreen';
 export { default as SettingsScreen } from './SettingsScreen';
 export { default as OfflineMilkCollectionScreen } from './OfflineMilkCollectionScreen';
+export { default as FailedSyncsScreen } from './FailedSyncsScreen';

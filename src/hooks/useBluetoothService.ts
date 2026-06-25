@@ -1,12 +1,17 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Device as BLEDevice, Characteristic, State as BleState } from "react-native-ble-plx";
-import RNBluetoothClassic, { BluetoothDevice as ClassicBluetoothDevice, BluetoothEventSubscription } from "react-native-bluetooth-classic";
-import { setItem, getItem } from "../components/utils/local-storage";
-import { Platform, PermissionsAndroid, Alert } from "react-native";
+import { Alert, AppState, AppStateStatus } from "react-native";
 import filterBluetoothDevices from "../components/utils/device-filter";
 import {
     attemptInnerPrinterAutoConnect,
 } from "../utils/innerPrinter";
+import {
+    ensureClassicBluetoothEnabled,
+    requestAndroidBluetoothPermissions,
+} from "../utils/bluetoothPermissions";
+import { isAppInForeground, subscribeAppState } from "../utils/appLifecycle";
+import { Device as BLEDevice, Characteristic, State as BleState } from "react-native-ble-plx";
+import RNBluetoothClassic, { BluetoothDevice as ClassicBluetoothDevice, BluetoothEventSubscription } from "react-native-bluetooth-classic";
+import { setItem, getItem } from "../components/utils/local-storage";
 import {
     acquireSharedBleManager,
     releaseSharedBleManager,
@@ -81,6 +86,8 @@ function bytesToHex(bytes: Uint8Array) {
 
 type UseBluetoothServiceProps = {
     deviceType?: DeviceType;
+    /** When false, skips mount-time auto-connect (use for screens that connect on print/sale only). */
+    autoConnectOnMount?: boolean;
 };
 
 type UseBluetoothServiceReturn = {
@@ -101,6 +108,7 @@ type UseBluetoothServiceReturn = {
 
 export default function useBluetoothService({
     deviceType = "scale",
+    autoConnectOnMount = deviceType === "scale",
 }: UseBluetoothServiceProps = {}): UseBluetoothServiceReturn {
     // ========== BLE STATE (PRIMARY) ==========
     const bleRef = useRef(acquireSharedBleManager());
@@ -121,6 +129,53 @@ export default function useBluetoothService({
     const [lastMessage, setLastMessage] = useState<string | null>(null); // Weight in kgs
     const [connectionFailed, setConnectionFailed] = useState(false);
     const [lastConnectionAttempt, setLastConnectionAttempt] = useState<string | null>(null);
+
+    const isMountedRef = useRef(true);
+    const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+    const connectedDeviceRef = useRef<UnifiedDevice | null>(null);
+    const startClassicReadPollingRef = useRef<
+        ((classicDevice: ClassicBluetoothDevice) => void) | null
+    >(null);
+
+    const emitRef = useRef({
+        setLastMessage: (_value: string | null) => {},
+        setConnectedDevice: (_value: UnifiedDevice | null) => {},
+        setIsScanning: (_value: boolean) => {},
+        setIsConnecting: (_value: boolean) => {},
+        setConnectionFailed: (_value: boolean) => {},
+    });
+
+    connectedDeviceRef.current = connectedDevice;
+
+    useEffect(() => {
+        emitRef.current = {
+            setLastMessage: (value) => {
+                if (isMountedRef.current && isAppInForeground()) {
+                    setLastMessage(value);
+                }
+            },
+            setConnectedDevice: (value) => {
+                if (isMountedRef.current && isAppInForeground()) {
+                    setConnectedDevice(value);
+                }
+            },
+            setIsScanning: (value) => {
+                if (isMountedRef.current && isAppInForeground()) {
+                    setIsScanning(value);
+                }
+            },
+            setIsConnecting: (value) => {
+                if (isMountedRef.current && isAppInForeground()) {
+                    setIsConnecting(value);
+                }
+            },
+            setConnectionFailed: (value) => {
+                if (isMountedRef.current && isAppInForeground()) {
+                    setConnectionFailed(value);
+                }
+            },
+        };
+    });
 
     // Track if user manually disconnected to prevent auto-reconnect
     const manualDisconnectRef = useRef<boolean>(false);
@@ -165,69 +220,119 @@ export default function useBluetoothService({
         }
     }, []);
 
+    const pauseBackgroundBluetoothWork = useCallback(() => {
+        try {
+            stopBLEScan();
+        } catch {
+            // ignore
+        }
+
+        emitRef.current.setIsScanning(false);
+
+        if (classicReadIntervalRef.current) {
+            clearInterval(classicReadIntervalRef.current);
+            classicReadIntervalRef.current = null;
+        }
+    }, [stopBLEScan]);
+
+    const resumeForegroundBluetoothWork = useCallback(() => {
+        const device = connectedDeviceRef.current;
+        if (
+            device?.type === "classic" &&
+            device.classicDevice &&
+            !classicReadIntervalRef.current
+        ) {
+            startClassicReadPollingRef.current?.(device.classicDevice);
+        }
+    }, []);
+
+    // Pause BLE polling/scans in background; resume classic polling when active again.
+    useEffect(() => {
+        isMountedRef.current = true;
+        appStateRef.current = AppState.currentState;
+
+        const unsubscribeAppState = subscribeAppState((nextState) => {
+            appStateRef.current = nextState;
+
+            if (nextState === "background" || nextState === "inactive") {
+                pauseBackgroundBluetoothWork();
+                return;
+            }
+
+            if (nextState === "active") {
+                resumeForegroundBluetoothWork();
+            }
+        });
+
+        return () => {
+            isMountedRef.current = false;
+            unsubscribeAppState();
+        };
+    }, [pauseBackgroundBluetoothWork, resumeForegroundBluetoothWork]);
+
     // Monitor adapter on/off (prevents native crashes when BT is toggled)
     useEffect(() => {
-        let cancelled = false;
-
         const handleState = (state: BleState) => {
-            if (state !== 'PoweredOn') {
-                stopBLEScan();
-                cleanupBLE();
-                cleanupClassic();
-                setConnectedDevice(null);
-                setLastMessage(null);
-                setIsScanning(false);
-                setIsConnecting(false);
+            if (state !== "PoweredOn") {
+                // Android often reports transient BT states while the app is backgrounded.
+                if (!isAppInForeground()) {
+                    return;
+                }
+
+                try {
+                    stopBLEScan();
+                } catch {
+                    // ignore
+                }
+                try {
+                    cleanupBLE();
+                } catch {
+                    // ignore
+                }
+                try {
+                    cleanupClassic();
+                } catch {
+                    // ignore
+                }
+                emitRef.current.setConnectedDevice(null);
+                emitRef.current.setLastMessage(null);
+                emitRef.current.setIsScanning(false);
+                emitRef.current.setIsConnecting(false);
             }
         };
 
         const unsubscribe = subscribeBleStateChange(handleState);
 
         return () => {
-            cancelled = true;
             unsubscribe();
-            cleanupBLE();
-            cleanupClassic();
+        };
+    }, [stopBLEScan, cleanupBLE, cleanupClassic]);
+
+    useEffect(() => {
+        return () => {
+            isMountedRef.current = false;
+            try {
+                stopBLEScan();
+            } catch {
+                // ignore
+            }
+            try {
+                cleanupBLE();
+            } catch {
+                // ignore
+            }
+            try {
+                cleanupClassic();
+            } catch {
+                // ignore
+            }
             releaseSharedBleManager();
         };
-    }, [cleanupBLE, cleanupClassic, stopBLEScan]);
+    }, [stopBLEScan, cleanupBLE, cleanupClassic]);
 
-    // 🔒 Request permissions for BLE
+    // 🔒 Request permissions for BLE / Classic Bluetooth
     const requestBLEPermissions = useCallback(async (): Promise<boolean> => {
-        if (Platform.OS !== 'android') return true;
-        try {
-            const result = await PermissionsAndroid?.requestMultiple?.([
-                PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-                PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-                PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-                PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-            ]);
-            return Object.values(result).every(v => v === PermissionsAndroid.RESULTS.GRANTED);
-        } catch (e) {
-            return false;
-        }
-    }, []);
-
-    // 🔒 Ensure Bluetooth is enabled for Classic
-    const ensureClassicBluetoothEnabled = useCallback(async (): Promise<boolean> => {
-        try {
-            const enabled = RNBluetoothClassic?.isBluetoothEnabled
-                ? await RNBluetoothClassic.isBluetoothEnabled()
-                : false;
-            if (!enabled) {
-                if (Platform.OS === "android") {
-                    const result = await RNBluetoothClassic?.requestBluetoothEnabled();
-                    if (!result) {
-                        Alert.alert("Bluetooth Disabled", "Please enable Bluetooth first.");
-                        return false;
-                    }
-                }
-            }
-            return true;
-        } catch (error) {
-            console.warn("Classic Bluetooth enable check failed:", error);
-            return false;
-        }
+        return requestAndroidBluetoothPermissions();
     }, []);
 
     // 🔍 Scan for Classic Bluetooth devices (SEPARATE FUNCTION)
@@ -305,7 +410,7 @@ export default function useBluetoothService({
         } catch (error) {
             console.error('[CLASSIC] SCAN: Error:', error);
         }
-    }, [deviceType, ensureClassicBluetoothEnabled]);
+    }, [deviceType]);
 
     // Helper function to check if BLE device is a printer (excludes InnerPrinter - it uses Classic)
     const isBLEPrinterDevice = useCallback((device: BLEDevice): boolean => {
@@ -527,6 +632,16 @@ export default function useBluetoothService({
     const scanForDevices = useCallback(async () => {
         console.log('[UNIFIED] ========== UNIFIED SCAN STARTED ==========');
 
+        const hasPermission = await requestBLEPermissions();
+        if (!hasPermission) {
+            Alert.alert(
+                'Permissions Required',
+                'Bluetooth permissions are required to scan for devices.'
+            );
+            setIsScanning(false);
+            return;
+        }
+
         const bleReady = await isBleAdapterReady();
 
         // Stop any existing scans first
@@ -592,7 +707,86 @@ export default function useBluetoothService({
         setTimeout(() => {
             setIsScanning(false);
         }, 15500); // Slightly longer than BLE scan
-    }, [deviceType, scanBLEDevices, scanClassicDevices]);
+    }, [deviceType, scanBLEDevices, scanClassicDevices, requestBLEPermissions, ble]);
+
+    const parseClassicScaleWeight = useCallback((rawData: string): string | null => {
+        const s = String(rawData).trim();
+        const re = /^([A-Z]{1,4})(?:,([A-Z]{1,4}))?[\s:,-]*([0-9]+(?:[.,][0-9]+)?)\s*KG/i;
+        const match = s.match(re);
+        if (match) {
+            const weight = parseFloat(match[3].replace(",", "."));
+            return weight.toFixed(2);
+        }
+
+        const fallback = s.match(/([0-9]+(?:[.,][0-9]+)?)\s*KG/i);
+        if (fallback) {
+            const num = parseFloat(fallback[1].replace(",", "."));
+            return num.toFixed(2);
+        }
+
+        const numberOnly = s.match(/([-+]?[0-9]+(?:[.,][0-9]+)?)/);
+        if (numberOnly) {
+            const n = parseFloat(numberOnly[1].replace(",", "."));
+            if (!isNaN(n) && isFinite(n) && n > 0) {
+                return n.toFixed(2);
+            }
+        }
+
+        return null;
+    }, []);
+
+    const startClassicReadPolling = useCallback(
+        (classicDevice: ClassicBluetoothDevice) => {
+            if (classicReadIntervalRef.current) {
+                clearInterval(classicReadIntervalRef.current);
+                classicReadIntervalRef.current = null;
+            }
+
+            console.log("[CLASSIC] CONNECT: Starting polling (100ms interval)...");
+            const pollInterval = setInterval(async () => {
+                if (!isMountedRef.current || !isAppInForeground()) {
+                    return;
+                }
+
+                try {
+                    if (!classicDevice || !(await classicDevice.isConnected())) {
+                        console.log("[CLASSIC] POLL: Device disconnected, stopping poll");
+                        clearInterval(pollInterval);
+                        classicReadIntervalRef.current = null;
+                        return;
+                    }
+
+                    const data = await (classicDevice as any).read?.();
+                    if (!data) {
+                        return;
+                    }
+
+                    const raw = String(data || "").trim();
+                    if (!raw || /^xh\d+\s*$/i.test(raw)) {
+                        return;
+                    }
+
+                    const weightString = parseClassicScaleWeight(raw);
+                    if (weightString) {
+                        emitRef.current.setLastMessage(weightString);
+                    }
+                } catch (error) {
+                    if ((error as any)?.message?.includes("not connected")) {
+                        console.log("[CLASSIC] POLL: Device disconnected during poll");
+                        clearInterval(pollInterval);
+                        classicReadIntervalRef.current = null;
+                    }
+                }
+            }, 100);
+
+            classicReadIntervalRef.current = pollInterval;
+        },
+        [parseClassicScaleWeight]
+    );
+
+    useEffect(() => {
+        startClassicReadPollingRef.current = startClassicReadPolling;
+    }, [startClassicReadPolling]);
 
     // 🔗 Connect to Classic Bluetooth device (SEPARATE FUNCTION - SECONDARY)
     const connectClassicDevice = useCallback(async (
@@ -647,6 +841,19 @@ export default function useBluetoothService({
 
             console.log('[CLASSIC] CONNECT STEP 1: ✓ Device connected:', classicDevice.name || classicDevice.address);
 
+            const unifiedDevice: UnifiedDevice = {
+                id: classicDevice.address || id,
+                address: classicDevice.address || id,
+                name: classicDevice.name || undefined,
+                type: 'classic',
+                classicDevice,
+            };
+
+            setConnectedDevice(unifiedDevice);
+            setConnectionFailed(false);
+            manualDisconnectRef.current = false;
+            setIsConnecting(false);
+
             // Store device info permanently with type 'classic'
             const deviceInfo = {
                 id: classicDevice.address || id,
@@ -662,46 +869,23 @@ export default function useBluetoothService({
             // Setup event listener for data
             try {
                 classicDevice?.onDataReceived((event) => {
+                    if (!isMountedRef.current || !isAppInForeground()) {
+                        return;
+                    }
+
                     console.log('[CLASSIC] DATA: Incoming data:', event?.data);
                     const raw = String(event?.data || "").trim();
                     if (!raw) return;
 
-                    // Skip device name frames
                     if (/^xh\d+\s*$/i.test(raw)) {
                         console.log('[CLASSIC] DATA: Skipping device name frame');
                         return;
                     }
 
-                    // Try to parse weight from data
-                    const parseScaleData = (rawData: string) => {
-                        const s = String(rawData).trim();
-                        // Try format: "CODE1,CODE2: 45.23 KG" or "45.23 KG"
-                        const re = /^([A-Z]{1,4})(?:,([A-Z]{1,4}))?[\s:,-]*([0-9]+(?:[.,][0-9]+)?)\s*KG/i;
-                        const m = s.match(re);
-                        if (m) {
-                            const weight = parseFloat(m[3].replace(",", "."));
-                            return weight.toFixed(2);
-                        }
-                        const fallback = s.match(/([0-9]+(?:[.,][0-9]+)?)\s*KG/i);
-                        if (fallback) {
-                            const num = parseFloat(fallback[1].replace(",", "."));
-                            return num.toFixed(2);
-                        }
-                        // Try any number
-                        const numberOnly = s.match(/([-+]?[0-9]+(?:[.,][0-9]+)?)/);
-                        if (numberOnly) {
-                            const n = parseFloat(numberOnly[1].replace(",", "."));
-                            if (!isNaN(n) && isFinite(n) && n > 0) {
-                                return n.toFixed(2);
-                            }
-                        }
-                        return null;
-                    };
-
-                    const weightString = parseScaleData(raw);
+                    const weightString = parseClassicScaleWeight(raw);
                     if (weightString) {
                         console.log(`[CLASSIC] DATA: ✓✓✓ VALID WEIGHT PARSED: ${weightString}`);
-                        setLastMessage(weightString);
+                        emitRef.current.setLastMessage(weightString);
                     }
                 });
                 console.log('[CLASSIC] CONNECT: Device listener set successfully');
@@ -709,39 +893,7 @@ export default function useBluetoothService({
                 console.warn('[CLASSIC] CONNECT: Failed to attach read listener:', err);
             }
 
-            // Start polling (Classic scales usually need polling)
-            console.log('[CLASSIC] CONNECT: Starting polling (100ms interval)...');
-            const pollInterval = setInterval(async () => {
-                try {
-                    if (!classicDevice || !(await classicDevice.isConnected())) {
-                        console.log('[CLASSIC] POLL: Device disconnected, stopping poll');
-                        clearInterval(pollInterval);
-                        return;
-                    }
-
-                    const data = await (classicDevice as any).read?.();
-                    if (data) {
-                        console.log('[CLASSIC] POLL: Read result:', JSON.stringify(data));
-                        const raw = String(data || "").trim();
-                        if (raw && !/^xh\d+\s*$/i.test(raw)) {
-                            const numberOnly = raw.match(/([-+]?[0-9]+(?:[.,][0-9]+)?)/);
-                            if (numberOnly) {
-                                const n = parseFloat(numberOnly[1].replace(",", "."));
-                                if (!isNaN(n) && isFinite(n) && n > 0) {
-                                    setLastMessage(n.toFixed(2));
-                                }
-                            }
-                        }
-                    }
-                } catch (error) {
-                    if ((error as any)?.message?.includes('not connected')) {
-                        console.log('[CLASSIC] POLL: Device disconnected during poll');
-                        clearInterval(pollInterval);
-                    }
-                }
-            }, 100);
-
-            classicReadIntervalRef.current = pollInterval;
+            startClassicReadPolling(classicDevice);
             console.log('[CLASSIC] CONNECT: ✓ Polling started');
 
             // Send wake-up commands for scales
@@ -758,20 +910,7 @@ export default function useBluetoothService({
                 }
             }
 
-            const unifiedDevice: UnifiedDevice = {
-                id: classicDevice.address || id,
-                address: classicDevice.address || id,
-                name: classicDevice.name || undefined,
-                type: 'classic',
-                classicDevice,
-            };
-
-            setConnectedDevice(unifiedDevice);
-            setConnectionFailed(false);
-            manualDisconnectRef.current = false;
-
             console.log('[CLASSIC] ========== CLASSIC CONNECT COMPLETE ==========');
-            setIsConnecting(false);
             return unifiedDevice;
         } catch (e) {
             console.log('[CLASSIC] ========== CLASSIC CONNECT ERROR ==========');
@@ -785,7 +924,7 @@ export default function useBluetoothService({
             setConnectedDevice(null);
             return null;
         }
-    }, [deviceType, ensureClassicBluetoothEnabled]);
+    }, [deviceType, parseClassicScaleWeight, startClassicReadPolling]);
 
     // 🔌 Disconnect (handles both BLE and Classic)
     const disconnect = useCallback(async () => {
@@ -967,6 +1106,9 @@ export default function useBluetoothService({
                 serviceUUIDs: d.serviceUUIDs || undefined,
             };
             setConnectedDevice(unifiedDevice);
+            setIsConnecting(false);
+            manualDisconnectRef.current = false;
+            setConnectionFailed(false);
 
             // Log all services and characteristics
             console.log('[BLE] CONNECT STEP 3: Enumerating services and characteristics...');
@@ -1174,7 +1316,7 @@ export default function useBluetoothService({
                                 const weight = (val16 / 100.0).toFixed(2); // Assuming 0.01kg resolution
                                 console.log(`[BLE] PARSE [${source}]: ✓✓✓ Parsed from binary (2-byte LE): ${weight}`);
                                 try {
-                                    setLastMessage(weight); // Store as weight in kgs (0.01 precision)
+                                    emitRef.current.setLastMessage(weight); // Store as weight in kgs (0.01 precision)
                                 } catch (setErr) {
                                     console.error(`[BLE] PARSE [${source}]: Error setting last message:`, setErr);
                                 }
@@ -1191,7 +1333,7 @@ export default function useBluetoothService({
                                     if (!isNaN(val) && isFinite(val) && val >= -1000 && val <= 100000) {
                                         console.log(`[BLE] PARSE [${source}]: ✓✓✓ Parsed from binary (4-byte float): ${val.toFixed(2)}`);
                                         try {
-                                            setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
+                                            emitRef.current.setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
                                         } catch (setErr) {
                                             console.error(`[BLE] PARSE [${source}]: Error setting last message:`, setErr);
                                         }
@@ -1209,7 +1351,7 @@ export default function useBluetoothService({
                         if (!isNaN(val) && isFinite(val)) {
                             console.log(`[BLE] PARSE [${source}]: ✓✓✓ VALID WEIGHT PARSED: ${val.toFixed(2)}`);
                             try {
-                                setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
+                                emitRef.current.setLastMessage(val.toFixed(2)); // Store as weight in kgs (0.01 precision)
                                 console.log(`[BLE] PARSE [${source}]: UI Updated with reading: ${val.toFixed(2)}`);
                             } catch (setErr) {
                                 console.error(`[BLE] PARSE [${source}]: Error setting last message:`, setErr);
@@ -1240,6 +1382,10 @@ export default function useBluetoothService({
                         characteristic.uuid,
                         (error, c) => {
                             try {
+                                if (!isMountedRef.current || !isAppInForeground()) {
+                                    return;
+                                }
+
                                 if (error) {
                                     console.log('[BLE] NOTIFY ERROR:', error?.message || error);
                                     return;
@@ -1350,7 +1496,6 @@ export default function useBluetoothService({
             setConnectionFailed(false);
 
             console.log('[BLE] ========== CONNECT COMPLETE ==========');
-            setIsConnecting(false);
             return unifiedDevice;
         } catch (e) {
             console.log('[BLE] ========== CONNECT ERROR ==========');
@@ -1380,6 +1525,9 @@ export default function useBluetoothService({
             console.log(`[UNIFIED] ========== CONNECT WRAPPER STARTED ==========`);
             console.log(`[UNIFIED] CONNECT: Target device ID: ${id}`);
 
+            setIsConnecting(true);
+
+            try {
             // Validate input
             if (!id || typeof id !== 'string') {
                 console.error('[UNIFIED] CONNECT: Invalid device ID provided');
@@ -1748,9 +1896,15 @@ export default function useBluetoothService({
 
                 return null;
             }
+            } finally {
+                setIsConnecting(false);
+            }
         },
         [devices, bleDevices, classicDevices, connectedDevice, connect, connectClassicDevice, requestBLEPermissions, cleanupBLE, cleanupClassic, deviceType, ble, isBLEScaleDevice]
     );
+
+    const connectToDeviceRef = useRef(connectToDevice);
+    connectToDeviceRef.current = connectToDevice;
 
     // 🧾 Printer helpers (Classic only for now)
     async function printText(text: string) {
@@ -1967,7 +2121,7 @@ export default function useBluetoothService({
 
     // ♻️ Auto-connect to last device on mount (for scales only)
     useEffect(() => {
-        if (deviceType !== 'scale') return;
+        if (deviceType !== 'scale' || !autoConnectOnMount) return;
 
         // Skip auto-connect if user manually disconnected
         if (manualDisconnectRef.current) {
@@ -1984,6 +2138,18 @@ export default function useBluetoothService({
             try {
                 // Mark as run
                 autoConnectHasRunRef.current = true;
+
+                const hasPermission = await requestAndroidBluetoothPermissions();
+                if (!hasPermission) {
+                    console.log("[UNIFIED] AUTO-CONNECT: Bluetooth permissions not granted");
+                    return;
+                }
+
+                const bleReady = await isBleAdapterReady();
+                if (!bleReady) {
+                    console.log("[UNIFIED] AUTO-CONNECT: Bluetooth adapter is not ready");
+                    return;
+                }
 
                 // Check if already connected - skip auto-connect
                 if (connectedDevice) {
@@ -2028,41 +2194,11 @@ export default function useBluetoothService({
                     return;
                 }
 
-                // Check if device is available in scanned devices (BLE or Classic)
-                const deviceAvailableBLE = devices.some(d =>
-                    d.id.toLowerCase() === deviceId.toLowerCase() && d.type === 'ble'
-                ) || bleDevices.some(d =>
-                    d.id.toLowerCase() === deviceId.toLowerCase()
+                console.log(
+                    '[UNIFIED] AUTO-CONNECT: Attempting connection to saved device:',
+                    deviceId
                 );
-
-                const deviceAvailableClassic = devices.some(d =>
-                    d.id.toLowerCase() === deviceId.toLowerCase() && d.type === 'classic'
-                ) || classicDevices.some(d =>
-                    (d.address || d.id || '').toLowerCase() === deviceId.toLowerCase()
-                );
-
-                const deviceAvailable = deviceAvailableBLE || deviceAvailableClassic;
-
-                if (!deviceAvailable) {
-                    console.log('[UNIFIED] AUTO-CONNECT: Device not available in scanned devices, showing as disconnected');
-                    console.log('[UNIFIED] AUTO-CONNECT: Available devices - BLE:', bleDevices.length, 'Classic:', classicDevices.length);
-                    // Don't try to connect if device is not available, just show as disconnected
-                    return;
-                }
-
-                // Reconnect based on stored type - try BLE first, then Classic
-                const storedType = deviceData.type || 'ble';
-                console.log('[UNIFIED] AUTO-CONNECT: Stored type is', storedType, '- attempting connection to:', deviceId);
-
-                if (storedType === 'ble' && deviceAvailableBLE) {
-                    console.log('[UNIFIED] AUTO-CONNECT: Attempting BLE connection...');
-                    await connectToDevice(deviceId);
-                } else if (storedType === 'classic' && deviceAvailableClassic) {
-                    console.log('[UNIFIED] AUTO-CONNECT: Attempting Classic connection...');
-                    await connectToDevice(deviceId);
-                } else {
-                    console.log('[UNIFIED] AUTO-CONNECT: Device type', storedType, 'but device not available in that type, skipping connection');
-                }
+                await connectToDeviceRef.current(deviceId);
             } catch (error) {
                 console.error('[BLE] AUTO-CONNECT: Failed:', error);
                 // Don't crash, just log the error
@@ -2075,7 +2211,7 @@ export default function useBluetoothService({
             autoConnect();
         }, 1000);
         return () => clearTimeout(timeout);
-    }, [deviceType]); // Only depend on deviceType, run once on mount
+    }, [deviceType, autoConnectOnMount]); // Only depend on deviceType, run once on mount
 
     const autoConnectInnerPrinter = useCallback(async (): Promise<UnifiedDevice | null> => {
         if (deviceType !== "printer") {
@@ -2087,7 +2223,7 @@ export default function useBluetoothService({
             return null;
         }
 
-        const enabled = await ensureClassicBluetoothEnabled();
+        const enabled = await ensureClassicBluetoothEnabled({ promptIfDisabled: false });
         if (!enabled) {
             return null;
         }
@@ -2103,12 +2239,11 @@ export default function useBluetoothService({
         connectedDevice,
         isConnecting,
         connectClassicDevice,
-        ensureClassicBluetoothEnabled,
     ]);
 
-    // Auto-connect to the first Classic InnerPrinter on mount
+    // Auto-connect to the first Classic InnerPrinter on mount (printers only, when enabled)
     useEffect(() => {
-        if (deviceType !== "printer") {
+        if (deviceType !== "printer" || !autoConnectOnMount) {
             return;
         }
 
@@ -2126,7 +2261,7 @@ export default function useBluetoothService({
         }, 1500);
 
         return () => clearTimeout(timeout);
-    }, [deviceType, autoConnectInnerPrinter]);
+    }, [deviceType, autoConnectOnMount, autoConnectInnerPrinter]);
 
     return {
         devices,

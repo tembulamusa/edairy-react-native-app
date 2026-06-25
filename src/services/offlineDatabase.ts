@@ -1,12 +1,14 @@
 // src/services/offlineDatabase.ts
 import SQLite from 'react-native-sqlite-storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { normalizeEmail } from '../utils/loginCredentials';
+import { notifyHeaderRefresh } from '../utils/headerRefresh';
 
 SQLite.DEBUG(true);
 SQLite.enablePromise(true);
 
 const DATABASE_NAME = 'edairy_offline.db';
-const DATABASE_VERSION = '1.2';
+const DATABASE_VERSION = '1.6';
 const DATABASE_DISPLAY_NAME = 'eDairy Offline Database';
 const DATABASE_SIZE = 200000;
 
@@ -15,20 +17,19 @@ let database: SQLite.SQLiteDatabase | null = null;
 // Initialize database
 export const initDatabase = async (): Promise<SQLite.SQLiteDatabase> => {
     try {
-        if (database) {
-            console.log('[DB] Database already initialized');
-            return database;
+        if (!database) {
+            console.log('[DB] Opening database...');
+            database = await SQLite.openDatabase(
+                DATABASE_NAME,
+                DATABASE_VERSION,
+                DATABASE_DISPLAY_NAME,
+                DATABASE_SIZE
+            );
+            console.log('[DB] Database opened successfully');
+        } else {
+            console.log('[DB] Database already initialized — applying pending migrations');
         }
 
-        console.log('[DB] Opening database...');
-        database = await SQLite.openDatabase(
-            DATABASE_NAME,
-            DATABASE_VERSION,
-            DATABASE_DISPLAY_NAME,
-            DATABASE_SIZE
-        );
-
-        console.log('[DB] Database opened successfully');
         await createTables();
         return database;
     } catch (error) {
@@ -44,30 +45,20 @@ const createTables = async () => {
 
         console.log('[DB] Creating tables...');
 
-        // Offline collections table
+        // Unified offline transaction queue (all endpoints share this table)
         await database.executeSql(`
             CREATE TABLE IF NOT EXISTS offline_collections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                member_number TEXT NOT NULL,
-                member_name TEXT,
-                shift_id INTEGER,
-                shift_name TEXT,
-                transporter_id INTEGER,
-                transporter_name TEXT,
-                route_id INTEGER,
-                route_name TEXT,
-                center_id INTEGER,
-                center_name TEXT,
-                measuring_can_id INTEGER,
-                measuring_can_name TEXT,
-                total_cans INTEGER NOT NULL,
-                total_quantity REAL NOT NULL,
-                cans_data TEXT NOT NULL,
-                created_at TEXT NOT NULL,
+                user_id INTEGER,
+                endpoint TEXT NOT NULL,
+                method TEXT NOT NULL DEFAULT 'POST',
+                data TEXT NOT NULL,
+                summary_label TEXT,
                 synced INTEGER DEFAULT 0,
-                sync_attempts INTEGER DEFAULT 0,
-                last_sync_attempt TEXT,
-                error_message TEXT
+                retries INTEGER DEFAULT 0,
+                error_message TEXT,
+                last_attempt_at TEXT,
+                created_at TEXT NOT NULL
             );
         `);
 
@@ -196,12 +187,486 @@ const createTables = async () => {
             );
         `);
 
+        await database.executeSql(`
+            CREATE TABLE IF NOT EXISTS customers (
+                id INTEGER PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL
+            );
+        `);
+
+        await database.executeSql(`
+            CREATE TABLE IF NOT EXISTS stores (
+                id INTEGER PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL
+            );
+        `);
+
+        await database.executeSql(`
+            CREATE TABLE IF NOT EXISTS store_stocks (
+                store_id INTEGER NOT NULL,
+                stock_id INTEGER NOT NULL,
+                data_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (store_id, stock_id)
+            );
+        `);
+
         console.log('[DB] Tables created successfully');
+        await ensureOfflineCollectionsSchemaColumns(database);
+        await ensureOfflineCollectionsUnifiedSchema(database);
     } catch (error) {
         console.error('[DB] Error creating tables:', error);
         throw error;
     }
 };
+
+async function tableExists(db: SQLite.SQLiteDatabase, tableName: string): Promise<boolean> {
+    const result = await db.executeSql(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        [tableName]
+    );
+    return result[0].rows.length > 0;
+}
+
+async function columnExists(
+    db: SQLite.SQLiteDatabase,
+    tableName: string,
+    columnName: string
+): Promise<boolean> {
+    const result = await db.executeSql(`PRAGMA table_info(${tableName})`);
+    for (let i = 0; i < result[0].rows.length; i++) {
+        if (result[0].rows.item(i).name === columnName) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const OFFLINE_COLLECTIONS_SCHEMA_MIGRATION_KEY = 'offline_collections_unified_schema_v2';
+
+async function hasOfflineCollectionsSchemaMigrationCompleted(): Promise<boolean> {
+    try {
+        const db = database || await initDatabase();
+        const result = await db.executeSql(
+            'SELECT key FROM reference_sync WHERE key = ?',
+            [OFFLINE_COLLECTIONS_SCHEMA_MIGRATION_KEY]
+        );
+        return result[0].rows.length > 0;
+    } catch {
+        return false;
+    }
+}
+
+async function markOfflineCollectionsSchemaMigrationCompleted(): Promise<void> {
+    const db = database || await initDatabase();
+    const now = new Date().toISOString();
+    await db.executeSql(
+        `INSERT OR REPLACE INTO reference_sync (key, synced_at, record_counts)
+         VALUES (?, ?, ?)`,
+        [OFFLINE_COLLECTIONS_SCHEMA_MIGRATION_KEY, now, JSON.stringify({ migrated: true })]
+    );
+}
+
+async function insertOfflineCollectionRow(
+    db: SQLite.SQLiteDatabase,
+    row: {
+        user_id?: number | null;
+        endpoint: string;
+        method: string;
+        data: string;
+        summary_label?: string | null;
+        synced?: number;
+        retries?: number;
+        error_message?: string | null;
+        last_attempt_at?: string | null;
+        created_at: string;
+    },
+    targetTable: 'offline_collections' | 'offline_collections_unified' = 'offline_collections'
+): Promise<void> {
+    const hasUserIdColumn = await columnExists(db, targetTable, 'user_id');
+
+    if (hasUserIdColumn) {
+        await db.executeSql(
+            `INSERT INTO ${targetTable} (
+                user_id, endpoint, method, data, summary_label, synced, retries,
+                error_message, last_attempt_at, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                row.user_id ?? null,
+                row.endpoint,
+                row.method,
+                row.data,
+                row.summary_label ?? null,
+                row.synced ?? 0,
+                row.retries ?? 0,
+                row.error_message ?? null,
+                row.last_attempt_at ?? null,
+                row.created_at,
+            ]
+        );
+        return;
+    }
+
+    await db.executeSql(
+        `INSERT INTO ${targetTable} (
+            endpoint, method, data, summary_label, synced, retries,
+            error_message, last_attempt_at, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+            row.endpoint,
+            row.method,
+            row.data,
+            row.summary_label ?? null,
+            row.synced ?? 0,
+            row.retries ?? 0,
+            row.error_message ?? null,
+            row.last_attempt_at ?? null,
+            row.created_at,
+        ]
+    );
+}
+
+const OFFLINE_COLLECTIONS_MODERN_COLUMNS = [
+    'user_id',
+    'endpoint',
+    'method',
+    'data',
+    'summary_label',
+    'synced',
+    'retries',
+    'error_message',
+    'last_attempt_at',
+    'created_at',
+] as const;
+
+async function offlineCollectionsHasModernSchema(
+    db: SQLite.SQLiteDatabase
+): Promise<boolean> {
+    if (!(await tableExists(db, 'offline_collections'))) {
+        return true;
+    }
+
+    if (await offlineCollectionsHasLegacyMemberKilosSchema(db)) {
+        return false;
+    }
+
+    for (const columnName of OFFLINE_COLLECTIONS_MODERN_COLUMNS) {
+        if (!(await columnExists(db, 'offline_collections', columnName))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+async function offlineCollectionsHasLegacyMemberKilosSchema(
+    db: SQLite.SQLiteDatabase
+): Promise<boolean> {
+    return (
+        (await tableExists(db, 'offline_collections')) &&
+        (await columnExists(db, 'offline_collections', 'member_number'))
+    );
+}
+
+async function ensureOfflineCollectionsPendingIndex(
+    db: SQLite.SQLiteDatabase
+): Promise<void> {
+    if (!(await offlineCollectionsHasModernSchema(db))) {
+        return;
+    }
+
+    try {
+        await db.executeSql(`
+            CREATE INDEX IF NOT EXISTS idx_offline_collections_pending
+            ON offline_collections(user_id, synced, retries, created_at)
+        `);
+    } catch (error) {
+        console.warn('[DB] Could not create offline_collections pending index:', error);
+    }
+}
+
+async function ensureOfflineCollectionsSchemaColumns(db: SQLite.SQLiteDatabase): Promise<void> {
+    if (!(await tableExists(db, 'offline_collections'))) {
+        return;
+    }
+
+    const columnsToAdd: Array<[string, string]> = [
+        ['user_id', 'INTEGER'],
+        ['endpoint', 'TEXT'],
+        ['method', 'TEXT'],
+        ['data', 'TEXT'],
+        ['summary_label', 'TEXT'],
+        ['synced', 'INTEGER DEFAULT 0'],
+        ['retries', 'INTEGER DEFAULT 0'],
+        ['error_message', 'TEXT'],
+        ['last_attempt_at', 'TEXT'],
+        ['created_at', 'TEXT'],
+    ];
+
+    for (const [columnName, columnType] of columnsToAdd) {
+        if (!(await columnExists(db, 'offline_collections', columnName))) {
+            console.log(`[DB] Adding ${columnName} column to offline_collections...`);
+            await db.executeSql(
+                `ALTER TABLE offline_collections ADD COLUMN ${columnName} ${columnType}`
+            );
+        }
+    }
+
+    if (await columnExists(db, 'offline_collections', 'sync_attempts')) {
+        await db.executeSql(
+            `UPDATE offline_collections
+             SET retries = COALESCE(retries, sync_attempts, 0)
+             WHERE retries IS NULL`
+        );
+    }
+
+    if (await columnExists(db, 'offline_collections', 'last_sync_attempt')) {
+        await db.executeSql(
+            `UPDATE offline_collections
+             SET last_attempt_at = COALESCE(last_attempt_at, last_sync_attempt)
+             WHERE last_attempt_at IS NULL`
+        );
+    }
+
+    if (await columnExists(db, 'offline_collections', 'method')) {
+        await db.executeSql(
+            `UPDATE offline_collections SET method = 'POST' WHERE method IS NULL OR method = ''`
+        );
+    }
+
+    if (await columnExists(db, 'offline_collections', 'synced')) {
+        await db.executeSql(
+            `UPDATE offline_collections SET synced = 0 WHERE synced IS NULL`
+        );
+    }
+
+    if (await columnExists(db, 'offline_collections', 'created_at')) {
+        const now = new Date().toISOString();
+        await db.executeSql(
+            `UPDATE offline_collections SET created_at = ? WHERE created_at IS NULL OR created_at = ''`,
+            [now]
+        );
+    }
+
+    const backfillUserId = await getCurrentOfflineUserId();
+    if (
+        backfillUserId != null &&
+        (await columnExists(db, 'offline_collections', 'user_id'))
+    ) {
+        await db.executeSql(
+            'UPDATE offline_collections SET user_id = ? WHERE user_id IS NULL',
+            [backfillUserId]
+        );
+    }
+
+    await ensureOfflineCollectionsPendingIndex(db);
+}
+
+async function ensureOfflineCollectionsUnifiedSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+    await ensureOfflineCollectionsSchemaColumns(db);
+
+    const schemaCurrent = await offlineCollectionsHasModernSchema(db);
+    const hasEndpointColumn = await tableExists(db, 'offline_collections')
+        ? await columnExists(db, 'offline_collections', 'endpoint')
+        : false;
+
+    let syncQueueHasRows = false;
+    if (await tableExists(db, 'sync_queue')) {
+        const syncQueueResult = await db.executeSql('SELECT COUNT(*) AS count FROM sync_queue');
+        syncQueueHasRows = syncQueueResult[0].rows.item(0).count > 0;
+    }
+
+    const migrationDone = await hasOfflineCollectionsSchemaMigrationCompleted();
+
+    if (schemaCurrent && migrationDone && !syncQueueHasRows) {
+        return;
+    }
+
+    console.log('[DB] Ensuring unified offline_collections schema...');
+
+    const hasLegacySchema = await offlineCollectionsHasLegacyMemberKilosSchema(db);
+
+    if (!hasEndpointColumn || hasLegacySchema) {
+        const migrationTargetTable = 'offline_collections_unified' as const;
+
+        await db.executeSql(`
+            CREATE TABLE IF NOT EXISTS offline_collections_unified (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                endpoint TEXT NOT NULL,
+                method TEXT NOT NULL DEFAULT 'POST',
+                data TEXT NOT NULL,
+                summary_label TEXT,
+                synced INTEGER DEFAULT 0,
+                retries INTEGER DEFAULT 0,
+                error_message TEXT,
+                last_attempt_at TEXT,
+                created_at TEXT NOT NULL
+            )
+        `);
+
+        if (await tableExists(db, 'sync_queue')) {
+            const syncQueueResult = await db.executeSql(
+                'SELECT * FROM sync_queue ORDER BY created_at ASC'
+            );
+            for (let i = 0; i < syncQueueResult[0].rows.length; i++) {
+                const row = syncQueueResult[0].rows.item(i);
+                await insertOfflineCollectionRow(db, {
+                    user_id: row.user_id ?? null,
+                    endpoint: row.endpoint,
+                    method: row.method || 'POST',
+                    data: row.payload,
+                    summary_label: row.summary_label,
+                    synced: row.synced ?? 0,
+                    retries: row.retries ?? 0,
+                    error_message: row.error_message,
+                    last_attempt_at: row.last_attempt_at,
+                    created_at: row.created_at,
+                }, migrationTargetTable);
+            }
+        }
+
+        if (await tableExists(db, 'offline_store_sales')) {
+            const storeSalesResult = await db.executeSql(
+                'SELECT * FROM offline_store_sales WHERE synced = 0 ORDER BY created_at ASC'
+            );
+            for (let i = 0; i < storeSalesResult[0].rows.length; i++) {
+                const row = storeSalesResult[0].rows.item(i);
+                await insertOfflineCollectionRow(db, {
+                    endpoint: OFFLINE_SYNC_ENDPOINTS.STORE_SALE,
+                    method: 'POST',
+                    data: row.payload_json,
+                    summary_label: row.summary_label || 'Store sale',
+                    synced: row.synced ?? 0,
+                    retries: row.sync_attempts ?? 0,
+                    error_message: row.error_message,
+                    last_attempt_at: row.last_sync_attempt,
+                    created_at: row.created_at,
+                }, migrationTargetTable);
+            }
+        }
+
+        if (await tableExists(db, 'offline_milk_deliveries')) {
+            const deliveriesResult = await db.executeSql(
+                'SELECT * FROM offline_milk_deliveries WHERE synced = 0 ORDER BY created_at ASC'
+            );
+            for (let i = 0; i < deliveriesResult[0].rows.length; i++) {
+                const row = deliveriesResult[0].rows.item(i);
+                await insertOfflineCollectionRow(db, {
+                    endpoint: OFFLINE_SYNC_ENDPOINTS.MILK_DELIVERIES,
+                    method: 'POST',
+                    data: row.payload_json,
+                    summary_label: row.summary_label || 'Milk delivery',
+                    synced: row.synced ?? 0,
+                    retries: row.sync_attempts ?? 0,
+                    error_message: row.error_message,
+                    last_attempt_at: row.last_sync_attempt,
+                    created_at: row.created_at,
+                }, migrationTargetTable);
+            }
+        }
+
+        if (await tableExists(db, 'offline_collections')) {
+            const legacyHasMemberNumber = await columnExists(db, 'offline_collections', 'member_number');
+            if (legacyHasMemberNumber) {
+                const legacyResult = await db.executeSql(
+                    'SELECT * FROM offline_collections WHERE synced = 0 ORDER BY created_at ASC'
+                );
+                const { buildOfflineCollectionJournalPayload } = await import('./offlineSync');
+                for (let i = 0; i < legacyResult[0].rows.length; i++) {
+                    const collection = legacyResult[0].rows.item(i);
+                    if (collection.endpoint && collection.data) {
+                        continue;
+                    }
+                    const payload = await buildOfflineCollectionJournalPayload({
+                        ...collection,
+                        cans_data: JSON.parse(collection.cans_data || '[]'),
+                    });
+                    if (!payload) {
+                        console.warn(
+                            '[DB] Skipping legacy offline_collections row — invalid payload:',
+                            collection.id
+                        );
+                        continue;
+                    }
+                    await insertOfflineCollectionRow(db, {
+                        endpoint: OFFLINE_SYNC_ENDPOINTS.MILK_JOURNALS,
+                        method: 'POST',
+                        data: JSON.stringify(payload),
+                        summary_label:
+                            collection.member_name ||
+                            collection.member_number ||
+                            'Member kilos',
+                        synced: collection.synced ?? 0,
+                        retries: collection.sync_attempts ?? 0,
+                        error_message: collection.error_message,
+                        last_attempt_at: collection.last_sync_attempt,
+                        created_at: collection.created_at,
+                    }, migrationTargetTable);
+                }
+            }
+
+            if (await columnExists(db, 'offline_collections', 'data')) {
+                const unifiedResult = await db.executeSql(
+                    `SELECT * FROM offline_collections
+                     WHERE data IS NOT NULL AND endpoint IS NOT NULL
+                     ORDER BY created_at ASC`
+                );
+                for (let i = 0; i < unifiedResult[0].rows.length; i++) {
+                    const row = unifiedResult[0].rows.item(i);
+                    await insertOfflineCollectionRow(db, {
+                        user_id: row.user_id ?? null,
+                        endpoint: row.endpoint,
+                        method: row.method || 'POST',
+                        data: row.data,
+                        summary_label: row.summary_label,
+                        synced: row.synced ?? 0,
+                        retries: row.retries ?? row.sync_attempts ?? 0,
+                        error_message: row.error_message,
+                        last_attempt_at: row.last_attempt_at ?? row.last_sync_attempt,
+                        created_at: row.created_at,
+                    }, migrationTargetTable);
+                }
+            }
+        }
+
+        await db.executeSql('DROP TABLE IF EXISTS offline_collections');
+        await db.executeSql(
+            'ALTER TABLE offline_collections_unified RENAME TO offline_collections'
+        );
+    } else if (syncQueueHasRows && (await tableExists(db, 'sync_queue'))) {
+        const syncQueueResult = await db.executeSql(
+            'SELECT * FROM sync_queue ORDER BY created_at ASC'
+        );
+        for (let i = 0; i < syncQueueResult[0].rows.length; i++) {
+            const row = syncQueueResult[0].rows.item(i);
+            await insertOfflineCollectionRow(db, {
+                user_id: row.user_id ?? null,
+                endpoint: row.endpoint,
+                method: row.method || 'POST',
+                data: row.payload,
+                summary_label: row.summary_label,
+                synced: row.synced ?? 0,
+                retries: row.retries ?? 0,
+                error_message: row.error_message,
+                last_attempt_at: row.last_attempt_at,
+                created_at: row.created_at,
+            });
+        }
+    }
+
+    await db.executeSql('DROP TABLE IF EXISTS sync_queue');
+    await db.executeSql('DROP TABLE IF EXISTS offline_store_sales');
+    await db.executeSql('DROP TABLE IF EXISTS offline_milk_deliveries');
+
+    await ensureOfflineCollectionsSchemaColumns(db);
+    await ensureOfflineCollectionsPendingIndex(db);
+
+    await markOfflineCollectionsSchemaMigrationCompleted();
+    console.log('[DB] Unified offline_collections schema ready');
+}
 
 async function ensureRouteCentersTableSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     try {
@@ -267,213 +732,484 @@ export const closeDatabase = async () => {
     }
 };
 
-// Insert offline collection
-export const insertOfflineCollection = async (data: {
-    member_number: string;
-    member_name?: string;
-    shift_id?: number;
-    shift_name?: string;
-    transporter_id?: number;
-    transporter_name?: string;
-    route_id?: number;
-    route_name?: string;
-    center_id?: number;
-    center_name?: string;
-    measuring_can_id?: number;
-    measuring_can_name?: string;
-    total_cans: number;
-    total_quantity: number;
-    cans_data: any[];
-}): Promise<number> => {
+export const MAX_OFFLINE_COLLECTION_RETRIES = 10;
+/** @deprecated Use MAX_OFFLINE_COLLECTION_RETRIES */
+export const MAX_SYNC_QUEUE_RETRIES = MAX_OFFLINE_COLLECTION_RETRIES;
+
+/** API paths used when pushing offline_collections rows online. */
+export const OFFLINE_SYNC_ENDPOINTS = {
+    MILK_JOURNALS: 'milk-journals',
+    STORE_SALE: 'store-sale',
+    MILK_DELIVERIES: 'milk-deliveries',
+} as const;
+
+/** Resolve the app user id from a stored login payload. */
+export function resolveUserIdFromStoredUser(userData: unknown): number | null {
+    if (!userData || typeof userData !== 'object') {
+        return null;
+    }
+
+    const user = userData as Record<string, unknown>;
+    const candidates = [user.member_id, user.user_id, user.id];
+
+    for (const value of candidates) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value;
+        }
+        if (typeof value === 'string' && value.trim() && !Number.isNaN(Number(value))) {
+            return Number(value);
+        }
+    }
+
+    return null;
+}
+
+/** Currently logged-in user id from AsyncStorage (used for offline save/sync scoping). */
+export async function getCurrentOfflineUserId(): Promise<number | null> {
+    try {
+        const storedUser = await AsyncStorage.getItem('user');
+        if (!storedUser) {
+            return null;
+        }
+        return resolveUserIdFromStoredUser(JSON.parse(storedUser));
+    } catch (error) {
+        console.error('[DB] Error resolving current offline user id:', error);
+        return null;
+    }
+}
+
+async function requireCurrentOfflineUserId(): Promise<number> {
+    const userId = await getCurrentOfflineUserId();
+    if (userId == null) {
+        throw new Error('No logged-in user id available for offline data');
+    }
+    return userId;
+}
+
+export type InsertOfflineDataInput = {
+    endpoint: string;
+    data: Record<string, unknown> | unknown[] | object;
+    method?: string;
+    summary_label?: string;
+    user_id?: number;
+};
+
+export type OfflineCollectionRecord = {
+    id: number;
+    user_id: number | null;
+    endpoint: string;
+    method: string;
+    data: string;
+    summary_label: string | null;
+    synced: number;
+    retries: number;
+    error_message: string | null;
+    last_attempt_at: string | null;
+    created_at: string;
+};
+
+/** @deprecated Use OfflineCollectionRecord */
+export type SyncQueueItem = OfflineCollectionRecord;
+
+const mapOfflineCollectionRow = (row: any): OfflineCollectionRecord => ({
+    id: row.id,
+    user_id: row.user_id ?? null,
+    endpoint: row.endpoint,
+    method: row.method,
+    data: row.data ?? row.payload ?? '',
+    summary_label: row.summary_label ?? null,
+    synced: row.synced,
+    retries: row.retries ?? row.sync_attempts ?? 0,
+    error_message: row.error_message ?? null,
+    last_attempt_at: row.last_attempt_at ?? row.last_sync_attempt ?? null,
+    created_at: row.created_at,
+});
+
+const parseOfflineCollectionData = (data: string): unknown => {
+    try {
+        return JSON.parse(data);
+    } catch {
+        return data;
+    }
+};
+
+/** Structured debug log for offline_collections save / push. */
+export const logOfflineCollectionDebug = (
+    phase: 'OFFLINE_SAVE' | 'ONLINE_PUSH' | 'ONLINE_PUSH_SUCCESS' | 'ONLINE_PUSH_FAILED',
+    record: OfflineCollectionRecord,
+    extra?: Record<string, unknown>
+): void => {
+    const parsedData = parseOfflineCollectionData(record.data);
+
+    console.log(
+        `[OFFLINE-COLLECTIONS][${phase}]`,
+        JSON.stringify(
+            {
+                timestamp: new Date().toISOString(),
+                endpoint: record.endpoint,
+                method: record.method,
+                data: parsedData,
+                sqlite_record: {
+                    id: record.id,
+                    user_id: record.user_id,
+                    endpoint: record.endpoint,
+                    method: record.method,
+                    data: parsedData,
+                    summary_label: record.summary_label,
+                    synced: record.synced,
+                    retries: record.retries,
+                    error_message: record.error_message,
+                    last_attempt_at: record.last_attempt_at,
+                    created_at: record.created_at,
+                },
+                ...extra,
+            },
+            null,
+            2
+        )
+    );
+};
+
+/** @deprecated Use logOfflineCollectionDebug */
+export const logSyncQueueDebug = logOfflineCollectionDebug;
+
+export const getOfflineCollectionById = async (
+    id: number
+): Promise<OfflineCollectionRecord | null> => {
     try {
         const db = database || await initDatabase();
+        const result = await db.executeSql('SELECT * FROM offline_collections WHERE id = ?', [id]);
 
-        const cansJson = JSON.stringify(data.cans_data);
+        if (result[0].rows.length === 0) {
+            return null;
+        }
+
+        return mapOfflineCollectionRow(result[0].rows.item(0));
+    } catch (error) {
+        console.error('[DB] Error getting offline collection by id:', id, error);
+        return null;
+    }
+};
+
+/** @deprecated Use getOfflineCollectionById */
+export const getSyncQueueItemById = getOfflineCollectionById;
+
+/**
+ * Save offline transaction data. All modules use this single table:
+ * offline_collections (endpoint + data + sync metadata).
+ */
+export const insertOfflineData = async (input: InsertOfflineDataInput): Promise<number> => {
+    const endpoint = input.endpoint.trim();
+    const method = (input.method ?? 'POST').toUpperCase();
+    const userId = input.user_id ?? (await requireCurrentOfflineUserId());
+
+    console.warn('[OFFLINE-COLLECTIONS] insertOfflineData called', method, endpoint, 'user_id:', userId);
+
+    try {
+        const db = database || await initDatabase();
         const now = new Date().toISOString();
 
         const result = await db.executeSql(
-            `INSERT INTO offline_collections (
-                member_number, member_name, shift_id, shift_name,
-                transporter_id, transporter_name, route_id, route_name,
-                center_id, center_name, measuring_can_id, measuring_can_name,
-                total_cans, total_quantity, cans_data, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO offline_collections (user_id, endpoint, method, data, summary_label, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
             [
-                data.member_number,
-                data.member_name || null,
-                data.shift_id || null,
-                data.shift_name || null,
-                data.transporter_id || null,
-                data.transporter_name || null,
-                data.route_id || null,
-                data.route_name || null,
-                data.center_id || null,
-                data.center_name || null,
-                data.measuring_can_id || null,
-                data.measuring_can_name || null,
-                data.total_cans,
-                data.total_quantity,
-                cansJson,
+                userId,
+                endpoint,
+                method,
+                JSON.stringify(input.data),
+                input.summary_label || null,
                 now,
             ]
         );
 
-        const insertId = result[0].insertId;
-        console.log('[DB] Collection inserted with ID:', insertId);
+        let insertId = result[0].insertId;
+        if (!insertId) {
+            const lastRow = await db.executeSql('SELECT last_insert_rowid() AS id');
+            insertId = lastRow[0].rows.item(0)?.id;
+        }
+
+        const savedRecord = insertId ? await getOfflineCollectionById(insertId) : null;
+
+        if (savedRecord) {
+            logOfflineCollectionDebug('OFFLINE_SAVE', savedRecord, {
+                summary_label: input.summary_label ?? null,
+            });
+        } else {
+            console.log(
+                '[OFFLINE-COLLECTIONS][OFFLINE_SAVE]',
+                JSON.stringify(
+                    {
+                        timestamp: new Date().toISOString(),
+                        endpoint,
+                        method,
+                        user_id: userId,
+                        data: input.data,
+                        sqlite_record: null,
+                        insert_id: insertId ?? null,
+                        warning: 'Could not read back offline_collections row after insert',
+                    },
+                    null,
+                    2
+                )
+            );
+        }
+
+        notifyHeaderRefresh();
         return insertId;
     } catch (error) {
-        console.error('[DB] Error inserting collection:', error);
+        console.error('[DB] Error inserting offline data into offline_collections:', error);
         throw error;
     }
 };
 
-// Get all unsynced collections
-export const getUnsyncedCollections = async (): Promise<any[]> => {
+export const getRetryableOfflineCollections = async (): Promise<OfflineCollectionRecord[]> => {
     try {
+        const userId = await getCurrentOfflineUserId();
+        if (userId == null) {
+            return [];
+        }
+
         const db = database || await initDatabase();
 
         const result = await db.executeSql(
-            'SELECT * FROM offline_collections WHERE synced = 0 ORDER BY created_at ASC'
+            `SELECT * FROM offline_collections
+             WHERE user_id = ? AND synced = 0 AND retries < ?
+             ORDER BY created_at ASC`,
+            [userId, MAX_OFFLINE_COLLECTION_RETRIES]
         );
 
-        const collections: any[] = [];
+        const items: OfflineCollectionRecord[] = [];
         for (let i = 0; i < result[0].rows.length; i++) {
-            const row = result[0].rows.item(i);
-            collections.push({
-                ...row,
-                cans_data: JSON.parse(row.cans_data),
-            });
+            items.push(mapOfflineCollectionRow(result[0].rows.item(i)));
         }
 
-        console.log('[DB] Found', collections.length, 'unsynced collections');
-        return collections;
+        return items;
     } catch (error) {
-        console.error('[DB] Error getting unsynced collections:', error);
-        throw error;
+        console.error('[DB] Error getting retryable offline collections:', error);
+        return [];
     }
 };
 
-// Get all collections (synced and unsynced)
-export const getAllCollections = async (): Promise<any[]> => {
+/** @deprecated Use getRetryableOfflineCollections */
+export const getRetryableSyncQueueItems = getRetryableOfflineCollections;
+
+export const getFailedOfflineCollections = async (): Promise<OfflineCollectionRecord[]> => {
     try {
+        const userId = await getCurrentOfflineUserId();
+        if (userId == null) {
+            return [];
+        }
+
         const db = database || await initDatabase();
 
         const result = await db.executeSql(
-            'SELECT * FROM offline_collections ORDER BY created_at DESC'
+            `SELECT * FROM offline_collections
+             WHERE user_id = ? AND synced = 0 AND retries >= ?
+             ORDER BY created_at ASC`,
+            [userId, MAX_OFFLINE_COLLECTION_RETRIES]
         );
 
-        const collections: any[] = [];
+        const items: OfflineCollectionRecord[] = [];
         for (let i = 0; i < result[0].rows.length; i++) {
-            const row = result[0].rows.item(i);
-            collections.push({
-                ...row,
-                cans_data: JSON.parse(row.cans_data),
-            });
+            items.push(mapOfflineCollectionRow(result[0].rows.item(i)));
         }
 
-        return collections;
+        return items;
     } catch (error) {
-        console.error('[DB] Error getting all collections:', error);
-        throw error;
+        console.error('[DB] Error getting failed offline collections:', error);
+        return [];
     }
 };
 
-// Mark collection as synced
-export const markCollectionSynced = async (id: number): Promise<void> => {
+/** @deprecated Use getFailedOfflineCollections */
+export const getFailedSyncQueueItems = getFailedOfflineCollections;
+
+export const getRetryableOfflineCollectionCount = async (): Promise<number> => {
     try {
+        const userId = await getCurrentOfflineUserId();
+        if (userId == null) {
+            return 0;
+        }
+
         const db = database || await initDatabase();
 
-        await db.executeSql(
-            'UPDATE offline_collections SET synced = 1, last_sync_attempt = ? WHERE id = ?',
-            [new Date().toISOString(), id]
+        const result = await db.executeSql(
+            `SELECT COUNT(*) AS count FROM offline_collections
+             WHERE user_id = ? AND synced = 0 AND retries < ?`,
+            [userId, MAX_OFFLINE_COLLECTION_RETRIES]
         );
 
-        console.log('[DB] Collection', id, 'marked as synced');
+        return result[0].rows.item(0).count;
     } catch (error) {
-        console.error('[DB] Error marking collection as synced:', error);
+        console.error('[DB] Error getting retryable offline collection count:', error);
+        return 0;
+    }
+};
+
+/** @deprecated Use getRetryableOfflineCollectionCount */
+export const getRetryableSyncQueueCount = getRetryableOfflineCollectionCount;
+
+export const getFailedOfflineCollectionCount = async (): Promise<number> => {
+    try {
+        const userId = await getCurrentOfflineUserId();
+        if (userId == null) {
+            return 0;
+        }
+
+        const db = database || await initDatabase();
+
+        const result = await db.executeSql(
+            `SELECT COUNT(*) AS count FROM offline_collections
+             WHERE user_id = ? AND synced = 0 AND retries >= ?`,
+            [userId, MAX_OFFLINE_COLLECTION_RETRIES]
+        );
+
+        return result[0].rows.item(0).count;
+    } catch (error) {
+        console.error('[DB] Error getting failed offline collection count:', error);
+        return 0;
+    }
+};
+
+/** @deprecated Use getFailedOfflineCollectionCount */
+export const getFailedSyncQueueCount = getFailedOfflineCollectionCount;
+
+export const deleteOfflineCollectionById = async (id: number): Promise<void> => {
+    try {
+        const db = database || await initDatabase();
+
+        await db.executeSql('DELETE FROM offline_collections WHERE id = ?', [id]);
+        console.log('[DB] Deleted offline collection record', id);
+    } catch (error) {
+        console.error('[DB] Error deleting offline collection record:', error);
         throw error;
     }
 };
 
-// Update sync attempt
-export const updateSyncAttempt = async (id: number, errorMessage?: string): Promise<void> => {
+/** @deprecated Use deleteOfflineCollectionById */
+export const deleteSyncQueueItem = deleteOfflineCollectionById;
+
+export const incrementOfflineCollectionRetry = async (
+    id: number,
+    errorMessage?: string
+): Promise<number> => {
     try {
         const db = database || await initDatabase();
+        const now = new Date().toISOString();
 
         await db.executeSql(
-            `UPDATE offline_collections 
-             SET sync_attempts = sync_attempts + 1, 
-                 last_sync_attempt = ?,
+            `UPDATE offline_collections
+             SET retries = retries + 1,
+                 last_attempt_at = ?,
                  error_message = ?
              WHERE id = ?`,
-            [new Date().toISOString(), errorMessage || null, id]
+            [now, errorMessage || null, id]
         );
 
-        console.log('[DB] Updated sync attempt for collection', id);
-    } catch (error) {
-        console.error('[DB] Error updating sync attempt:', error);
-        throw error;
-    }
-};
-
-// Delete synced collection
-export const deleteSyncedCollection = async (id: number): Promise<void> => {
-    try {
-        const db = database || await initDatabase();
-
-        await db.executeSql(
-            'DELETE FROM offline_collections WHERE id = ? AND synced = 1',
+        const result = await db.executeSql(
+            'SELECT retries FROM offline_collections WHERE id = ?',
             [id]
         );
 
-        console.log('[DB] Deleted synced collection', id);
+        return result[0].rows.item(0)?.retries ?? 0;
     } catch (error) {
-        console.error('[DB] Error deleting collection:', error);
+        console.error('[DB] Error incrementing offline collection retry:', error);
         throw error;
     }
 };
 
-// Delete any offline collection (regardless of sync status)
-export const deleteOfflineCollection = async (id: number): Promise<void> => {
+/** @deprecated Use incrementOfflineCollectionRetry */
+export const incrementSyncQueueRetry = incrementOfflineCollectionRetry;
+
+export const getAllCollections = async (): Promise<OfflineCollectionRecord[]> => {
     try {
-        const db = database || await initDatabase();
+        const userId = await getCurrentOfflineUserId();
+        if (userId == null) {
+            return [];
+        }
 
-        await db.executeSql(
-            'DELETE FROM offline_collections WHERE id = ?',
-            [id]
-        );
-
-        console.log('[DB] Deleted offline collection', id);
-    } catch (error) {
-        console.error('[DB] Error deleting offline collection:', error);
-        throw error;
-    }
-};
-
-// Get count of unsynced collections
-export const getUnsyncedCount = async (): Promise<number> => {
-    try {
         const db = database || await initDatabase();
 
         const result = await db.executeSql(
-            'SELECT COUNT(*) as count FROM offline_collections WHERE synced = 0'
+            'SELECT * FROM offline_collections WHERE user_id = ? ORDER BY created_at DESC',
+            [userId]
         );
 
-        const count = result[0].rows.item(0).count;
-        return count;
+        const collections: OfflineCollectionRecord[] = [];
+        for (let i = 0; i < result[0].rows.length; i++) {
+            collections.push(mapOfflineCollectionRow(result[0].rows.item(i)));
+        }
+
+        return collections;
+    } catch (error) {
+        console.error('[DB] Error getting all offline collections:', error);
+        throw error;
+    }
+};
+
+/** @deprecated Use deleteOfflineCollectionById */
+export const deleteOfflineCollection = deleteOfflineCollectionById;
+
+/** Total unpushed rows in offline_collections (includes permanently failed). */
+export const getUnsyncedCount = async (): Promise<number> => {
+    try {
+        const userId = await getCurrentOfflineUserId();
+        if (userId == null) {
+            return 0;
+        }
+
+        const db = database || await initDatabase();
+
+        const result = await db.executeSql(
+            'SELECT COUNT(*) AS count FROM offline_collections WHERE user_id = ? AND synced = 0',
+            [userId]
+        );
+
+        return result[0].rows.item(0).count;
     } catch (error) {
         console.error('[DB] Error getting unsynced count:', error);
         return 0;
     }
 };
 
-// Clear all synced collections
-export const clearSyncedCollections = async (): Promise<number> => {
+/** Earliest created_at among unpushed offline_collections rows. */
+export const getOldestUnpushedRecordAt = async (): Promise<string | null> => {
     try {
+        const userId = await getCurrentOfflineUserId();
+        if (userId == null) {
+            return null;
+        }
+
         const db = database || await initDatabase();
 
         const result = await db.executeSql(
-            'DELETE FROM offline_collections WHERE synced = 1'
+            `SELECT MIN(created_at) AS oldest
+             FROM offline_collections
+             WHERE user_id = ? AND synced = 0`,
+            [userId]
+        );
+
+        const oldest = result[0].rows.item(0)?.oldest;
+        return typeof oldest === 'string' && oldest.trim() ? oldest : null;
+    } catch (error) {
+        console.error('[DB] Error getting oldest unpushed record:', error);
+        return null;
+    }
+};
+
+// Clear all synced collections
+export const clearSyncedCollections = async (): Promise<number> => {
+    try {
+        const userId = await getCurrentOfflineUserId();
+        if (userId == null) {
+            return 0;
+        }
+
+        const db = database || await initDatabase();
+
+        const result = await db.executeSql(
+            'DELETE FROM offline_collections WHERE user_id = ? AND synced = 1',
+            [userId]
         );
 
         const rowsAffected = result[0].rowsAffected;
@@ -868,7 +1604,15 @@ export const hasMeasuringCans = async (): Promise<boolean> => {
     }
 };
 
-const MEMBER_KILOS_SYNC_KEY = 'member_kilos';
+export const MEMBER_KILOS_SYNC_KEY = 'member_kilos';
+export const STORE_SALES_SYNC_KEY = 'store_sales';
+export const MILK_DELIVERY_SYNC_KEY = 'milk_delivery';
+
+export const OFFLINE_REFERENCE_SYNC_KEYS = [
+    MEMBER_KILOS_SYNC_KEY,
+    STORE_SALES_SYNC_KEY,
+    MILK_DELIVERY_SYNC_KEY,
+] as const;
 
 function getMemberNumberFromRecord(member: any): string {
     return String(
@@ -897,8 +1641,13 @@ async function upsertJsonReferenceTable(
 
     const db = database || await initDatabase();
     const now = new Date().toISOString();
+    let saved = 0;
 
     for (const record of records) {
+        if (record?.id == null) {
+            continue;
+        }
+
         if (options?.includeMemberNo) {
             await db.executeSql(
                 `INSERT OR REPLACE INTO ${tableName} (id, member_no, data_json, synced_at) VALUES (?, ?, ?, ?)`,
@@ -909,6 +1658,7 @@ async function upsertJsonReferenceTable(
                     now,
                 ]
             );
+            saved += 1;
             continue;
         }
 
@@ -916,9 +1666,10 @@ async function upsertJsonReferenceTable(
             `INSERT OR REPLACE INTO ${tableName} (id, data_json, synced_at) VALUES (?, ?, ?)`,
             [record.id, JSON.stringify(record), now]
         );
+        saved += 1;
     }
 
-    return records.length;
+    return saved;
 }
 
 export async function saveTransporters(transporters: any[]): Promise<void> {
@@ -1007,6 +1758,41 @@ export async function getRoutes(): Promise<any[]> {
     }
 }
 
+function resolveRouteCenterRouteId(center: any): number | null {
+    const routeId = center?.route_id ?? center?.route?.id ?? center?.routeId;
+    if (routeId == null) {
+        return null;
+    }
+    return Number(routeId);
+}
+
+/** Upsert route centers grouped by route_id (used when syncing the full centers list). */
+export async function saveAllRouteCenters(routeCenters: any[]): Promise<void> {
+    if (!Array.isArray(routeCenters) || routeCenters.length === 0) {
+        console.log('[DB] Skipping route centers bulk save — no records to write');
+        return;
+    }
+
+    const byRoute = new Map<number, any[]>();
+    for (const center of routeCenters) {
+        if (center?.id == null) {
+            continue;
+        }
+        const routeId = resolveRouteCenterRouteId(center);
+        if (routeId == null) {
+            continue;
+        }
+        if (!byRoute.has(routeId)) {
+            byRoute.set(routeId, []);
+        }
+        byRoute.get(routeId)!.push(center);
+    }
+
+    for (const [routeId, centers] of byRoute) {
+        await saveRouteCentersForRoute(routeId, centers);
+    }
+}
+
 export async function saveRouteCentersForRoute(
     routeId: number,
     routeCenters: any[]
@@ -1028,9 +1814,14 @@ export async function saveRouteCentersForRoute(
                 continue;
             }
 
+            const payload = {
+                ...center,
+                route_id: center.route_id ?? center.route?.id ?? center.routeId ?? routeId,
+            };
+
             await db.executeSql(
                 'INSERT OR REPLACE INTO route_centers (route_id, id, data_json, synced_at) VALUES (?, ?, ?, ?)',
-                [routeId, center.id, JSON.stringify(center), now]
+                [routeId, center.id, JSON.stringify(payload), now]
             );
         }
 
@@ -1075,6 +1866,139 @@ async function saveReferenceSyncMeta(
         `INSERT OR REPLACE INTO reference_sync (key, synced_at, record_counts) VALUES (?, ?, ?)`,
         [key, now, JSON.stringify(recordCounts)]
     );
+}
+
+export async function saveReferenceSyncMetaForKey(
+    key: string,
+    recordCounts: Record<string, number>
+): Promise<void> {
+    await saveReferenceSyncMeta(key, recordCounts);
+}
+
+export async function saveCustomers(customers: any[]): Promise<number> {
+    if (!Array.isArray(customers) || customers.length === 0) {
+        return 0;
+    }
+
+    const db = database || await initDatabase();
+    const now = new Date().toISOString();
+    let saved = 0;
+
+    for (const customer of customers) {
+        if (customer?.id == null) {
+            continue;
+        }
+        await db.executeSql(
+            `INSERT OR REPLACE INTO customers (id, data_json, synced_at) VALUES (?, ?, ?)`,
+            [customer.id, JSON.stringify(customer), now]
+        );
+        saved += 1;
+    }
+
+    return saved;
+}
+
+export async function getCustomers(): Promise<any[]> {
+    try {
+        const db = database || await initDatabase();
+        const result = await db.executeSql(
+            'SELECT data_json FROM customers ORDER BY id ASC'
+        );
+        return parseJsonRows(result);
+    } catch (error) {
+        console.error('[DB] Error getting customers:', error);
+        return [];
+    }
+}
+
+export async function saveStores(stores: any[]): Promise<number> {
+    if (!Array.isArray(stores) || stores.length === 0) {
+        return 0;
+    }
+
+    const db = database || await initDatabase();
+    const now = new Date().toISOString();
+    let saved = 0;
+
+    for (const store of stores) {
+        if (store?.id == null) {
+            continue;
+        }
+        await db.executeSql(
+            `INSERT OR REPLACE INTO stores (id, data_json, synced_at) VALUES (?, ?, ?)`,
+            [store.id, JSON.stringify(store), now]
+        );
+        saved += 1;
+    }
+
+    return saved;
+}
+
+export async function getStores(): Promise<any[]> {
+    try {
+        const db = database || await initDatabase();
+        const result = await db.executeSql('SELECT data_json FROM stores ORDER BY id ASC');
+        return parseJsonRows(result);
+    } catch (error) {
+        console.error('[DB] Error getting stores:', error);
+        return [];
+    }
+}
+
+export async function saveStoreStocksForStore(
+    storeId: number,
+    stocks: any[]
+): Promise<number> {
+    if (!storeId || !Array.isArray(stocks)) {
+        return 0;
+    }
+
+    const db = database || await initDatabase();
+    const now = new Date().toISOString();
+    let saved = 0;
+
+    await db.executeSql('DELETE FROM store_stocks WHERE store_id = ?', [storeId]);
+
+    for (const stock of stocks) {
+        const stockId = stock?.id ?? stock?.stock_id;
+        if (stockId == null) {
+            continue;
+        }
+        await db.executeSql(
+            `INSERT OR REPLACE INTO store_stocks (store_id, stock_id, data_json, synced_at)
+             VALUES (?, ?, ?, ?)`,
+            [storeId, stockId, JSON.stringify(stock), now]
+        );
+        saved += 1;
+    }
+
+    return saved;
+}
+
+export async function getStoreStocks(storeId: number): Promise<any[]> {
+    try {
+        const db = database || await initDatabase();
+        const result = await db.executeSql(
+            'SELECT data_json FROM store_stocks WHERE store_id = ? ORDER BY stock_id ASC',
+            [storeId]
+        );
+        return parseJsonRows(result);
+    } catch (error) {
+        console.error('[DB] Error getting store stocks:', error);
+        return [];
+    }
+}
+
+export async function saveStoreSalesReferenceSyncMeta(
+    recordCounts: Record<string, number>
+): Promise<void> {
+    await saveReferenceSyncMeta(STORE_SALES_SYNC_KEY, recordCounts);
+}
+
+export async function saveMilkDeliveryReferenceSyncMeta(
+    recordCounts: Record<string, number>
+): Promise<void> {
+    await saveReferenceSyncMeta(MILK_DELIVERY_SYNC_KEY, recordCounts);
 }
 
 export async function getReferenceDataSyncInfo(

@@ -4,19 +4,25 @@ import React, {
   useState,
   useCallback,
   useRef,
+  useEffect,
   ReactNode,
 } from 'react';
 import {
   performMandatoryOfflineRefresh,
+  refreshOfflineReferenceData,
   checkConnectivity,
   type MandatoryOfflineRefreshResult,
 } from '../services/offlineSync';
+import { hasCoreData, refreshCoreDataFromServer } from '../services/coreData';
 import {
   evaluateOfflineCollectionGate,
   buildClearedCollectionGateFromStore,
   createClearedCollectionGate,
   type OfflineCollectionGateState,
 } from '../utils/offlineCollectionGate';
+import { getUnsyncedCount, getRetryableOfflineCollectionCount, getCurrentOfflineUserId } from '../services/offlineDatabase';
+
+const OFFLINE_GATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 interface SyncContextType {
   isSyncing: boolean;
@@ -29,6 +35,7 @@ interface SyncContextType {
   collectionGate: OfflineCollectionGateState;
   mandatorySyncError: string | null;
   gateCheckEnabled: boolean;
+  isUpdatingOnlineData: boolean;
   setMandatorySyncError: (error: string | null) => void;
   setIsSyncing: (syncing: boolean) => void;
   setLastSyncResult: (result: { success: number; failed: number } | null) => void;
@@ -38,11 +45,10 @@ interface SyncContextType {
   performMandatoryOfflineSync: (
     force?: boolean
   ) => Promise<MandatoryOfflineRefreshResult>;
+  updateOnlineReferenceData: () => Promise<boolean>;
   refreshCollectionGate: () => Promise<OfflineCollectionGateState>;
   clearCollectionGate: () => Promise<void>;
   enableCollectionGateCheck: () => void;
-  handleOnlineReconnect: () => Promise<MandatoryOfflineRefreshResult | null>;
-  checkAndSyncPendingData: () => Promise<void>;
 }
 
 const SyncContext = createContext<SyncContextType | undefined>(undefined);
@@ -53,6 +59,7 @@ interface SyncProviderProps {
 
 export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isUpdatingOnlineData, setIsUpdatingOnlineData] = useState<boolean>(false);
   const [isInitialSyncComplete, setIsInitialSyncComplete] = useState<boolean>(false);
   const [isUIBlocked, setIsUIBlocked] = useState<boolean>(false);
   const [isInitialLoading, setIsInitialLoading] = useState<boolean>(false);
@@ -64,15 +71,23 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
   );
   const [mandatorySyncError, setMandatorySyncError] = useState<string | null>(null);
   const [gateCheckEnabled, setGateCheckEnabled] = useState<boolean>(true);
-  const onlineReconnectRunningRef = useRef(false);
+  const collectionGateRef = useRef(collectionGate);
+  const gateCheckEnabledRef = useRef(gateCheckEnabled);
+
+  useEffect(() => {
+    collectionGateRef.current = collectionGate;
+  }, [collectionGate]);
+
+  useEffect(() => {
+    gateCheckEnabledRef.current = gateCheckEnabled;
+  }, [gateCheckEnabled]);
 
   const clearCollectionGate = useCallback(async () => {
     const cleared = await buildClearedCollectionGateFromStore();
     setCollectionGate(cleared);
     setMandatorySyncError(null);
     setSyncError(null);
-    setGateCheckEnabled(false);
-    console.log('[SYNC] Cleared pending-collection gate checks (reference SQLite data unchanged)');
+    console.log('[SYNC] Refreshed offline intake gate after push');
   }, []);
 
   const enableCollectionGateCheck = useCallback(() => {
@@ -80,28 +95,94 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
   }, []);
 
   const refreshCollectionGate = useCallback(async (): Promise<OfflineCollectionGateState> => {
-    if (!gateCheckEnabled) {
-      return collectionGate;
+    if (!gateCheckEnabledRef.current) {
+      return collectionGateRef.current;
     }
 
     const gate = await evaluateOfflineCollectionGate();
     setCollectionGate(gate);
 
-    if (!gate.requiresSync) {
+    if (!gate.requiresOnlinePush) {
       setMandatorySyncError(null);
+    } else {
+      setMandatorySyncError(
+        'Offline intake time limit reached. Connect to the internet to push your saved records.'
+      );
     }
 
     return gate;
-  }, [collectionGate, gateCheckEnabled]);
+  }, []);
+
+  useEffect(() => {
+    enableCollectionGateCheck();
+    void refreshCollectionGate();
+
+    const interval = setInterval(() => {
+      void refreshCollectionGate();
+    }, OFFLINE_GATE_CHECK_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [enableCollectionGateCheck, refreshCollectionGate]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const bootstrapCoreData = async () => {
+      try {
+        const userId = await getCurrentOfflineUserId();
+        if (!userId || cancelled) {
+          return;
+        }
+
+        if (await hasCoreData()) {
+          return;
+        }
+
+        const online = await checkConnectivity();
+        if (!online || cancelled) {
+          return;
+        }
+
+        console.log('[SYNC] Core data missing — downloading after app launch');
+        await refreshCoreDataFromServer({ logContext: 'AppLaunch' });
+      } catch (error) {
+        console.warn('[SYNC] Core data bootstrap failed:', error);
+      }
+    };
+
+    void bootstrapCoreData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const performMandatoryOfflineSync = useCallback(
     async (force = false): Promise<MandatoryOfflineRefreshResult> => {
+      const retryableCount = await getRetryableOfflineCollectionCount();
+
+      if (!force && retryableCount === 0) {
+        return {
+          success: true,
+          collectionsResult: { success: 0, failed: 0 },
+          referenceSynced: false,
+        };
+      }
+
       if (isSyncing && !force) {
         return {
           success: false,
           collectionsResult: { success: 0, failed: 0 },
           referenceSynced: false,
           error: 'Sync already in progress',
+        };
+      }
+
+      if (retryableCount === 0) {
+        return {
+          success: true,
+          collectionsResult: { success: 0, failed: 0 },
+          referenceSynced: false,
         };
       }
 
@@ -145,82 +226,35 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
     [clearCollectionGate, gateCheckEnabled, isSyncing]
   );
 
-  const handleOnlineReconnect = useCallback(async (): Promise<MandatoryOfflineRefreshResult | null> => {
-    if (onlineReconnectRunningRef.current) {
-      return null;
-    }
-
-    onlineReconnectRunningRef.current = true;
-    enableCollectionGateCheck();
+  const updateOnlineReferenceData = useCallback(async (): Promise<boolean> => {
+    setIsUpdatingOnlineData(true);
+    setSyncError(null);
 
     try {
-      await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-
-      const stillOnline = await checkConnectivity();
-      if (!stillOnline) {
-        return null;
+      const online = await checkConnectivity();
+      if (!online) {
+        setSyncError('No internet connection');
+        return false;
       }
 
-      const gate = await evaluateOfflineCollectionGate();
-      setCollectionGate(gate);
-
-      if (!gate.requiresSync) {
-        await clearCollectionGate();
-        return null;
+      const ok = await refreshOfflineReferenceData();
+      if (!ok) {
+        setSyncError('Failed to update online data');
       }
-
-      console.log('[SYNC] Auto-sync on reconnect', gate);
-      return await performMandatoryOfflineSync(true);
+      return ok;
+    } catch (error: any) {
+      setSyncError(error?.message || 'Failed to update online data');
+      return false;
     } finally {
-      onlineReconnectRunningRef.current = false;
+      setIsUpdatingOnlineData(false);
     }
-  }, [clearCollectionGate, enableCollectionGateCheck, performMandatoryOfflineSync]);
+  }, []);
 
   const triggerSync = useCallback(async (): Promise<{ success: number; failed: number }> => {
     enableCollectionGateCheck();
     const result = await performMandatoryOfflineSync(true);
     return result.collectionsResult;
   }, [enableCollectionGateCheck, performMandatoryOfflineSync]);
-
-  const checkAndSyncPendingData = async (): Promise<void> => {
-    let hasError = false;
-    try {
-      setIsUIBlocked(true);
-      setIsInitialLoading(true);
-      setSyncError(null);
-      enableCollectionGateCheck();
-
-      const gate = await evaluateOfflineCollectionGate();
-      setCollectionGate(gate);
-
-      if (gate.requiresSync) {
-        console.log('[SYNC] Sync required on launch', gate);
-        const result = await performMandatoryOfflineSync(true);
-
-        if (result.collectionsResult.failed > 0) {
-          console.warn(
-            `[SYNC] Some collections failed to sync: ${result.collectionsResult.failed} failed, ${result.collectionsResult.success} succeeded`
-          );
-        }
-      } else {
-        await clearCollectionGate();
-      }
-    } catch (error: any) {
-      console.error('[SYNC] Error during initial sync check:', error);
-      hasError = true;
-      setSyncError(error?.message || 'Failed to check for pending syncs');
-    } finally {
-      setIsInitialSyncComplete(true);
-      setIsInitialLoading(false);
-      setIsUIBlocked(false);
-
-      if (hasError) {
-        setTimeout(() => {
-          setSyncError(null);
-        }, 3000);
-      }
-    }
-  };
 
   const contextValue: SyncContextType = {
     isSyncing,
@@ -233,6 +267,7 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
     collectionGate,
     mandatorySyncError,
     gateCheckEnabled,
+    isUpdatingOnlineData,
     setIsSyncing,
     setLastSyncResult,
     setLastSyncTime,
@@ -240,11 +275,10 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
     setMandatorySyncError,
     triggerSync,
     performMandatoryOfflineSync,
+    updateOnlineReferenceData,
     refreshCollectionGate,
     clearCollectionGate,
     enableCollectionGateCheck,
-    handleOnlineReconnect,
-    checkAndSyncPendingData,
   };
 
   return (

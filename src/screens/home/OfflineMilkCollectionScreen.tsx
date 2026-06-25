@@ -22,7 +22,8 @@ import SuccessModal from "../../components/modals/SuccessModal";
 import { globalStyles, getDropdownPickerModalProps } from "../../styles";
 import {
     initDatabase,
-    insertOfflineCollection,
+    insertOfflineData,
+    OFFLINE_SYNC_ENDPOINTS,
     getAllCollections,
     getMeasuringCan,
     saveOfflineCollectionDraft,
@@ -40,19 +41,27 @@ import {
     normalizeMemberKilosCans,
 } from "../../services/offlineReferenceData";
 import { checkConnectivity } from "../../services/offlineSync";
-import { navigateToDashboard } from "../../services/offlineNavigation";
 import { useSync } from "../../context/SyncContext";
+import { getOfflineReferenceSyncHours } from "../../utils/userPreferences";
+import { formatPendingAge } from "../../utils/offlineSaveGate";
 import DropDownPicker from "react-native-dropdown-picker";
 import { renderDropdownItem } from "../../assets/styles/all";
 import useMemberDropdownSearch from "../../hooks/useMemberDropdownSearch";
-import { getMilkCanTare } from "../../utils/milkCan";
+import { getMilkCanTare, toMilkCanDropdownItems } from "../../utils/milkCan";
 import {
     getMemberDisplayName,
     getMemberNumber,
     toMemberDropdownItems,
 } from "../../utils/referenceDataFetch";
-import { getTransporterDisplayName } from "../../utils/transporter";
-import { getRouteDisplayName, getRouteCenterDisplayName, toRouteCenterDropdownItems } from "../../utils/route";
+import { getTransporterDisplayName, toTransporterDropdownItems } from "../../utils/transporter";
+import {
+    getRouteDisplayName,
+    getRouteCenterDisplayName,
+    toRouteCenterDropdownItems,
+    toRouteDropdownItems,
+} from "../../utils/route";
+import { toShiftDropdownItems } from "../../utils/dropdownItems";
+import { findShiftForCurrentTime } from "../../utils/shift";
 import {
     buildMemberKilosJournalPayload,
     findRouteById,
@@ -82,15 +91,6 @@ const getDropdownColStyle = (zIndex: number) => ({
     zIndex,
     elevation: zIndex / 1000,
 });
-
-const getMilkCanLabel = (can: any) =>
-    can?.can_id || can?.name || `Can ${can?.id ?? ""}`;
-
-const toMilkCanDropdownItems = (cans: any[]) =>
-    (cans || []).map((c: any) => ({
-        label: getMilkCanLabel(c),
-        value: c.id,
-    }));
 
 const autoSelectRouteForTransporter = (
     selectedTransporter: any,
@@ -146,20 +146,18 @@ const OfflineMilkCollectionScreen = () => {
     const navigation = useNavigation<any>();
     const {
         isSyncing,
-        performMandatoryOfflineSync,
         collectionGate,
         mandatorySyncError,
         gateCheckEnabled,
         refreshCollectionGate,
         enableCollectionGateCheck,
-        setMandatorySyncError,
     } = useSync();
 
     const unsyncedCount = collectionGate.unsyncedCount;
-    const requiresSync = collectionGate.requiresSync;
-    const referenceSyncLabel = useMemo(
-        () => formatReferenceSyncLabel(collectionGate.syncInfo),
-        [collectionGate.syncInfo]
+    const requiresOnlinePush = collectionGate.requiresOnlinePush;
+    const pendingAgeLabel = useMemo(
+        () => formatPendingAge(collectionGate.pendingAgeMs),
+        [collectionGate.pendingAgeMs]
     );
 
     const [commonData, setCommonData] = useState<any>({
@@ -185,9 +183,6 @@ const OfflineMilkCollectionScreen = () => {
     const [totalQuantity, setTotalQuantity] = useState<number>(0);
     const [loading, setLoading] = useState(false);
     const [isOnline, setIsOnline] = useState<boolean>(false);
-
-    const lastMandatorySyncAttemptRef = useRef(0);
-    const MANDATORY_SYNC_RETRY_MS = 30000;
 
     const [transporterOpen, setTransporterOpen] = useState(false);
     const [transporterValue, setTransporterValue] = useState<number | null>(null);
@@ -225,10 +220,11 @@ const OfflineMilkCollectionScreen = () => {
     const [historyModalVisible, setHistoryModalVisible] = useState(false);
     const [collectionHistory, setCollectionHistory] = useState<any[]>([]);
     const [isPrinting, setIsPrinting] = useState(false);
+    const [offlineSyncHours, setOfflineSyncHours] = useState(6);
 
     const isMountedRef = useRef(true);
     const isRestoringDraftRef = useRef(false);
-    const isCollectionBlocked = isSyncing || requiresSync;
+    const isCollectionBlocked = isSyncing || requiresOnlinePush;
 
     const applyCachedReferenceData = useCallback(
         (
@@ -250,24 +246,9 @@ const OfflineMilkCollectionScreen = () => {
                 cans,
             }));
 
-            setTransporterItems(
-                transporters.map((t: any) => ({
-                    label: getTransporterDisplayName(t),
-                    value: t.id,
-                }))
-            );
-            setRouteItems(
-                routes.map((r: any) => ({
-                    label: getRouteDisplayName(r),
-                    value: r.id,
-                }))
-            );
-            setShiftItems(
-                shifts.map((s: any) => ({
-                    label: s.name,
-                    value: s.id,
-                }))
-            );
+            setTransporterItems(toTransporterDropdownItems(transporters));
+            setRouteItems(toRouteDropdownItems(routes));
+            setShiftItems(toShiftDropdownItems(shifts));
             setCanItems(toMilkCanDropdownItems(cans));
             setMeasuringCanItems(toMilkCanDropdownItems(cans));
 
@@ -288,29 +269,7 @@ const OfflineMilkCollectionScreen = () => {
             }
 
             if (autoSelectDefaults && shifts.length > 0) {
-                const currentTime = new Date();
-                const currentHours = currentTime.getHours();
-                let currentPeriod: string;
-                if (currentHours >= 6 && currentHours < 12) {
-                    currentPeriod = "morning";
-                } else if (currentHours >= 12 && currentHours < 18) {
-                    currentPeriod = "afternoon";
-                } else {
-                    currentPeriod = "evening";
-                }
-
-                const matchingShift = shifts.find((s: any) => {
-                    if (!s.time) {
-                        return false;
-                    }
-                    const shiftTime = s.time.toString().trim().toLowerCase();
-                    return (
-                        shiftTime === currentPeriod ||
-                        shiftTime.includes(currentPeriod) ||
-                        currentPeriod.includes(shiftTime)
-                    );
-                });
-
+                const matchingShift = findShiftForCurrentTime(shifts);
                 if (matchingShift) {
                     setShiftValue(matchingShift.id);
                 }
@@ -361,58 +320,14 @@ const OfflineMilkCollectionScreen = () => {
         [applyCachedReferenceData]
     );
 
-    const runMandatorySync = useCallback(
-        async (force = false) => {
-            const now = Date.now();
-            if (!force && now - lastMandatorySyncAttemptRef.current < MANDATORY_SYNC_RETRY_MS) {
-                return;
-            }
+    useEffect(() => {
+        void getOfflineReferenceSyncHours().then(setOfflineSyncHours);
+    }, []);
 
-            lastMandatorySyncAttemptRef.current = now;
-            setMandatorySyncError(null);
-
-            try {
-                const online = await checkConnectivity();
-                if (!online) {
-                    setMandatorySyncError(
-                        "You have pending collections. Turn on WiFi or mobile data to sync before continuing."
-                    );
-                    return;
-                }
-
-                enableCollectionGateCheck();
-                const result = await performMandatoryOfflineSync(force);
-                if (!result.success) {
-                    await refreshCollectionGate();
-                    return;
-                }
-
-                await loadCachedReferenceData(false);
-
-                if (result.collectionsResult.failed > 0) {
-                    Alert.alert(
-                        "Partial Sync",
-                        `${result.collectionsResult.success} collection(s) synced, but ${result.collectionsResult.failed} failed.`
-                    );
-                    await refreshCollectionGate();
-                    return;
-                }
-
-                navigateToDashboard();
-            } catch (error: any) {
-                console.error("[OFFLINE] Mandatory sync failed:", error);
-                setMandatorySyncError(
-                    error?.message || "Sync failed. Please check your connection and try again."
-                );
-            }
-        },
-        [
-            enableCollectionGateCheck,
-            loadCachedReferenceData,
-            performMandatoryOfflineSync,
-            refreshCollectionGate,
-            setMandatorySyncError,
-        ]
+    useFocusEffect(
+        useCallback(() => {
+            void getOfflineReferenceSyncHours().then(setOfflineSyncHours);
+        }, [])
     );
 
     useLayoutEffect(() => {
@@ -639,21 +554,8 @@ const OfflineMilkCollectionScreen = () => {
         if (!isOnline) {
             enableCollectionGateCheck();
             void refreshCollectionGate();
-            return;
         }
-
-        if (!requiresSync) {
-            return;
-        }
-
-        void runMandatorySync();
-    }, [
-        enableCollectionGateCheck,
-        isOnline,
-        refreshCollectionGate,
-        requiresSync,
-        runMandatorySync,
-    ]);
+    }, [enableCollectionGateCheck, isOnline, refreshCollectionGate]);
 
     useEffect(() => {
         const timeout = setTimeout(() => {
@@ -1307,15 +1209,9 @@ const OfflineMilkCollectionScreen = () => {
             setLoading(true);
 
             const capturedEntries = [...entries];
-            const capturedShiftId = shiftValue;
-            const capturedShiftName =
-                (commonData.shifts || []).find((s: any) => s.id === shiftValue)?.name || "";
             const capturedTransporter = selectedTransporterForSave;
             const capturedRoute = selectedRouteForSave;
             const capturedCenter = center;
-            const capturedMeasuringCanName = measuringCan ? getMilkCanLabel(measuringCan) : "";
-            const capturedTotalCans = totalCans;
-            const capturedTotalQuantity = totalQuantity;
 
             const primaryEntry = capturedEntries[0];
             const primaryMember =
@@ -1323,35 +1219,6 @@ const OfflineMilkCollectionScreen = () => {
                 null;
             const capturedMemberNumber = getMemberNumber(primaryMember);
             const capturedMemberName = getMemberDisplayName(primaryMember);
-
-            await insertOfflineCollection({
-                member_number: capturedMemberNumber || `MEMBER-${primaryEntry?.member_id ?? "UNKNOWN"}`,
-                member_name: capturedMemberName || undefined,
-                shift_id: capturedShiftId || undefined,
-                shift_name: capturedShiftName || undefined,
-                transporter_id: transporterValue || undefined,
-                transporter_name: capturedTransporter
-                    ? getTransporterDisplayName(capturedTransporter)
-                    : undefined,
-                route_id: routeValue || undefined,
-                route_name: capturedRoute ? getRouteDisplayName(capturedRoute) : undefined,
-                center_id: centerValue || undefined,
-                center_name: capturedCenter?.center || undefined,
-                measuring_can_id: measuringCan?.id,
-                measuring_can_name: capturedMeasuringCanName || undefined,
-                total_cans: capturedTotalCans,
-                total_quantity: capturedTotalQuantity,
-                cans_data: capturedEntries.map((entry) => ({
-                    ...entry,
-                    journal: capturedJournal,
-                    batch_no: capturedBatch,
-                })),
-            });
-
-            await clearOfflineCollectionDraft();
-
-            console.log('[OFFLINE] Collection saved to SQLite for sync');
-            setSuccessModalVisible(true);
 
             const payload = buildMemberKilosJournalPayload({
                 transporterId: transporterValue as number,
@@ -1363,6 +1230,17 @@ const OfflineMilkCollectionScreen = () => {
                 journal: capturedJournal,
                 batch_no: capturedBatch,
             });
+
+            await insertOfflineData({
+                endpoint: OFFLINE_SYNC_ENDPOINTS.MILK_JOURNALS,
+                data: payload,
+                summary_label: capturedMemberName || capturedMemberNumber || "Member kilos",
+            });
+
+            await clearOfflineCollectionDraft();
+
+            console.log('[OFFLINE] Collection saved to SQLite for sync');
+            setSuccessModalVisible(true);
 
             const receiptCommonData = {
                 ...commonData,
@@ -1411,31 +1289,6 @@ const OfflineMilkCollectionScreen = () => {
         }
     };
 
-    // Manual sync
-    const handleManualSync = async () => {
-        try {
-            const online = await checkConnectivity();
-            if (!online) {
-                Alert.alert(
-                    "No Internet Connection",
-                    "Please connect to the internet to sync data. Your offline collections are stored safely and will sync when connection is restored.",
-                    [{ text: "OK" }]
-                );
-                return;
-            }
-
-            await runMandatorySync(true);
-        } catch (error: any) {
-            console.error('[OFFLINE] Unexpected sync error:', error);
-            Alert.alert(
-                "Sync Error",
-                "An unexpected error occurred during sync. Please contact your administrator if this problem persists.",
-                [{ text: "OK" }]
-            );
-        }
-    };
-
-    // View collection history
     const viewHistory = async () => {
         try {
             const collections = await getAllCollections();
@@ -1474,39 +1327,24 @@ const OfflineMilkCollectionScreen = () => {
                                 <Text style={styles.headerPendingText}>{unsyncedCount}</Text>
                             </View>
                         )}
-                        <TouchableOpacity
-                            style={styles.headerIconButton}
-                            onPress={handleManualSync}
-                            disabled={isSyncing}
-                        >
-                            {isSyncing ? (
-                                <ActivityIndicator size="small" color="#1b7f74" />
-                            ) : (
-                                <MaterialIcons name="sync" size={22} color="#1b7f74" />
-                            )}
-                        </TouchableOpacity>
                         <TouchableOpacity style={styles.headerIconButton} onPress={viewHistory}>
                             <MaterialIcons name="history" size={22} color="#1b7f74" />
                         </TouchableOpacity>
                     </View>
                 </View>
 
-                {referenceSyncLabel ? (
-                    <Text
-                        style={[
-                            styles.cacheHint,
-                            requiresSync && styles.cacheHintStale,
-                        ]}
-                    >
-                        {requiresSync
-                            ? `Sync required${gateSyncHint(unsyncedCount)}`
-                            : referenceSyncLabel}
-                    </Text>
-                ) : (
-                    <Text style={styles.cacheWarning}>
-                        Open Member Kilos while online to store transporters, members, routes, shifts, and cans in SQLite.
-                    </Text>
-                )}
+                <Text
+                    style={[
+                        styles.cacheHint,
+                        requiresOnlinePush && styles.cacheHintStale,
+                    ]}
+                >
+                    {unsyncedCount > 0
+                        ? requiresOnlinePush
+                            ? `${unsyncedCount} pending record${unsyncedCount === 1 ? "" : "s"} — offline intake limit reached (${pendingAgeLabel}). Go online; the header sync icon will push automatically.`
+                            : `${unsyncedCount} pending record${unsyncedCount === 1 ? "" : "s"} — oldest waiting ${pendingAgeLabel} (max ${offlineSyncHours}h). Use the header sync icon when online.`
+                        : "No pending records waiting to push."}
+                </Text>
 
                 <View style={styles.row}>
                     <View style={styles.col}>
@@ -1918,7 +1756,7 @@ const OfflineMilkCollectionScreen = () => {
             </ScrollView>
 
             <Modal
-                visible={requiresSync && !isOnline && !isSyncing}
+                visible={requiresOnlinePush && !isOnline && !isSyncing}
                 transparent
                 animationType="fade"
                 onRequestClose={() => {}}
@@ -1926,10 +1764,10 @@ const OfflineMilkCollectionScreen = () => {
                 <View style={styles.staleBlockOverlay}>
                     <View style={styles.staleBlockCard}>
                         <MaterialIcons name="wifi-off" size={42} color="#dc2626" />
-                        <Text style={styles.staleBlockTitle}>Sync required</Text>
+                        <Text style={styles.staleBlockTitle}>Go online to push</Text>
                         <Text style={styles.staleBlockMessage}>
                             {mandatorySyncError ||
-                                `You have ${unsyncedCount} pending collection${unsyncedCount === 1 ? "" : "s"}. Turn on WiFi or mobile data — sync will start automatically when you are online.`}
+                                `You have ${unsyncedCount} pending record${unsyncedCount === 1 ? "" : "s"}. The maximum offline intake time (${offlineSyncHours} hour${offlineSyncHours === 1 ? "" : "s"} since the first record) has been reached. Turn on WiFi or mobile data — the header sync icon will push your records automatically.`}
                         </Text>
                     </View>
                 </View>
@@ -2075,7 +1913,7 @@ const OfflineMilkCollectionScreen = () => {
                         <View key={idx} style={styles.historyItem}>
                             <View style={styles.historyHeader}>
                                 <Text style={styles.historyMember}>
-                                    {collection.member_number} - {collection.member_name || 'N/A'}
+                                    {collection.summary_label || collection.endpoint}
                                 </Text>
                                 <View style={[
                                     styles.syncBadge,
@@ -2090,7 +1928,7 @@ const OfflineMilkCollectionScreen = () => {
                                 </View>
                             </View>
                             <Text style={styles.historyDetails}>
-                                Cans: {collection.total_cans} | Quantity: {collection.total_quantity.toFixed(2)} KG
+                                {collection.endpoint} · {collection.method}
                             </Text>
                             <Text style={styles.historyDate}>
                                 {new Date(collection.created_at).toLocaleString()}

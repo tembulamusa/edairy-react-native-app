@@ -1,51 +1,33 @@
 import {
-    getReferenceDataSyncInfo,
-    getUnsyncedCount,
-} from "../services/offlineDatabase";
-import {
-    isReferenceDataStale,
-    type ReferenceSyncInfo,
-} from "./offlineStaleGuard";
+    evaluateOfflineIntakeGate,
+    type OfflineGateSnapshot,
+} from "./offlineSaveGate";
 
-export type OfflineCollectionGateState = {
-    unsyncedCount: number;
-    /** Informational only — does not block or force sync by itself. */
-    referenceStale: boolean;
-    /** True only when there are pending offline collections to upload. */
-    requiresSync: boolean;
-    syncInfo: ReferenceSyncInfo | null;
-};
+export type OfflineCollectionGateState = OfflineGateSnapshot;
 
-export function createClearedCollectionGate(
-    syncInfo: ReferenceSyncInfo | null = null,
-    referenceStale = false
-): OfflineCollectionGateState {
+export function createClearedCollectionGate(): OfflineCollectionGateState {
     return {
         unsyncedCount: 0,
-        referenceStale,
+        oldestUnpushedAt: null,
+        pendingAgeMs: null,
+        maxOfflineIntakeMs: 0,
+        offlineIntakeExpired: false,
+        requiresOnlinePush: false,
+        requiresReferenceRefresh: false,
         requiresSync: false,
-        syncInfo,
+        referenceStale: false,
+        syncInfo: null,
     };
 }
 
 export async function evaluateOfflineCollectionGate(): Promise<OfflineCollectionGateState> {
-    const [unsyncedCount, syncInfo] = await Promise.all([
-        getUnsyncedCount(),
-        getReferenceDataSyncInfo(),
-    ]);
-
-    const referenceStale = isReferenceDataStale(syncInfo);
-
-    return {
-        unsyncedCount,
-        referenceStale,
-        requiresSync: unsyncedCount > 0,
-        syncInfo,
-    };
+    return evaluateOfflineIntakeGate();
 }
 
-/** After sync completes (or nothing pending), stop unsynced gate checks. Reference SQLite data is kept. */
 export async function buildClearedCollectionGateFromStore(): Promise<OfflineCollectionGateState> {
-    const syncInfo = await getReferenceDataSyncInfo();
-    return createClearedCollectionGate(syncInfo, isReferenceDataStale(syncInfo));
+    const gate = await evaluateOfflineIntakeGate();
+    if (gate.unsyncedCount === 0) {
+        return createClearedCollectionGate();
+    }
+    return gate;
 }

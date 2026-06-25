@@ -2,66 +2,33 @@
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import makeRequest from '../components/utils/makeRequest';
+import { checkConnectivity } from './connectivity';
+import { refreshCoreDataFromServer } from './coreData';
 import {
     buildMemberKilosJournalPayload,
     type MemberKilosJournalPayload,
 } from '../utils/memberKilosJournalPayload';
 import { logMilkJournalPost } from '../utils/memberKilosJournalReceipts';
 import {
-    getUnsyncedCollections,
-    deleteOfflineCollection,
-    updateSyncAttempt,
+    getRetryableOfflineCollections,
+    deleteOfflineCollectionById,
+    incrementOfflineCollectionRetry,
+    getOfflineCollectionById,
+    logOfflineCollectionDebug,
+    MAX_OFFLINE_COLLECTION_RETRIES,
+    getRetryableOfflineCollectionCount,
 } from './offlineDatabase';
 
 let syncInterval: NodeJS.Timeout | null = null;
 
-// Check if online
-export const checkConnectivity = async (): Promise<boolean> => {
-    try {
-        const state = await NetInfo.fetch();
-        return state.isConnected === true && state.isInternetReachable === true;
-    } catch (error) {
-        console.error('[SYNC] Error checking connectivity:', error);
-        return false;
-    }
-};
+export { checkConnectivity } from './connectivity';
 
 // Attempt to login using stored offline credentials from SQLite
 const loginWithStoredCredentials = async (): Promise<boolean> => {
     try {
-        console.log('[SYNC] Attempting to login with stored offline credentials...');
-
-        // Get stored offline credentials from SQLite
-        const { getOfflineCredentials } = await import('./offlineDatabase');
-        const creds = await getOfflineCredentials();
-
-        if (!creds) {
-            console.log('[SYNC] No stored offline credentials found');
-            return false;
-        }
-
-        const { email, password } = creds;
-
-        if (!email || !password) {
-            console.log('[SYNC] Incomplete offline credentials');
-            return false;
-        }
-
-        const [status, response] = await makeRequest({
-            url: 'auth/login',
-            method: 'POST',
-            data: { email, password },
-        });
-
-        if ([200, 201].includes(status) && response?.token) {
-            // Store the token
-            await AsyncStorage.setItem('userToken', response.token);
-            console.log('[SYNC] Login successful with offline credentials');
-            return true;
-        } else {
-            console.log('[SYNC] Login failed:', response?.message);
-            return false;
-        }
+        const { refreshOnlineTokenFromSQLiteStorage } = await import('./authSession');
+        const token = await refreshOnlineTokenFromSQLiteStorage();
+        return !!token;
     } catch (error) {
         console.error('[SYNC] Error logging in with offline credentials:', error);
         return false;
@@ -71,7 +38,9 @@ const loginWithStoredCredentials = async (): Promise<boolean> => {
 // Check if user is logged in
 const isLoggedIn = async (): Promise<boolean> => {
     try {
-        const token = await AsyncStorage.getItem('userToken');
+        const token =
+            (await AsyncStorage.getItem('token')) ||
+            (await AsyncStorage.getItem('userToken'));
         return !!token;
     } catch (error) {
         console.error('[SYNC] Error checking login status:', error);
@@ -117,6 +86,18 @@ const extractApiErrorMessage = (response: any, status?: number): string => {
     }
 
     return 'Failed to send kilos.';
+};
+
+const extractGenericApiErrorMessage = (
+    response: any,
+    status?: number,
+    fallback = 'Request failed.'
+): string => {
+    const message = extractApiErrorMessage(response, status);
+    if (message !== 'Failed to send kilos.') {
+        return message;
+    }
+    return status ? `${fallback} (status ${status}).` : fallback;
 };
 
 /** Build the same milk-journals payload used by Member Kilos from a SQLite collection row. */
@@ -176,112 +157,120 @@ export const buildOfflineCollectionJournalPayload = async (
     });
 };
 
-// Sync single collection via milk-journals (same endpoint/format as Member Kilos; no printing)
-const syncCollection = async (collection: any): Promise<boolean> => {
-    try {
-        const payload = await buildOfflineCollectionJournalPayload(collection);
-        if (!payload) {
-            const errorMsg =
-                'Missing transporter, route, shift, or entry data for milk-journals sync';
-            console.error('[SYNC] Invalid offline collection payload:', collection.id, errorMsg);
-            await updateSyncAttempt(collection.id, errorMsg);
-            return false;
-        }
+// Push each retryable offline_collections row to its API endpoint.
+export const pushSyncQueue = async (
+    forceLogin: boolean = true
+): Promise<{ success: number; failed: number }> => {
+    console.warn('[OFFLINE-COLLECTIONS] pushSyncQueue started');
+    console.log('[SYNC] Starting offline_collections push...');
 
-        console.log('[SYNC] Syncing collection ID:', collection.id, 'to milk-journals');
-        console.log('[SYNC] Payload:', JSON.stringify(payload, null, 2));
-
-        const [status, response] = await makeRequest({
-            url: 'milk-journals',
-            method: 'POST',
-            data: payload as any,
-        });
-
-        logMilkJournalPost(payload, status, response);
-
-        if ([200, 201].includes(status)) {
-            await deleteOfflineCollection(collection.id);
-            console.log(
-                '[SYNC] Collection removed from SQLite after successful milk-journals submission:',
-                collection.id
-            );
-            return true;
-        }
-
-        const errorMsg = extractApiErrorMessage(response, status);
-        console.error('[SYNC] Failed to sync collection:', errorMsg, { status, response });
-        await updateSyncAttempt(collection.id, errorMsg);
-        return false;
-    } catch (error: any) {
-        console.error('[SYNC] Error syncing collection:', error);
-        await updateSyncAttempt(collection.id, error?.message || 'Network error');
-        return false;
-    }
-};
-
-// Internal sync logic (without UI state management)
-const performSyncAllCollections = async (forceLogin: boolean = true): Promise<{ success: number; failed: number }> => {
-    console.log('[SYNC] Starting sync process...');
-
-    // Check connectivity
     const isOnline = await checkConnectivity();
     if (!isOnline) {
-        console.log('[SYNC] No internet connection, skipping sync');
+        console.log('[SYNC] No internet connection, skipping offline_collections push');
         return { success: 0, failed: 0 };
     }
 
-    // Check if logged in, if not, try to login (unless disabled)
     if (forceLogin) {
         let loggedIn = await isLoggedIn();
         if (!loggedIn) {
             console.log('[SYNC] Not logged in, attempting to login...');
             loggedIn = await loginWithStoredCredentials();
             if (!loggedIn) {
-                console.log('[SYNC] Failed to login, cannot sync');
+                console.log('[SYNC] Failed to login, cannot push offline_collections');
                 return { success: 0, failed: 0 };
             }
         }
     }
 
-    // Get unsynced collections
-    const collections = await getUnsyncedCollections();
-    if (collections.length === 0) {
-        console.log('[SYNC] No collections to sync');
+    const queueItems = await getRetryableOfflineCollections();
+    if (queueItems.length === 0) {
+        console.log('[SYNC] offline_collections is empty (no retryable items)');
         return { success: 0, failed: 0 };
     }
 
-    console.log('[SYNC] Found', collections.length, 'collections to sync');
+    console.log('[SYNC] Pushing', queueItems.length, 'offline_collections row(s)');
 
     let successCount = 0;
     let failedCount = 0;
 
-    // Sync each collection
-    for (const collection of collections) {
-        const success = await syncCollection(collection);
-        if (success) {
-            successCount++;
-        } else {
+    for (const item of queueItems) {
+        try {
+            const payload = JSON.parse(item.data);
+            const method = item.method.toUpperCase();
+
+            logOfflineCollectionDebug('ONLINE_PUSH', item, {
+                request_url: item.endpoint,
+                request_method: method,
+            });
+
+            const [status, response] = await makeRequest({
+                url: item.endpoint,
+                method: method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+                data: payload,
+            });
+
+            const isPostSuccess =
+                method === 'POST' && [200, 201].includes(status);
+
+            if (isPostSuccess) {
+                logOfflineCollectionDebug('ONLINE_PUSH_SUCCESS', item, {
+                    http_status: status,
+                    response,
+                });
+                await deleteOfflineCollectionById(item.id);
+                successCount++;
+            } else {
+                const errorMsg = extractGenericApiErrorMessage(
+                    response,
+                    status,
+                    `Failed to push ${item.endpoint}`
+                );
+                const retries = await incrementOfflineCollectionRetry(item.id, errorMsg);
+                const updatedRecord = (await getOfflineCollectionById(item.id)) ?? {
+                    ...item,
+                    retries,
+                    error_message: errorMsg,
+                };
+                logOfflineCollectionDebug('ONLINE_PUSH_FAILED', updatedRecord, {
+                    http_status: status,
+                    response,
+                    error: errorMsg,
+                    retries,
+                    max_retries: MAX_OFFLINE_COLLECTION_RETRIES,
+                });
+                failedCount++;
+            }
+        } catch (error: any) {
+            const errorMsg = error?.message || 'Network error';
+            const retries = await incrementOfflineCollectionRetry(item.id, errorMsg);
+            const updatedRecord = (await getOfflineCollectionById(item.id)) ?? {
+                ...item,
+                retries,
+                error_message: errorMsg,
+            };
+            logOfflineCollectionDebug('ONLINE_PUSH_FAILED', updatedRecord, {
+                error: errorMsg,
+                retries,
+                max_retries: MAX_OFFLINE_COLLECTION_RETRIES,
+            });
             failedCount++;
         }
 
-        // Add delay between requests to avoid overwhelming the server
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
-    console.log('[SYNC] Sync completed:', successCount, 'success,', failedCount, 'failed');
-
-    try {
-        const { clearSyncedCollections } = await import('./offlineDatabase');
-        const purged = await clearSyncedCollections();
-        if (purged > 0) {
-            console.log('[SYNC] Purged leftover synced collection rows:', purged);
-        }
-    } catch (purgeError) {
-        console.warn('[SYNC] Failed to purge synced collection rows:', purgeError);
-    }
-
+    console.log('[SYNC] sync_queue push completed:', successCount, 'success,', failedCount, 'failed');
     return { success: successCount, failed: failedCount };
 };
+
+// Internal sync logic (without UI state management)
+const performSyncAllPending = async (
+    forceLogin: boolean = true
+): Promise<{ success: number; failed: number }> => {
+    return pushSyncQueue(forceLogin);
+};
+
+const performSyncAllCollections = performSyncAllPending;
 
 export type MandatoryOfflineRefreshResult = {
     success: boolean;
@@ -290,7 +279,30 @@ export type MandatoryOfflineRefreshResult = {
     error?: string;
 };
 
-/** Upload pending collections and refresh reference data (reference rows are updated, not deleted). */
+/** Download core offline lists (members, routes, customers, stores, etc.) into SQLite. */
+export const refreshOfflineReferenceData = async (): Promise<boolean> => {
+    return refreshCoreDataFromServer({ logContext: "UpdateOnlineData" });
+};
+
+/** Push pending offline transactions to the server. Reference data is not refreshed here. */
+export const performPushPendingOfflineRecords = async (
+    forceLogin: boolean = true
+): Promise<{ success: number; failed: number }> => {
+    const isOnline = await checkConnectivity();
+    if (!isOnline) {
+        return { success: 0, failed: 0 };
+    }
+
+    const pendingCount = await getRetryableOfflineCollectionCount();
+    if (pendingCount === 0) {
+        console.log('[SYNC] No retryable sync_queue items to push');
+        return { success: 0, failed: 0 };
+    }
+
+    return performSyncAllCollections(forceLogin);
+};
+
+/** Upload pending offline records when online. Does not refresh reference data. */
 export const performMandatoryOfflineRefresh = async (): Promise<MandatoryOfflineRefreshResult> => {
     const isOnline = await checkConnectivity();
     if (!isOnline) {
@@ -302,59 +314,38 @@ export const performMandatoryOfflineRefresh = async (): Promise<MandatoryOffline
         };
     }
 
-    const { getUnsyncedCount } = await import('./offlineDatabase');
-    const pendingCount = await getUnsyncedCount();
-
+    const pendingCount = await getRetryableOfflineCollectionCount();
     if (pendingCount === 0) {
-        console.log('[SYNC] No pending collections — skipping mandatory sync');
+        console.log('[SYNC] No retryable sync_queue items to push');
         return {
             success: true,
             collectionsResult: { success: 0, failed: 0 },
-            referenceSynced: true,
-        };
-    }
-
-    let collectionsResult = { success: 0, failed: 0 };
-
-    try {
-        collectionsResult = await performSyncAllCollections(true);
-    } catch (error: any) {
-        console.error("[SYNC] Error syncing collections during mandatory refresh:", error);
-        return {
-            success: false,
-            collectionsResult,
             referenceSynced: false,
-            error: error?.message || "Failed to sync offline collections",
         };
     }
 
     try {
-        const { syncMemberKilosReferenceDataFromServer } = await import("./offlineReferenceData");
-        const referenceSynced = await syncMemberKilosReferenceDataFromServer();
-
-        if (!referenceSynced) {
-            return {
-                success: false,
-                collectionsResult,
-                referenceSynced: false,
-                error: "Failed to refresh reference data",
-            };
-        }
-
-        const pendingAfterSync = await (await import('./offlineDatabase')).getUnsyncedCount();
+        const collectionsResult = await performPushPendingOfflineRecords(true);
+        const pendingAfterSync = await getRetryableOfflineCollectionCount();
 
         return {
             success: collectionsResult.failed === 0 && pendingAfterSync === 0,
             collectionsResult,
-            referenceSynced: true,
+            referenceSynced: false,
+            error:
+                collectionsResult.failed > 0
+                    ? "Some offline records failed to upload"
+                    : pendingAfterSync > 0
+                      ? "Some offline records are still pending upload"
+                      : undefined,
         };
     } catch (error: any) {
-        console.error("[SYNC] Error refreshing reference data:", error);
+        console.error("[SYNC] Error pushing offline records:", error);
         return {
             success: false,
-            collectionsResult,
+            collectionsResult: { success: 0, failed: 0 },
             referenceSynced: false,
-            error: error?.message || "Failed to refresh reference data",
+            error: error?.message || "Failed to push offline records",
         };
     }
 };
@@ -411,65 +402,44 @@ export const stopAutoSync = () => {
 export const syncWithConfirmation = async (): Promise<void> => {
     try {
         const { Alert } = require('react-native');
+        const pendingCount = await getRetryableOfflineCollectionCount();
 
-        // Get unsynced collections
-        const collections = await getUnsyncedCollections();
-
-        if (collections.length === 0) {
-            console.log('[SYNC] No collections to sync');
+        if (pendingCount === 0) {
             Alert.alert(
                 'No Pending Syncs',
-                'All your offline collections are already synced.',
+                'All your offline records are already synced.',
                 [{ text: 'OK' }]
             );
             return;
         }
 
-        // Show confirmation alert
         Alert.alert(
-            'Sync Offline Collections',
-            `You have ${collections.length} offline collection(s) pending sync. Would you like to sync them now?`,
+            'Sync Offline Records',
+            `You have ${pendingCount} offline record(s) pending sync. Would you like to sync them now?`,
             [
-                {
-                    text: 'Review & Sync',
-                    onPress: async () => {
-                        // Show each collection for review
-                        for (const collection of collections) {
-                            await reviewAndSyncCollection(collection);
-                        }
-                    }
-                },
                 {
                     text: 'Sync All',
                     onPress: async () => {
-                        // Show progress indicator through context
-                        const result = await syncAllCollections(
-                            () => {}, // onSyncStart - handled by context
-                            () => {}, // onSyncComplete - handled by context
-                            () => {}, // onSyncError - handled by context
-                            true // forceLogin - user is already logged in
-                        );
-
-                        // Show final result
+                        const result = await pushSyncQueue(true);
                         if (result.success > 0 && result.failed === 0) {
                             Alert.alert(
                                 'Sync Complete',
-                                `Successfully synced all ${result.success} collection(s).`,
+                                `Successfully synced ${result.success} record(s).`,
                                 [{ text: 'OK' }]
                             );
                         } else if (result.failed > 0) {
                             Alert.alert(
                                 'Sync Partially Failed',
-                                `Successfully synced ${result.success} collection(s), but ${result.failed} failed. You can try syncing the failed ones again.`,
+                                `Synced ${result.success} record(s), but ${result.failed} failed.`,
                                 [{ text: 'OK' }]
                             );
                         }
-                    }
+                    },
                 },
                 {
                     text: 'Later',
-                    style: 'cancel'
-                }
+                    style: 'cancel',
+                },
             ]
         );
     } catch (error) {
@@ -483,75 +453,9 @@ export const syncWithConfirmation = async (): Promise<void> => {
     }
 };
 
-// Review and sync individual collection
-const reviewAndSyncCollection = async (collection: any): Promise<void> => {
-    return new Promise((resolve) => {
-        const { Alert } = require('react-native');
-
-        const memberInfo = `Member: ${collection.member_number}`;
-        const dateInfo = `Date: ${new Date(collection.created_at).toLocaleString()}`;
-        const quantityInfo = `Quantity: ${collection.total_quantity.toFixed(2)} KG (${collection.total_cans} cans)`;
-
-        Alert.alert(
-            'Review Collection',
-            `${memberInfo}\n${dateInfo}\n${quantityInfo}\n\nWhat would you like to do?`,
-            [
-                {
-                    text: 'Sync',
-                    onPress: async () => {
-                        try {
-                            const success = await syncCollection(collection);
-                            if (success) {
-                                Alert.alert('Success', 'Collection synced successfully', [{ text: 'OK' }]);
-                            } else {
-                                Alert.alert('Error', 'Failed to sync collection', [{ text: 'OK' }]);
-                            }
-                        } catch (error) {
-                            Alert.alert('Error', 'Failed to sync collection', [{ text: 'OK' }]);
-                        }
-                        resolve();
-                    }
-                },
-                {
-                    text: 'Delete',
-                    style: 'destructive',
-                    onPress: async () => {
-                        // Confirm deletion
-                        Alert.alert(
-                            'Confirm Delete',
-                            'Are you sure you want to delete this collection? This cannot be undone.',
-                            [
-                                {
-                                    text: 'Cancel',
-                                    style: 'cancel',
-                                    onPress: () => resolve()
-                                },
-                                {
-                                    text: 'Delete',
-                                    style: 'destructive',
-                                    onPress: async () => {
-                                        try {
-                                            const { deleteOfflineCollection } = await import('./offlineDatabase');
-                                            await deleteOfflineCollection(collection.id);
-                                            Alert.alert('Deleted', 'Collection has been deleted', [{ text: 'OK' }]);
-                                        } catch (error) {
-                                            Alert.alert('Error', 'Failed to delete collection', [{ text: 'OK' }]);
-                                        }
-                                        resolve();
-                                    }
-                                }
-                            ]
-                        );
-                    }
-                },
-                {
-                    text: 'Skip',
-                    style: 'cancel',
-                    onPress: () => resolve()
-                }
-            ]
-        );
-    });
+// Legacy review helper retained for compatibility with old collection UI flows.
+const reviewAndSyncCollection = async (_collection: any): Promise<void> => {
+    await pushSyncQueue(true);
 };
 
 // Listen to network state changes and prompt for sync when online with pending data
@@ -563,20 +467,17 @@ export const setupNetworkListener = () => {
 
         console.log('[SYNC] Network state changed:', state.isConnected, state.isInternetReachable);
 
-        // Check if we just came online (was offline, now online)
         if (isOnline && wasOffline) {
             console.log('[SYNC] Internet connection detected, checking for pending syncs...');
-            // Wait a bit before checking to ensure connection is stable
             setTimeout(async () => {
                 try {
-                    const collections = await getUnsyncedCollections();
-                    if (collections.length > 0) {
-                        console.log(`[SYNC] Found ${collections.length} pending collections, prompting for sync...`);
-                        // Prompt user for sync permission
+                    const pendingCount = await getRetryableOfflineCollectionCount();
+                    if (pendingCount > 0) {
+                        console.log(`[SYNC] Found ${pendingCount} pending sync_queue item(s), prompting for sync...`);
                         const { Alert } = require('react-native');
                         Alert.alert(
                             'Sync Available',
-                            `You have ${collections.length} offline collection(s) ready to sync. Would you like to sync them now?`,
+                            `You have ${pendingCount} offline record(s) ready to sync. Would you like to sync them now?`,
                             [
                                 {
                                     text: 'Sync Now',
@@ -584,13 +485,13 @@ export const setupNetworkListener = () => {
                                 },
                                 {
                                     text: 'Later',
-                                    style: 'cancel'
-                                }
+                                    style: 'cancel',
+                                },
                             ]
                         );
                     }
                 } catch (error) {
-                    console.error('[SYNC] Error checking pending collections:', error);
+                    console.error('[SYNC] Error checking pending sync_queue items:', error);
                 }
             }, 2000);
         }
@@ -651,16 +552,16 @@ export const setupNetworkListenerWithSync = (triggerSync: () => Promise<{ succes
 
                     // If not logged in with offline credentials, check for pending syncs normally
                     console.log('[SYNC] Checking for pending collections...');
-                    const collections = await getUnsyncedCollections();
-                    console.log(`[SYNC] Found ${collections.length} pending collections`);
+                    const pendingCount = await getRetryableOfflineCollectionCount();
+                    console.log(`[SYNC] Found ${pendingCount} pending sync_queue items`);
 
-                    if (collections.length > 0) {
-                        console.log(`[SYNC] Found ${collections.length} pending collections, prompting for sync...`);
+                    if (pendingCount > 0) {
+                        console.log(`[SYNC] Found ${pendingCount} pending records, prompting for sync...`);
 
                         const { Alert } = require('react-native');
                         Alert.alert(
                             'Sync Available',
-                            `You have ${collections.length} offline collection(s) ready to sync. Would you like to sync them now?`,
+                            `You have ${pendingCount} offline record(s) ready to sync. Would you like to sync them now?`,
                             [
                                 {
                                     text: 'Sync Now',
@@ -744,14 +645,14 @@ const performOfflineReAuthentication = async (triggerSync: () => Promise<{ succe
             console.log('[SYNC] Re-authentication complete, credentials updated');
 
             // Now check for and prompt sync
-            const collections = await getUnsyncedCollections();
-            if (collections.length > 0) {
-                console.log(`[SYNC] Found ${collections.length} pending collections after re-auth, prompting for sync...`);
+            const pendingCount = await getRetryableOfflineCollectionCount();
+            if (pendingCount > 0) {
+                console.log(`[SYNC] Found ${pendingCount} pending records after re-auth, prompting for sync...`);
 
                 const { Alert } = require('react-native');
                 Alert.alert(
                     'Sync Available',
-                    `You have ${collections.length} offline collection(s) ready to sync. Would you like to sync them now?`,
+                    `You have ${pendingCount} offline record(s) ready to sync. Would you like to sync them now?`,
                     [
                         {
                             text: 'Sync Now',
@@ -830,12 +731,12 @@ export const checkAndPromptPendingSyncAfterLogin = async (triggerSync: () => Pro
         syncPendingAfterLogin = false; // Reset the flag
 
         try {
-            const collections = await getUnsyncedCollections();
-            if (collections.length > 0) {
+            const pendingCount = await getRetryableOfflineCollectionCount();
+            if (pendingCount > 0) {
                 const { Alert } = require('react-native');
                 Alert.alert(
                     'Ready to Sync',
-                    `You have ${collections.length} offline collection(s) ready to sync. Would you like to sync them now?`,
+                    `You have ${pendingCount} offline record(s) ready to sync. Would you like to sync them now?`,
                     [
                         {
                             text: 'Sync Now',
